@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="web_dashboard" name="shell-type"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = {
+  darkMode: "class",
+  theme: {
+    extend: {
+      "colors": {
+        "primary-fixed-dim": "#c9c6c5",
+        "background": "#f9f9fb",
+        "surface": "#F5F5F7",
+        "on-error": "#ffffff",
+        "on-error-container": "#93000a",
+        "inverse-surface": "#2f3132",
+        "on-primary-container": "#858383",
+        "secondary-fixed-dim": "#c6c5cf",
+        "on-tertiary": "#ffffff",
+        "on-surface": "#1a1c1d",
+        "secondary-container": "#e3e1ec",
+        "on-primary-fixed": "#1c1b1b",
+        "outline": "#747878",
+        "tertiary-fixed": "#e6e1df",
+        "inverse-primary": "#c9c6c5",
+        "text-muted": "#71717A",
+        "tertiary": "#000000",
+        "on-tertiary-fixed": "#1d1b1a",
+        "accent-alert": "#EF4444",
+        "on-secondary-container": "#63646c",
+        "on-primary": "#ffffff",
+        "secondary-fixed": "#e3e1ec",
+        "surface-bright": "#f9f9fb",
+        "on-secondary-fixed-variant": "#46464e",
+        "tertiary-container": "#1d1b1a",
+        "surface-container-highest": "#e2e2e4",
+        "surface-elevated": "#FFFFFF",
+        "on-secondary": "#ffffff",
+        "surface-container": "#eeeef0",
+        "brand-black": "#0B0B0B",
+        "on-primary-fixed-variant": "#474646",
+        "canvas": "#FFFFFF",
+        "on-surface-variant": "#444748",
+        "surface-tint": "#5f5e5e",
+        "on-secondary-fixed": "#1a1b22",
+        "error": "#ba1a1a",
+        "surface-variant": "#e2e2e4",
+        "border-subtle": "#E5E5EA",
+        "inverse-on-surface": "#f0f0f2",
+        "error-container": "#ffdad6",
+        "primary": "#000000",
+        "on-tertiary-container": "#868381",
+        "tertiary-fixed-dim": "#cac6c3",
+        "surface-dim": "#d9dadc",
+        "surface-container-low": "#f3f3f5",
+        "outline-variant": "#c4c7c7",
+        "on-background": "#1a1c1d",
+        "surface-container-high": "#e8e8ea",
+        "surface-container-lowest": "#ffffff",
+        "on-tertiary-fixed-variant": "#484645",
+        "primary-fixed": "#e5e2e1",
+        "primary-container": "#1c1b1b",
+        "secondary": "#5d5e66"
+      },
+      "borderRadius": {
+        "DEFAULT": "1rem",
+        "lg": "2rem",
+        "xl": "3rem",
+        "full": "9999px"
+      },
+      "spacing": {
+        "gutter": "1.5rem",
+        "margin": "2rem",
+        "gutter-mobile": "0.75rem",
+        "margin-mobile": "1rem",
+        "space-xl": "2rem",
+        "space-md": "1rem",
+        "space-lg": "1.5rem",
+        "space-sm": "0.5rem",
+        "space-xs": "0.25rem"
+      },
+      "fontFamily": {
+        "display-lg-mobile": ["Inter"],
+        "headline-sm": ["Inter"],
+        "body-md": ["Inter"],
+        "label-md": ["Inter"],
+        "display-lg": ["Inter"],
+        "caption": ["Inter"],
+        "metric-num": ["Inter"],
+        "body-sm": ["Inter"],
+        "headline-md": ["Inter"]
+      },
+      "fontSize": {
+        "display-lg-mobile": ["28px", {"lineHeight": "34px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+        "headline-sm": ["16px", {"lineHeight": "22px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+        "body-md": ["14px", {"lineHeight": "20px", "letterSpacing": "0em", "fontWeight": "400"}],
+        "label-md": ["12px", {"lineHeight": "16px", "letterSpacing": "0.01em", "fontWeight": "600"}],
+        "display-lg": ["36px", {"lineHeight": "44px", "letterSpacing": "-0.03em", "fontWeight": "700"}],
+        "caption": ["11px", {"lineHeight": "14px", "letterSpacing": "0.02em", "fontWeight": "500"}],
+        "metric-num": ["32px", {"lineHeight": "36px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+        "body-sm": ["13px", {"lineHeight": "18px", "letterSpacing": "0em", "fontWeight": "400"}],
+        "headline-md": ["22px", {"lineHeight": "28px", "letterSpacing": "-0.02em", "fontWeight": "700"}]
+      }
+    }
+  }
+}</script></head><body class="bg-background font-body-md text-body-md text-on-surface antialiased"><aside class="fixed left-4 top-4 bottom-4 w-20 bg-brand-black rounded-lg z-50 flex flex-col items-center justify-between py-6 shadow-[0_12px_32px_-8px_rgba(11,11,11,0.08)]"><div class="flex flex-col items-center gap-8 w-full"><a class="w-10 h-10 rounded-full bg-surface-elevated text-brand-black flex items-center justify-center font-headline-sm text-headline-sm tracking-tight" data-path="overview" href="#">TL</a><nav class="flex flex-col items-center gap-space-sm w-full px-2" data-active-classes="bg-surface-elevated text-brand-black shadow-sm"><a class="w-12 h-12 rounded-full flex items-center justify-center text-on-primary-container hover:bg-tertiary-container hover:text-on-primary transition-all" data-path="overview" href="#" title="Overview"><span class="material-symbols-outlined text-[22px]">home</span></a><a aria-current="page" class="w-12 h-12 rounded-full flex items-center justify-center transition-all bg-surface-elevated text-brand-black shadow-sm" data-path="events-catalog" href="#" title="Events & Calendar"><span class="material-symbols-outlined text-[22px]">calendar_today</span></a><a class="w-12 h-12 rounded-full flex items-center justify-center text-on-primary-container hover:bg-tertiary-container hover:text-on-primary transition-all" data-path="messages" href="#" title="Messages & SMS"><span class="material-symbols-outlined text-[22px]">chat</span></a><a class="w-12 h-12 rounded-full flex items-center justify-center text-on-primary-container hover:bg-tertiary-container hover:text-on-primary transition-all" data-path="billing" href="#" title="Billing & Balance"><span class="material-symbols-outlined text-[22px]">credit_card</span></a><a class="w-12 h-12 rounded-full flex items-center justify-center text-on-primary-container hover:bg-tertiary-container hover:text-on-primary transition-all" data-path="settings" href="#" title="Settings & Controls"><span class="material-symbols-outlined text-[22px]">tune</span></a></nav></div><div class="flex flex-col items-center gap-4"><a class="w-12 h-12 rounded-full flex items-center justify-center text-on-primary-container hover:bg-tertiary-container hover:text-on-primary transition-all" data-path="login" href="#" title="Sign Out"><span class="material-symbols-outlined text-[22px]">logout</span></a></div></aside><div class="pl-28"><header class="fixed top-0 left-28 right-0 h-20 bg-background/80 backdrop-blur-xl z-40 px-gutter flex items-center justify-between gap-space-lg"><div class="flex items-center gap-space-md flex-1 max-w-xl"><div class="relative w-full"><span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-text-muted text-[20px]">search</span><input class="w-full h-11 pl-11 pr-4 bg-surface rounded-full font-body-sm text-body-sm text-on-surface placeholder:text-text-muted outline-none focus:ring-1 focus:ring-brand-black transition-all" placeholder="Search events, attendees, tickets..." type="text"/></div></div><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs bg-surface px-space-md py-space-xs rounded-full"><span class="material-symbols-outlined text-text-muted text-[18px]">sms</span><span class="font-label-md text-label-md text-on-surface">2,450 SMS</span></div><button class="relative w-10 h-10 rounded-full bg-surface flex items-center justify-center text-on-surface hover:bg-surface-container transition-colors" type="button"><span class="material-symbols-outlined text-[20px]">notifications</span><span class="absolute top-2 right-2 w-2 h-2 rounded-full bg-accent-alert"></span></button><div class="flex items-center gap-space-sm pl-space-xs"><div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center"><span class="material-symbols-outlined text-on-primary text-[18px]">person</span></div></div></div></header><main class="w-full pt-20 px-gutter pb-margin min-h-screen"><div class="flex flex-col w-full space-y-space-lg">
+<!-- Top Navigation & Header Controls -->
+<section class="flex flex-col gap-space-md">
+<!-- Breadcrumb -->
+<nav class="flex items-center gap-space-xs text-text-muted font-body-sm text-body-sm">
+<a class="hover:text-on-surface transition-colors" href="#">Events</a>
+<span class="material-symbols-outlined text-[16px]">chevron_right</span>
+<a class="hover:text-on-surface transition-colors" href="#">Tech Leaders Summit 2026</a>
+<span class="material-symbols-outlined text-[16px]">chevron_right</span>
+<a class="hover:text-on-surface transition-colors" href="#">Attendees</a>
+<span class="material-symbols-outlined text-[16px]">chevron_right</span>
+<span class="text-on-surface font-label-md text-label-md">CSV Export Configuration</span>
+</nav>
+<!-- Title Bar and Main Actions -->
+<div class="flex flex-col md:flex-row md:items-center justify-between gap-space-md">
+<div>
+<div class="flex items-center gap-space-sm mb-1">
+<span class="font-headline-md text-headline-md text-on-surface tracking-tight">Attendee & Check-In Data Export</span>
+<span class="inline-flex items-center gap-1 px-space-sm py-0.5 rounded-full bg-surface-container text-on-surface font-caption text-caption uppercase tracking-wider">
+<span class="material-symbols-outlined text-[13px] text-brand-black" style="font-variation-settings: 'FILL' 1;">auto_awesome</span>
+            Pro Feature Unlocked
+          </span>
+</div>
+<p class="font-body-sm text-body-sm text-text-muted">
+          Design custom schema payloads, turnstile device audit trails, and privacy-compliant rosters under Act 843.
+        </p>
+</div>
+<!-- Actions -->
+<div class="flex items-center gap-space-sm flex-wrap">
+<!-- Preset Dropdown -->
+<div class="relative inline-block text-left">
+<button class="h-11 px-space-md rounded-full bg-surface hover:bg-surface-container text-on-surface font-label-md text-label-md inline-flex items-center gap-space-xs transition-colors" id="presetDropdownBtn" type="button">
+<span class="material-symbols-outlined text-[18px]">tune</span>
+<span>Presets: Gate Operations</span>
+<span class="material-symbols-outlined text-[16px]">expand_more</span>
+</button>
+</div>
+<!-- Download Button -->
+<button class="h-11 px-space-lg rounded-full bg-brand-black hover:opacity-90 text-on-primary font-label-md text-label-md inline-flex items-center gap-space-xs shadow-md transition-all active:scale-[0.98]" id="downloadCsvBtn" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+<span>Download CSV (.csv)</span>
+</button>
+</div>
+</div>
+</section>
+<!-- 2-Column Responsive Workspace Grid (7 cols left / 5 cols right) -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-space-lg items-start">
+<!-- LEFT COLUMN: Configuration Controls (7 Cols) -->
+<div class="lg:col-span-7 flex flex-col gap-space-lg">
+<!-- 1. Export Scope & Filters -->
+<div class="bg-surface-elevated rounded-lg p-space-lg shadow-sm flex flex-col gap-space-md">
+<div class="flex items-center justify-between pb-2">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-brand-black">
+<span class="material-symbols-outlined text-[18px]">filter_alt</span>
+</div>
+<div>
+<h2 class="font-headline-sm text-headline-sm text-on-surface">1. Export Scope & Cohort Filters</h2>
+<p class="font-caption text-caption text-text-muted">Query partition based on sync telemetry and gate devices</p>
+</div>
+</div>
+<span class="font-caption text-caption px-space-sm py-0.5 rounded-full bg-surface text-text-muted">Live RLS Bound</span>
+</div>
+<!-- Attendance Status Filter Pills -->
+<div class="flex flex-col gap-space-xs">
+<label class="font-label-md text-label-md text-on-surface">Attendance Status</label>
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-space-xs">
+<button class="filter-status-btn px-space-sm py-2 rounded-full font-label-md text-label-md text-center bg-surface hover:bg-surface-container text-on-surface transition-colors" data-status="all" type="button">
+              All (848)
+            </button>
+<button class="filter-status-btn px-space-sm py-2 rounded-full font-label-md text-label-md text-center bg-brand-black text-on-primary transition-colors shadow-sm" data-status="checked_in" type="button">
+              Checked-In (612)
+            </button>
+<button class="filter-status-btn px-space-sm py-2 rounded-full font-label-md text-label-md text-center bg-surface hover:bg-surface-container text-on-surface transition-colors" data-status="not_checked_in" type="button">
+              Pending (236)
+            </button>
+<button class="filter-status-btn px-space-sm py-2 rounded-full font-label-md text-label-md text-center bg-surface hover:bg-surface-container text-accent-alert transition-colors" data-status="conflicts" type="button">
+              Turnstile Sync (3)
+            </button>
+</div>
+</div>
+<!-- Gate Scanner & Range Selection Subgrid -->
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-space-md pt-space-xs">
+<!-- Gate Filter -->
+<div class="flex flex-col gap-space-xs">
+<label class="font-label-md text-label-md text-on-surface">Access Terminal / Turnstile Gate</label>
+<div class="relative">
+<select class="w-full h-11 px-4 bg-surface rounded-full font-body-sm text-body-sm text-on-surface outline-none cursor-pointer appearance-none">
+<option value="all">All Turnstiles (4 Gates Connected)</option>
+<option selected="" value="gate_a">Main Gate A - Expo Concourse</option>
+<option value="vip">VIP & Speaker Entrance</option>
+<option value="east_desk">East Wing Logistics Desk</option>
+<option value="press">Press & Media Turnstile</option>
+</select>
+<span class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-[18px] text-text-muted">expand_more</span>
+</div>
+</div>
+<!-- Date Range Selector -->
+<div class="flex flex-col gap-space-xs">
+<label class="font-label-md text-label-md text-on-surface">Registration / Check-In Epoch</label>
+<div class="relative">
+<select class="w-full h-11 px-4 bg-surface rounded-full font-body-sm text-body-sm text-on-surface outline-none cursor-pointer appearance-none">
+<option selected="" value="summit_days">Summit Days (Nov 24 – 26, 2026)</option>
+<option value="today">Today Only (Live Sessions)</option>
+<option value="all_time">Entire Campaign History (All 848)</option>
+<option value="custom">Custom Date Range...</option>
+</select>
+<span class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-[18px] text-text-muted">calendar_today</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 2. Field Selection & Column Mapping -->
+<div class="bg-surface-elevated rounded-lg p-space-lg shadow-sm flex flex-col gap-space-md">
+<div class="flex items-center justify-between pb-1">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-brand-black">
+<span class="material-symbols-outlined text-[18px]">view_column</span>
+</div>
+<div>
+<h2 class="font-headline-sm text-headline-sm text-on-surface">2. Column Mapping & Attributes</h2>
+<p class="font-caption text-caption text-text-muted">Drag handle reorders columns; toggle attributes for CSV output</p>
+</div>
+</div>
+<div class="flex items-center gap-space-xs font-caption text-caption">
+<button class="px-space-sm py-1 rounded-full bg-surface hover:bg-surface-container text-on-surface transition-colors" id="selectAllCols" type="button">Select Core</button>
+<button class="px-space-sm py-1 rounded-full bg-surface hover:bg-surface-container text-text-muted transition-colors" id="resetCols" type="button">Minimal</button>
+</div>
+</div>
+<!-- Field Rows List -->
+<div class="flex flex-col gap-1.5" id="columnSelectorList">
+<!-- Column Item: ID -->
+<div class="flex items-center justify-between px-space-md py-2.5 rounded-full bg-surface hover:bg-surface-container transition-all">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-text-muted cursor-grab">drag_indicator</span>
+<input checked="" class="w-4 h-4 rounded accent-brand-black cursor-pointer" id="col-id" type="checkbox"/>
+<label class="cursor-pointer flex items-center gap-space-xs font-body-sm text-body-sm text-on-surface" for="col-id">
+<span class="font-label-md text-label-md">Attendee Identifier</span>
+<code class="px-1.5 py-0.5 rounded bg-surface-elevated font-mono text-caption text-text-muted">id</code>
+</label>
+</div>
+<span class="font-caption text-caption text-text-muted">UUIDv4 / Hex Prefix</span>
+</div>
+<!-- Column Item: Name -->
+<div class="flex items-center justify-between px-space-md py-2.5 rounded-full bg-surface hover:bg-surface-container transition-all">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-text-muted cursor-grab">drag_indicator</span>
+<input checked="" class="w-4 h-4 rounded accent-brand-black cursor-pointer" id="col-name" type="checkbox"/>
+<label class="cursor-pointer flex items-center gap-space-xs font-body-sm text-body-sm text-on-surface" for="col-name">
+<span class="font-label-md text-label-md">Full Name</span>
+<code class="px-1.5 py-0.5 rounded bg-surface-elevated font-mono text-caption text-text-muted">name</code>
+</label>
+</div>
+<span class="font-caption text-caption text-text-muted">Primary Attendee Record</span>
+</div>
+<!-- Column Item: Phone -->
+<div class="flex items-center justify-between px-space-md py-2.5 rounded-full bg-surface hover:bg-surface-container transition-all">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-text-muted cursor-grab">drag_indicator</span>
+<input checked="" class="w-4 h-4 rounded accent-brand-black cursor-pointer" id="col-phone" type="checkbox"/>
+<label class="cursor-pointer flex items-center gap-space-xs font-body-sm text-body-sm text-on-surface" for="col-phone">
+<span class="font-label-md text-label-md">Normalized Phone</span>
+<code class="px-1.5 py-0.5 rounded bg-surface-elevated font-mono text-caption text-text-muted">phone</code>
+</label>
+</div>
+<span class="font-caption text-caption text-text-muted">E.164 Standard</span>
+</div>
+<!-- Column Item: Email -->
+<div class="flex items-center justify-between px-space-md py-2.5 rounded-full bg-surface hover:bg-surface-container transition-all">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-text-muted cursor-grab">drag_indicator</span>
+<input checked="" class="w-4 h-4 rounded accent-brand-black cursor-pointer" id="col-email" type="checkbox"/>
+<label class="cursor-pointer flex items-center gap-space-xs font-body-sm text-body-sm text-on-surface" for="col-email">
+<span class="font-label-md text-label-md">Email Address</span>
+<code class="px-1.5 py-0.5 rounded bg-surface-elevated font-mono text-caption text-text-muted">email</code>
+</label>
+</div>
+<span class="font-caption text-caption text-text-muted">RFC 5322 Compliant</span>
+</div>
+<!-- Column Item: Registered At -->
+<div class="flex items-center justify-between px-space-md py-2.5 rounded-full bg-surface hover:bg-surface-container transition-all">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-text-muted cursor-grab">drag_indicator</span>
+<input checked="" class="w-4 h-4 rounded accent-brand-black cursor-pointer" id="col-reg-at" type="checkbox"/>
+<label class="cursor-pointer flex items-center gap-space-xs font-body-sm text-body-sm text-on-surface" for="col-reg-at">
+<span class="font-label-md text-label-md">Registration Timestamp</span>
+<code class="px-1.5 py-0.5 rounded bg-surface-elevated font-mono text-caption text-text-muted">registered_at</code>
+</label>
+</div>
+<span class="font-caption text-caption text-text-muted">ISO 8601 UTC</span>
+</div>
+<!-- Column Item: Check-In Status -->
+<div class="flex items-center justify-between px-space-md py-2.5 rounded-full bg-surface hover:bg-surface-container transition-all">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-text-muted cursor-grab">drag_indicator</span>
+<input checked="" class="w-4 h-4 rounded accent-brand-black cursor-pointer" id="col-status" type="checkbox"/>
+<label class="cursor-pointer flex items-center gap-space-xs font-body-sm text-body-sm text-on-surface" for="col-status">
+<span class="font-label-md text-label-md">Check-In Status</span>
+<code class="px-1.5 py-0.5 rounded bg-surface-elevated font-mono text-caption text-text-muted">is_checked_in</code>
+</label>
+</div>
+<span class="font-caption text-caption text-text-muted">Boolean (TRUE/FALSE)</span>
+</div>
+<!-- Column Item: Check-In Timestamp -->
+<div class="flex items-center justify-between px-space-md py-2.5 rounded-full bg-surface hover:bg-surface-container transition-all">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-text-muted cursor-grab">drag_indicator</span>
+<input checked="" class="w-4 h-4 rounded accent-brand-black cursor-pointer" id="col-check-at" type="checkbox"/>
+<label class="cursor-pointer flex items-center gap-space-xs font-body-sm text-body-sm text-on-surface" for="col-check-at">
+<span class="font-label-md text-label-md">Scan Verification Time</span>
+<code class="px-1.5 py-0.5 rounded bg-surface-elevated font-mono text-caption text-text-muted">checked_in_at</code>
+</label>
+</div>
+<span class="font-caption text-caption text-text-muted">Null when Unverified</span>
+</div>
+<!-- Column Item: Scanner Gate Device -->
+<div class="flex items-center justify-between px-space-md py-2.5 rounded-full bg-surface hover:bg-surface-container transition-all">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-text-muted cursor-grab">drag_indicator</span>
+<input checked="" class="w-4 h-4 rounded accent-brand-black cursor-pointer" id="col-gate" type="checkbox"/>
+<label class="cursor-pointer flex items-center gap-space-xs font-body-sm text-body-sm text-on-surface" for="col-gate">
+<span class="font-label-md text-label-md">Gate Station Name</span>
+<code class="px-1.5 py-0.5 rounded bg-surface-elevated font-mono text-caption text-text-muted">scanner_name</code>
+</label>
+</div>
+<span class="font-caption text-caption text-text-muted">Hardware / Turnstile Tag</span>
+</div>
+<!-- Additional Security & Telemetry Fields (Unchecked by default) -->
+<div class="flex items-center justify-between px-space-md py-2.5 rounded-full bg-surface/60 hover:bg-surface-container transition-all">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-text-muted cursor-grab">drag_indicator</span>
+<input class="w-4 h-4 rounded accent-brand-black cursor-pointer" id="col-sms" type="checkbox"/>
+<label class="cursor-pointer flex items-center gap-space-xs font-body-sm text-body-sm text-on-surface" for="col-sms">
+<span class="font-label-md text-label-md">Arkesel SMS Gateway Status</span>
+<code class="px-1.5 py-0.5 rounded bg-surface-elevated font-mono text-caption text-text-muted">sms_status</code>
+</label>
+</div>
+<span class="font-caption text-caption text-text-muted">delivered / pending</span>
+</div>
+<div class="flex items-center justify-between px-space-md py-2.5 rounded-full bg-surface/60 hover:bg-surface-container transition-all">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-text-muted cursor-grab">drag_indicator</span>
+<input class="w-4 h-4 rounded accent-brand-black cursor-pointer" id="col-token" type="checkbox"/>
+<label class="cursor-pointer flex items-center gap-space-xs font-body-sm text-body-sm text-on-surface" for="col-token">
+<span class="font-label-md text-label-md">Cryptographic Ticket Token</span>
+<code class="px-1.5 py-0.5 rounded bg-surface-elevated font-mono text-caption text-text-muted">ticket_nonce</code>
+</label>
+</div>
+<span class="font-caption text-caption text-text-muted">HMAC-SHA256 Sig</span>
+</div>
+</div>
+</div>
+<!-- 3. Formatting & Delimiter Options -->
+<div class="bg-surface-elevated rounded-lg p-space-lg shadow-sm flex flex-col gap-space-md">
+<div class="flex items-center gap-space-sm pb-1">
+<div class="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-brand-black">
+<span class="material-symbols-outlined text-[18px]">settings_suggest</span>
+</div>
+<div>
+<h2 class="font-headline-sm text-headline-sm text-on-surface">3. Delimiters, Charset & Privacy Masking</h2>
+<p class="font-caption text-caption text-text-muted">Standardized encoding for Ghana telecoms and spreadsheet imports</p>
+</div>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-space-md">
+<!-- Delimiter -->
+<div class="flex flex-col gap-space-xs">
+<label class="font-label-md text-label-md text-on-surface">CSV Delimiter</label>
+<div class="grid grid-cols-3 gap-1">
+<button class="px-space-sm py-2 rounded-full font-label-md text-label-md bg-brand-black text-on-primary text-center" type="button">Comma (,)</button>
+<button class="px-space-sm py-2 rounded-full font-label-md text-label-md bg-surface text-on-surface hover:bg-surface-container text-center" type="button">Semi (;)</button>
+<button class="px-space-sm py-2 rounded-full font-label-md text-label-md bg-surface text-on-surface hover:bg-surface-container text-center" type="button">Tab (\t)</button>
+</div>
+</div>
+<!-- Encoding -->
+<div class="flex flex-col gap-space-xs">
+<label class="font-label-md text-label-md text-on-surface">Text File Encoding</label>
+<div class="relative">
+<select class="w-full h-10 px-4 bg-surface rounded-full font-body-sm text-body-sm text-on-surface outline-none cursor-pointer appearance-none">
+<option selected="" value="utf8_bom">UTF-8 with BOM (Universal Excel Support)</option>
+<option value="utf8">UTF-8 Standard (Unix / Postgres)</option>
+<option value="ascii">ASCII Safe (7-Bit Strip)</option>
+</select>
+<span class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-[18px] text-text-muted">expand_more</span>
+</div>
+</div>
+<!-- Phone Number Format -->
+<div class="flex flex-col gap-space-xs">
+<label class="font-label-md text-label-md text-on-surface">Phone Number Format</label>
+<div class="relative">
+<select class="w-full h-10 px-4 bg-surface rounded-full font-body-sm text-body-sm text-on-surface outline-none cursor-pointer appearance-none">
+<option selected="" value="e164">Canonical E.164 (+233244918820)</option>
+<option value="national">Ghana National (0244918820)</option>
+<option value="digits">Digits Only (233244918820)</option>
+</select>
+<span class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-[18px] text-text-muted">call</span>
+</div>
+</div>
+<!-- Date/Time Format -->
+<div class="flex flex-col gap-space-xs">
+<label class="font-label-md text-label-md text-on-surface">Timezone & Timestamp Structure</label>
+<div class="relative">
+<select class="w-full h-10 px-4 bg-surface rounded-full font-body-sm text-body-sm text-on-surface outline-none cursor-pointer appearance-none">
+<option selected="" value="iso8601">ISO 8601 (YYYY-MM-DD HH:mm:ss GMT)</option>
+<option value="local">Africa/Accra Local (DD/MM/YYYY hh:mm A)</option>
+<option value="epoch">Unix Epoch (Milliseconds)</option>
+</select>
+<span class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-[18px] text-text-muted">schedule</span>
+</div>
+</div>
+</div>
+<!-- Privacy & Masking Checkbox Switch -->
+<div class="mt-space-xs p-space-md rounded-lg bg-surface flex items-center justify-between gap-space-md">
+<div class="flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-[20px] text-on-surface mt-0.5">shield_person</span>
+<div>
+<p class="font-label-md text-label-md text-on-surface">Redact PII for 3rd-Party Vendors</p>
+<p class="font-caption text-caption text-text-muted">Anonymizes phone numbers (+233••••8820) and emails for catering & event logistics rosters.</p>
+</div>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" id="maskPiiToggle" type="checkbox"/>
+<div class="w-11 h-6 bg-surface-container-highest peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-surface-elevated after:border-border-subtle after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-black"></div>
+</label>
+</div>
+</div>
+</div>
+<!-- RIGHT COLUMN: Real-Time Preview & Audit Compliance (5 Cols) -->
+<div class="lg:col-span-5 flex flex-col gap-space-lg">
+<!-- Live Preview Table Container -->
+<div class="bg-surface-elevated rounded-lg p-space-lg shadow-sm flex flex-col gap-space-md">
+<div class="flex items-center justify-between pb-1">
+<div class="flex items-center gap-space-sm">
+<span class="relative flex h-2.5 w-2.5">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-black opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-brand-black"></span>
+</span>
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Real-Time CSV Preview</h3>
+</div>
+<span class="font-caption text-caption text-text-muted">Top 5 Records Simulated</span>
+</div>
+<!-- Scrollable Live Preview Table -->
+<div class="w-full overflow-x-auto rounded-lg bg-surface p-space-xs">
+<table class="w-full text-left font-body-sm text-body-sm border-collapse min-w-[540px]">
+<thead>
+<tr class="text-text-muted font-caption text-caption uppercase tracking-wider">
+<th class="py-2 px-3 font-semibold">ID</th>
+<th class="py-2 px-3 font-semibold">Name</th>
+<th class="py-2 px-3 font-semibold">Phone</th>
+<th class="py-2 px-3 font-semibold">Gate</th>
+<th class="py-2 px-3 font-semibold text-right">Status</th>
+</tr>
+</thead>
+<tbody class="divide-y-0 text-on-surface">
+<tr class="hover:bg-surface-elevated/70 transition-colors">
+<td class="py-2.5 px-3 font-mono text-caption">TLS-001</td>
+<td class="py-2.5 px-3 font-label-md text-label-md">Farida Bedwei</td>
+<td class="py-2.5 px-3 font-mono text-caption text-text-muted preview-phone">+233244918820</td>
+<td class="py-2.5 px-3 text-caption">Main Gate A</td>
+<td class="py-2.5 px-3 text-right">
+<span class="inline-flex px-2 py-0.5 rounded-full bg-brand-black text-on-primary font-caption text-[10px]">CHECKED_IN</span>
+</td>
+</tr>
+<tr class="hover:bg-surface-elevated/70 transition-colors">
+<td class="py-2.5 px-3 font-mono text-caption">TLS-002</td>
+<td class="py-2.5 px-3 font-label-md text-label-md">Kofi Osei-Amponsah</td>
+<td class="py-2.5 px-3 font-mono text-caption text-text-muted preview-phone">+233501234567</td>
+<td class="py-2.5 px-3 text-caption">Main Gate A</td>
+<td class="py-2.5 px-3 text-right">
+<span class="inline-flex px-2 py-0.5 rounded-full bg-brand-black text-on-primary font-caption text-[10px]">CHECKED_IN</span>
+</td>
+</tr>
+<tr class="hover:bg-surface-elevated/70 transition-colors">
+<td class="py-2.5 px-3 font-mono text-caption">TLS-003</td>
+<td class="py-2.5 px-3 font-label-md text-label-md">Dr. Elorm Adadevoh</td>
+<td class="py-2.5 px-3 font-mono text-caption text-text-muted preview-phone">+233209876543</td>
+<td class="py-2.5 px-3 text-caption">VIP Entrance</td>
+<td class="py-2.5 px-3 text-right">
+<span class="inline-flex px-2 py-0.5 rounded-full bg-brand-black text-on-primary font-caption text-[10px]">CHECKED_IN</span>
+</td>
+</tr>
+<tr class="hover:bg-surface-elevated/70 transition-colors">
+<td class="py-2.5 px-3 font-mono text-caption">TLS-004</td>
+<td class="py-2.5 px-3 font-label-md text-label-md">Yvette Agyeman-Duah</td>
+<td class="py-2.5 px-3 font-mono text-caption text-text-muted preview-phone">+233271112233</td>
+<td class="py-2.5 px-3 text-caption">East Desk</td>
+<td class="py-2.5 px-3 text-right">
+<span class="inline-flex px-2 py-0.5 rounded-full bg-brand-black text-on-primary font-caption text-[10px]">CHECKED_IN</span>
+</td>
+</tr>
+<tr class="hover:bg-surface-elevated/70 transition-colors">
+<td class="py-2.5 px-3 font-mono text-caption">TLS-005</td>
+<td class="py-2.5 px-3 font-label-md text-label-md">Kwame Mensah</td>
+<td class="py-2.5 px-3 font-mono text-caption text-text-muted preview-phone">+233249001122</td>
+<td class="py-2.5 px-3 text-caption text-text-muted">—</td>
+<td class="py-2.5 px-3 text-right">
+<span class="inline-flex px-2 py-0.5 rounded-full bg-surface-container text-on-surface font-caption text-[10px]">NOT_CHECKED_IN</span>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!-- Raw Monospace String Snippet Output -->
+<div class="flex flex-col gap-1.5 pt-space-xs">
+<div class="flex items-center justify-between text-text-muted font-caption text-caption">
+<span>Payload Stream Output (CSV Text Preview)</span>
+<button class="hover:text-on-surface flex items-center gap-1 transition-colors" id="copySnippetBtn" type="button">
+<span class="material-symbols-outlined text-[14px]">content_copy</span>
+<span>Copy Raw</span>
+</button>
+</div>
+<div class="p-space-sm rounded-lg bg-surface font-mono text-caption text-on-surface overflow-x-auto whitespace-pre leading-relaxed select-all">
+<span class="text-text-muted">1</span> id,name,phone,email,registered_at,checked_in_at,gate,status
+<span class="text-text-muted">2</span> "TLS-001","Farida Bedwei","+233244918820","f.bedwei@techleaders.africa","2026-11-20 09:14:22","2026-11-24 08:45:11","Main Gate A","CHECKED_IN"
+<span class="text-text-muted">3</span> "TLS-002","Kofi Osei","+233501234567","kofi.o@ventures.gh","2026-11-20 10:02:45","2026-11-24 09:12:04","Gate A","CHECKED_IN"
+<span class="text-text-muted">4</span> "TLS-003","Dr. E. Adadevoh","+233209876543","e.adadevoh@telecom.gh","2026-11-21 14:30:19","2026-11-24 09:17:51","VIP","CHECKED_IN"
+<span class="text-text-muted">5</span> "TLS-004","Yvette A-Duah","+233271112233","yvette@hub.accra","2026-11-22 16:11:00","2026-11-24 09:16:11","East Desk","CHECKED_IN"</div>
+</div>
+</div>
+<!-- Export Telemetry & File Metadata -->
+<div class="bg-surface-elevated rounded-lg p-space-lg shadow-sm flex flex-col gap-space-md">
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Export Telemetry & Quota</h3>
+<div class="grid grid-cols-2 gap-space-sm">
+<div class="p-space-sm rounded-lg bg-surface flex flex-col">
+<span class="font-caption text-caption text-text-muted uppercase tracking-wider">Filtered Records</span>
+<span class="font-metric-num text-metric-num text-on-surface tracking-tight mt-1">612</span>
+<span class="font-caption text-caption text-text-muted">of 848 Summit Registrants</span>
+</div>
+<div class="p-space-sm rounded-lg bg-surface flex flex-col">
+<span class="font-caption text-caption text-text-muted uppercase tracking-wider">Estimated File Size</span>
+<span class="font-metric-num text-metric-num text-on-surface tracking-tight mt-1">~74.2 <span class="font-body-md text-body-md font-normal">KB</span></span>
+<span class="font-caption text-caption text-text-muted">8 Selected Attributes</span>
+</div>
+</div>
+<!-- Compliance & Security Notice -->
+<div class="p-space-md rounded-lg bg-surface flex flex-col gap-space-xs">
+<div class="flex items-center gap-space-xs text-on-surface">
+<span class="material-symbols-outlined text-[18px]">verified_user</span>
+<span class="font-label-md text-label-md">Audit Trail & Data Act 843 Log</span>
+</div>
+<p class="font-caption text-caption text-text-muted">
+            Generation request will append to cryptographic log <code class="font-mono text-on-surface">sha256:7f4a...9b12</code> under organiser account UUID.
+          </p>
+<div class="flex items-center gap-space-sm mt-1">
+<span class="inline-flex items-center gap-1 font-caption text-caption text-on-surface">
+<span class="w-1.5 h-1.5 rounded-full bg-brand-black"></span>
+              Pro Plan: Unlimited Daily Exports
+            </span>
+</div>
+</div>
+<!-- Secondary Export Options -->
+<div class="flex flex-col gap-space-xs pt-1">
+<button class="w-full h-11 px-space-md rounded-full bg-surface hover:bg-surface-container text-on-surface font-label-md text-label-md flex items-center justify-between transition-colors" type="button">
+<span class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-[18px]">cloud_sync</span>
+<span>Schedule Auto-Sync (SFTP / Webhook)</span>
+</span>
+<span class="font-caption text-caption text-text-muted">Pro+</span>
+</button>
+<button class="w-full h-11 px-space-md rounded-full bg-surface hover:bg-surface-container text-on-surface font-label-md text-label-md flex items-center justify-between transition-colors" type="button">
+<span class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-[18px]">table_view</span>
+<span>Download Excel Format (.xlsx)</span>
+</span>
+<span class="material-symbols-outlined text-[16px]">file_download</span>
+</button>
+<a class="w-full py-2.5 text-center text-text-muted hover:text-on-surface font-label-md text-label-md transition-colors" href="#">
+            Cancel & Return to Attendees List
+          </a>
+</div>
+</div>
+</div>
+</div>
+</div>
+<script>
+  (function () {
+    // Quick action: Toggle columns
+    const selectAllBtn = document.getElementById('selectAllCols');
+    const resetColsBtn = document.getElementById('resetCols');
+    const checkboxes = document.querySelectorAll('#columnSelectorList input[type="checkbox"]');
+
+    if (selectAllBtn) {
+      selectAllBtn.addEventListener('click', () => {
+        checkboxes.forEach((cb) => (cb.checked = true));
+      });
+    }
+
+    if (resetColsBtn) {
+      resetColsBtn.addEventListener('click', () => {
+        checkboxes.forEach((cb, idx) => {
+          cb.checked = idx < 4; // Keep first 4 core fields
+        });
+      });
+    }
+
+    // Toggle PII masking preview effect
+    const maskToggle = document.getElementById('maskPiiToggle');
+    const phonePreviews = document.querySelectorAll('.preview-phone');
+
+    if (maskToggle && phonePreviews.length > 0) {
+      maskToggle.addEventListener('change', (e) => {
+        if (e.target.checked) {
+          phonePreviews.forEach((el) => {
+            el.dataset.original = el.textContent;
+            el.textContent = '+233••••' + el.textContent.slice(-4);
+          });
+        } else {
+          phonePreviews.forEach((el) => {
+            if (el.dataset.original) {
+              el.textContent = el.dataset.original;
+            }
+          });
+        }
+      });
+    }
+
+    // Copy CSV Snippet
+    const copyBtn = document.getElementById('copySnippetBtn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', () => {
+        const textToCopy = `id,name,phone,email,registered_at,checked_in_at,gate,status\n"TLS-001","Farida Nana Bedwei","+233244918820","f.bedwei@techleaders.africa","2026-11-20 09:14:22","2026-11-24 08:45:11","Main Gate A","CHECKED_IN"`;
+        navigator.clipboard.writeText(textToCopy).then(() => {
+          const original = copyBtn.innerHTML;
+          copyBtn.innerHTML = '<span class="material-symbols-outlined text-[14px]">check</span><span>Copied!</span>';
+          setTimeout(() => {
+            copyBtn.innerHTML = original;
+          }, 2000);
+        });
+      });
+    }
+
+    // Status filter toggle UX
+    const statusBtns = document.querySelectorAll('.filter-status-btn');
+    statusBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        statusBtns.forEach((b) => {
+          b.classList.remove('bg-brand-black', 'text-on-primary', 'shadow-sm');
+          b.classList.add('bg-surface', 'text-on-surface');
+        });
+        btn.classList.remove('bg-surface', 'text-on-surface');
+        btn.classList.add('bg-brand-black', 'text-on-primary', 'shadow-sm');
+      });
+    });
+
+    // Simulated Export Download Trigger
+    const downloadBtn = document.getElementById('downloadCsvBtn');
+    if (downloadBtn) {
+      downloadBtn.addEventListener('click', () => {
+        const originalContent = downloadBtn.innerHTML;
+        downloadBtn.innerHTML = '<span class="material-symbols-outlined text-[18px] animate-spin">sync</span><span>Preparing Export...</span>';
+        downloadBtn.disabled = true;
+        
+        setTimeout(() => {
+          // Trigger actual browser file blob generation
+          const dummyCsv = "id,name,phone,email,registered_at,checked_in_at,gate,status\nTLS-001,Farida Bedwei,+233244918820,f.bedwei@techleaders.africa,2026-11-20 09:14:22,2026-11-24 08:45:11,Main Gate A,CHECKED_IN\nTLS-002,Kofi Osei,+233501234567,kofi.o@ventures.gh,2026-11-20 10:02:45,2026-11-24 09:12:04,Main Gate A,CHECKED_IN\n";
+          const blob = new Blob([dummyCsv], { type: 'text/csv;charset=utf-8;' });
+          const link = document.createElement("a");
+          const url = URL.createObjectURL(blob);
+          link.setAttribute("href", url);
+          link.setAttribute("download", "TLS2026_Attendee_Export.csv");
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+
+          downloadBtn.innerHTML = '<span class="material-symbols-outlined text-[18px]">check</span><span>Downloaded!</span>';
+          setTimeout(() => {
+            downloadBtn.innerHTML = originalContent;
+            downloadBtn.disabled = false;
+          }, 2000);
+        }, 800);
+      });
+    }
+  })();
+</script></main></div></body></html>

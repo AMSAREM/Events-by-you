@@ -1,0 +1,196 @@
+---
+name: Monochrome Event Platform
+colors:
+  surface: '#F5F5F7'
+  surface-dim: '#d9dadc'
+  surface-bright: '#f9f9fb'
+  surface-container-lowest: '#ffffff'
+  surface-container-low: '#f3f3f5'
+  surface-container: '#eeeef0'
+  surface-container-high: '#e8e8ea'
+  surface-container-highest: '#e2e2e4'
+  on-surface: '#1a1c1d'
+  on-surface-variant: '#444748'
+  inverse-surface: '#2f3132'
+  inverse-on-surface: '#f0f0f2'
+  outline: '#747878'
+  outline-variant: '#c4c7c7'
+  surface-tint: '#5f5e5e'
+  primary: '#000000'
+  on-primary: '#ffffff'
+  primary-container: '#1c1b1b'
+  on-primary-container: '#858383'
+  inverse-primary: '#c9c6c5'
+  secondary: '#5d5e66'
+  on-secondary: '#ffffff'
+  secondary-container: '#e3e1ec'
+  on-secondary-container: '#63646c'
+  tertiary: '#000000'
+  on-tertiary: '#ffffff'
+  tertiary-container: '#1d1b1a'
+  on-tertiary-container: '#868381'
+  error: '#ba1a1a'
+  on-error: '#ffffff'
+  error-container: '#ffdad6'
+  on-error-container: '#93000a'
+  primary-fixed: '#e5e2e1'
+  primary-fixed-dim: '#c9c6c5'
+  on-primary-fixed: '#1c1b1b'
+  on-primary-fixed-variant: '#474646'
+  secondary-fixed: '#e3e1ec'
+  secondary-fixed-dim: '#c6c5cf'
+  on-secondary-fixed: '#1a1b22'
+  on-secondary-fixed-variant: '#46464e'
+  tertiary-fixed: '#e6e1df'
+  tertiary-fixed-dim: '#cac6c3'
+  on-tertiary-fixed: '#1d1b1a'
+  on-tertiary-fixed-variant: '#484645'
+  background: '#f9f9fb'
+  on-background: '#1a1c1d'
+  surface-variant: '#e2e2e4'
+  canvas: '#FFFFFF'
+  surface-elevated: '#FFFFFF'
+  brand-black: '#0B0B0B'
+  text-muted: '#71717A'
+  border-subtle: '#E5E5EA'
+  accent-alert: '#EF4444'
+typography:
+  display-lg:
+    fontFamily: Inter
+    fontSize: 36px
+    fontWeight: '700'
+    lineHeight: 44px
+    letterSpacing: -0.03em
+  display-lg-mobile:
+    fontFamily: Inter
+    fontSize: 28px
+    fontWeight: '700'
+    lineHeight: 34px
+    letterSpacing: -0.02em
+  metric-num:
+    fontFamily: Inter
+    fontSize: 32px
+    fontWeight: '700'
+    lineHeight: 36px
+    letterSpacing: -0.02em
+  headline-md:
+    fontFamily: Inter
+    fontSize: 22px
+    fontWeight: '700'
+    lineHeight: 28px
+    letterSpacing: -0.02em
+  headline-sm:
+    fontFamily: Inter
+    fontSize: 16px
+    fontWeight: '600'
+    lineHeight: 22px
+    letterSpacing: -0.01em
+  body-md:
+    fontFamily: Inter
+    fontSize: 14px
+    fontWeight: '400'
+    lineHeight: 20px
+    letterSpacing: 0em
+  body-sm:
+    fontFamily: Inter
+    fontSize: 13px
+    fontWeight: '400'
+    lineHeight: 18px
+    letterSpacing: 0em
+  label-md:
+    fontFamily: Inter
+    fontSize: 12px
+    fontWeight: '600'
+    lineHeight: 16px
+    letterSpacing: 0.01em
+  caption:
+    fontFamily: Inter
+    fontSize: 11px
+    fontWeight: '500'
+    lineHeight: 14px
+    letterSpacing: 0.02em
+rounded:
+  sm: 0.5rem
+  DEFAULT: 1rem
+  md: 1.5rem
+  lg: 2rem
+  xl: 3rem
+  full: 9999px
+spacing:
+  gutter: 1.5rem
+  margin: 2rem
+  gutter-mobile: 0.75rem
+  margin-mobile: 1rem
+  space-xs: 0.25rem
+  space-sm: 0.5rem
+  space-md: 1rem
+  space-lg: 1.5rem
+  space-xl: 2rem
+---
+
+## Brand & Style
+
+This design system embodies a disciplined, editorial minimalism tailored for high-efficiency event organizers and modern attendees. The visual tone is utilitarian, calm, and deliberate, treating interface density and data clarity with equal precision. By relying on an unyielding black-and-white tonal architecture, it strips away cognitive clutter, allowing event logistics, attendee metrics, and production timelines to take center stage.
+
+The design movement merges Nordic functionalism with modern brutalist-leaning minimalism: heavy, pure white canvas backdrops punctuated by soft architectural surface containers (`#F5F5F7`), bold near-black pill controls (`#0B0B0B`), and expressive geometric typography. Chromatic color is strictly treated as a scarce utility—reserved exclusively for vital real-time status warnings, live capacities, and actionable system alerts.
+
+## Colors
+
+The system uses an uncompromising monochrome scale supported by a singular semantic accent.
+
+- **Primary (`#0B0B0B`)**: Represents the absolute foreground anchor. Applied to primary pill buttons, selected navigation icons, solid vertical bar containers, typography headlines, and single-stroke chart lines.
+- **Secondary (`#71717A`)**: Applied to supporting metadata, secondary metrics, form labels, timestamps, and inactive iconography. Ensures WCAG AA compliance against both pure white and light grey backgrounds.
+- **Neutral (`#F5F5F7`)**: The structural card surface. Sits directly upon the `#FFFFFF` canvas to establish structural zones without requiring harsh outlines or dramatic shadows.
+- **Accent Alert (`#EF4444`)**: The sole allowed chromatic color in the core UI. Utilized strictly for high-urgency notifications (e.g., ticket capacity ceilings, failed broadcasts, payment failures).
+
+## Typography
+
+Typography relies universally on `Inter` across all viewports to provide neutral, systematic clarity. 
+
+- **Display & Metrics**: Emphasized with heavy `700` weights and tight letter spacing (`-0.02em` to `-0.03em`), generating immediate visual weight in summary greeting banners and key performance indicators.
+- **Hierarchy of Readability**: Headline sizes remain restrained, giving precedence to numerical data over decorative labels. Body text maintains comfortable reading height with balanced optical margins.
+- **Captions & Metadata**: Rendered in muted secondary tones (`#71717A`) at `11px` to `13px` to anchor dates, capacity caps, and author signatures without competing with actionable pill components.
+
+## Layout & Spacing
+
+The layout is built upon an asymmetrical multi-zone grid system designed for desktop dashboards and responsive collapsing.
+
+- **Desktop (3-Zone Shell)**:
+  - **Left Rail**: Fixed-width, dark floating pill capsule (72px to 80px) containing iconographic navigation.
+  - **Center Column**: Fluid core space hosting personalized greetings, the upcoming highlight card, and scrollable event catalogs.
+  - **Right Rail**: Dedicated utility and analytics column (320px to 380px) housing search, profile, rapid stats metrics, linear SVG chart visualizations, and account upgrades.
+- **Adaptive Breakpoints**:
+  - **Tablet (768px – 1024px)**: Preserves the compact icon rail; moves the right analytics rail underneath the primary event feed into a balanced 2-column container layout.
+  - **Mobile (< 768px)**: Converts the dark rail into an elevated floating bottom tab bar. Stacks all dashboard modules into a single-column sequence with touch-optimized margins (`margin-mobile: 1rem`).
+
+## Elevation & Depth
+
+Visual hierarchy is primarily achieved through tonal layering rather than heavy drop shadows:
+
+- **Canvas to Card Layering**: Base canvas surfaces are pure white (`#FFFFFF`). First-order containers (stat modules, greeting blocks, list items) use solid `#F5F5F7` surfaces without visible borders.
+- **Floating Controls**: Elevate select high-priority elements (such as the navigation capsule and contextual floating popovers) with an ambient, diffused shadow: `0 12px 32px -8px rgba(11, 11, 11, 0.08)`.
+- **Card Hover States**: Active list cards and action modules translate slightly along the Y-axis (-2px) while transitioning to a soft `#FFFFFF` elevated fill supported by a hairline border (`#E5E5EA`).
+
+## Shapes
+
+The design system embraces an exaggerated pill-shaped geometry (`roundedness: 3`).
+
+- **Containers & Shells**: Large content cards and modular surface containers utilize `rounded-2xl` to `rounded-3xl` radii (`20px` to `24px`), softening the structural grid.
+- **Controls & Buttons**: Action buttons, search inputs, active selection pills, and badge indicators use fully rounded capsular profiles (`9999px`).
+- **Data Elements**: Mini circular progress indicators, dot markers on continuous line graphs, and avatar frames follow absolute circular geometry, harmonizing with pill buttons across all scales.
+
+## Components
+
+- **Buttons**:
+  - *Primary*: Solid near-black fill (`#0B0B0B`), crisp white typography (`#FFFFFF`), full pill curvature (`rounded-full`), padded with `space-sm` vertically and `space-lg` horizontally.
+  - *Secondary / Utility*: Circular icon buttons with faint outlines (`#E5E5EA`) on white backdrops for directional steps and pagination.
+- **Status Chips & Pills**:
+  - Miniature capsular tags (`rounded-full`) with light neutral fills (`#E5E5EA` or `#FFFFFF`).
+  - Active notifications include an absolute red dot marker (`#EF4444`) anchored to the top-right corner.
+- **Inputs & Search**:
+  - Clean capsule-shaped fields with `#F5F5F7` background, unbordered in resting states, switching to a precise 1px `#0B0B0B` stroke on active focus.
+- **Cards & Lists**:
+  - Dense list rows nested within primary feeds use `#F5F5F7` fills, containing thumbnail blocks, structured dual-line typography, and trailing pill CTAs ("View course" / "Manage").
+- **Data Visualizations**:
+  - Smooth continuous spline charts using an unaliased `#0B0B0B` stroke, accompanied by hollow or solid circular anchor dots and muted coordinate labels.
+  - Circular progress gauges positioned adjacent to critical stats, featuring high-contrast progress tracks.

@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="web_dashboard" name="shell-type"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={"darkMode":"class","theme":{"extend":{"colors":{"canvas":"#FFFFFF","on-secondary-fixed":"#1a1b22","surface-container":"#eeeef0","brand-black":"#0B0B0B","on-primary-fixed-variant":"#474646","outline":"#747878","secondary-fixed-dim":"#c6c5cf","accent-alert":"#EF4444","on-surface-variant":"#444748","surface-container-high":"#e8e8ea","on-secondary-fixed-variant":"#46464e","on-tertiary-container":"#868381","secondary":"#5d5e66","on-background":"#1a1c1d","secondary-container":"#e3e1ec","on-error-container":"#93000a","background":"#f9f9fb","on-secondary":"#ffffff","surface-container-lowest":"#ffffff","error":"#ba1a1a","on-primary-container":"#858383","text-muted":"#71717A","surface-elevated":"#FFFFFF","surface-container-low":"#f3f3f5","primary":"#000000","surface-dim":"#d9dadc","on-error-container":"#93000a","on-secondary-container":"#63646c","primary-container":"#1c1b1b","on-primary":"#ffffff","surface-bright":"#f9f9fb","tertiary":"#000000","surface-tint":"#5f5e5e","on-tertiary-fixed-variant":"#484645","secondary-fixed":"#e3e1ec","primary-fixed":"#e5e2e1","on-tertiary":"#ffffff","outline-variant":"#c4c7c7","on-tertiary-fixed":"#1d1b1a","on-primary-fixed":"#1c1b1b","inverse-primary":"#c9c6c5","surface-container-highest":"#e2e2e4","tertiary-container":"#1d1b1a","tertiary-fixed-dim":"#cac6c3","inverse-on-surface":"#f0f0f2","primary-fixed-dim":"#c9c6c5","tertiary-fixed":"#e6e1df","inverse-surface":"#2f3132","error-container":"#ffdad6","on-surface":"#1a1c1d","on-error":"#ffffff","border-subtle":"#E5E5EA","surface":"#F5F5F7","surface-variant":"#e2e2e4"},"borderRadius":{"DEFAULT":"1rem","lg":"2rem","xl":"3rem","full":"9999px"},"spacing":{"gutter":"1.5rem","margin":"2rem","space-xl":"2rem","space-lg":"1.5rem","gutter-mobile":"0.75rem","margin-mobile":"1rem","space-xs":"0.25rem","space-md":"1rem","space-sm":"0.5rem"},"fontFamily":{"display-lg-mobile":["Inter"],"body-md":["Inter"],"headline-sm":["Inter"],"metric-num":["Inter"],"body-sm":["Inter"],"display-lg":["Inter"],"caption":["Inter"],"label-md":["Inter"],"headline-md":["Inter"]},"fontSize":{"display-lg-mobile":["28px",{"lineHeight":"34px","letterSpacing":"-0.02em","fontWeight":"700"}],"body-md":["14px",{"lineHeight":"20px","letterSpacing":"0em","fontWeight":"400"}],"headline-sm":["16px",{"lineHeight":"22px","letterSpacing":"-0.01em","fontWeight":"600"}],"metric-num":["32px",{"lineHeight":"36px","letterSpacing":"-0.02em","fontWeight":"700"}],"body-sm":["13px",{"lineHeight":"18px","letterSpacing":"0em","fontWeight":"400"}],"display-lg":["36px",{"lineHeight":"44px","letterSpacing":"-0.03em","fontWeight":"700"}],"caption":["11px",{"lineHeight":"14px","letterSpacing":"0.02em","fontWeight":"500"}],"label-md":["12px",{"lineHeight":"16px","letterSpacing":"0.01em","fontWeight":"600"}],"headline-md":["22px",{"lineHeight":"28px","letterSpacing":"-0.02em","fontWeight":"700"}]}}}};</script></head><body class="bg-canvas font-body-md text-on-surface antialiased"><aside class="fixed left-margin top-margin bottom-margin w-20 z-50 hidden md:flex flex-col items-center justify-between py-space-lg bg-brand-black rounded-lg shadow-[0_12px_32px_-8px_rgba(11,11,11,0.18)]"><div class="flex flex-col items-center gap-space-lg w-full"><a class="flex items-center justify-center p-space-xs" data-path="overview" href="#"><img alt="Events App Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/ALJJyrC89cMYpWOYWpNib6xSPQPGte8iKk6218nTpXDcNw58pEAFviLzz1vkkKlty3MMtrUu7oM8Wxg4WZTtHmTqqX4KSq1M-7hN-hX3Uj8B2Kqekz0xbGFRJrVxqhdY_s36L9Qnv0XUbarx3M_485iJRSXk5dmueHd276zBdD7Yc8xC9Ex7AyFJ-_K3q7axW_tN32zhJfM_oKAqqtm8lYcsuCVGwV6FNGFTpFqZtySSglK1"/></a><nav class="flex flex-col items-center gap-space-sm w-full px-space-xs" data-active-classes="bg-surface-elevated text-brand-black rounded-full shadow-sm"><a class="flex items-center justify-center w-12 h-12 rounded-full text-secondary-fixed-dim hover:bg-surface-container-high/20 hover:text-on-primary transition-all" data-path="overview" href="#" title="Overview"><span class="material-symbols-outlined text-[22px]">dashboard</span></a><a class="flex items-center justify-center w-12 h-12 rounded-full text-secondary-fixed-dim hover:bg-surface-container-high/20 hover:text-on-primary transition-all" data-path="events" href="#" title="Events"><span class="material-symbols-outlined text-[22px]">calendar_today</span></a><a class="flex items-center justify-center w-12 h-12 rounded-full text-secondary-fixed-dim hover:bg-surface-container-high/20 hover:text-on-primary transition-all" data-path="messages" href="#" title="Messages"><span class="material-symbols-outlined text-[22px]">chat_bubble</span></a><a class="flex items-center justify-center w-12 h-12 rounded-full text-secondary-fixed-dim hover:bg-surface-container-high/20 hover:text-on-primary transition-all" data-path="upgrade-and-credits" href="#" title="Upgrade &amp; Credits"><span class="material-symbols-outlined text-[22px]">credit_card</span></a><a class="flex items-center justify-center w-12 h-12 rounded-full text-secondary-fixed-dim hover:bg-surface-container-high/20 hover:text-on-primary transition-all" data-path="settings" href="#" title="Settings"><span class="material-symbols-outlined text-[22px]">settings</span></a></nav></div><div class="flex flex-col items-center w-full px-space-xs"><a class="flex items-center justify-center w-12 h-12 rounded-full text-secondary-fixed-dim hover:bg-surface-container-high/20 hover:text-accent-alert transition-all" data-path="login" href="#" title="Log out"><span class="material-symbols-outlined text-[22px]">logout</span></a></div></aside><div class="md:pl-32"><header class="fixed top-0 left-0 md:left-32 right-0 h-20 z-40 bg-canvas/80 backdrop-blur-xl"><div class="h-20 w-full px-gutter md:px-margin flex items-center justify-between gap-space-md"><div class="flex items-center gap-space-sm md:hidden"><img alt="Events App Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/ALJJyrC89cMYpWOYWpNib6xSPQPGte8iKk6218nTpXDcNw58pEAFviLzz1vkkKlty3MMtrUu7oM8Wxg4WZTtHmTqqX4KSq1M-7hN-hX3Uj8B2Kqekz0xbGFRJrVxqhdY_s36L9Qnv0XUbarx3M_485iJRSXk5dmueHd276zBdD7Yc8xC9Ex7AyFJ-_K3q7axW_tN32zhJfM_oKAqqtm8lYcsuCVGwV6FNGFTpFqZtySSglK1"/><span class="font-headline-sm text-headline-sm text-brand-black">EventCore</span></div><div class="hidden md:flex items-center"><span class="font-label-md text-label-md text-text-muted tracking-wider uppercase">Creator Studio</span></div><div class="flex items-center justify-end gap-space-md flex-1 max-w-2xl"><div class="relative flex-1 max-w-md"><div class="absolute inset-y-0 left-0 pl-space-md flex items-center pointer-events-none text-text-muted"><span class="material-symbols-outlined text-[20px]">search</span></div><input class="w-full pl-11 pr-space-md py-space-sm bg-surface rounded-full font-body-sm text-body-sm text-on-surface placeholder:text-text-muted focus:outline-none focus:bg-surface-elevated focus:ring-1 focus:ring-brand-black transition-all" placeholder="Search events or attendees..." type="text"/></div><a class="hidden sm:flex items-center gap-space-xs px-space-md py-space-xs bg-surface hover:bg-surface-container rounded-full text-brand-black transition-colors" data-path="upgrade-and-credits" href="#"><span class="material-symbols-outlined text-[16px] text-text-muted">sms</span><span class="font-label-md text-label-md">2,450 SMS</span></a><button aria-label="Notifications" class="relative flex items-center justify-center w-10 h-10 rounded-full bg-surface hover:bg-surface-container transition-colors text-on-surface" type="button"><span class="material-symbols-outlined text-[20px]">notifications</span><span class="absolute top-2 right-2 w-2 h-2 rounded-full bg-accent-alert ring-2 ring-canvas"></span></button><div class="flex items-center pl-space-xs"><img alt="Profile" class="w-8 h-8 rounded-full object-cover ring-2 ring-surface" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDenmBphinMYyW6xDpycYLW-VXGPDN_ZHGxe_g8F8Gb6EQqsMXufWuCkm47L63MXog57CQ4iKtU6pstc6-J0wG5B5sA0R-UZhWwQrPZnM-8fcRCTKVl754zfoayH3yf1mVMr0QAcUeDMSkiqIQwHL-AfJhPBSLi9Rg0oNVE1MXkJDsknYfKEm1dR4H8PzSZati--EcgmwJeiGWfr9z4j66KT7Tp7ZrsmVmIi7cwSxg"/></div></div></div></header><main class="w-full pt-20 px-gutter-mobile md:px-margin bg-canvas min-h-screen"><div class="flex flex-col w-full pb-space-xl">
+<!-- PAGE HEADER & STATUS BANNER -->
+<div class="flex flex-col gap-space-lg mb-space-lg">
+<!-- Breadcrumb & Title Area -->
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-space-md">
+<div class="flex flex-col gap-space-xs">
+<div class="flex items-center gap-space-xs text-text-muted font-label-md text-label-md">
+<span>Studio</span>
+<span class="material-symbols-outlined text-[14px]">chevron_right</span>
+<span class="text-on-surface">Billing &amp; Capacity</span>
+</div>
+<h1 class="font-display-lg text-display-lg text-brand-black tracking-tight">Plan &amp; Credits</h1>
+<p class="font-body-md text-body-md text-text-muted max-w-2xl">
+          Manage your subscription tier, scale attendee capacity, and recharge your Arkesel SMS carrier pool across MTN, Telecel, and AT networks.
+        </p>
+</div>
+<!-- Quick Action Pill Group -->
+<div class="flex items-center gap-space-sm self-start md:self-auto">
+<button class="flex items-center gap-space-xs px-space-md py-space-sm rounded-full bg-surface hover:bg-surface-container text-brand-black font-label-md text-label-md transition-colors" id="quick-test-credits-btn" title="Dev Sandbox Helper" type="button">
+<span class="material-symbols-outlined text-[16px]">add_circle</span>
+<span>+100 Test Credits</span>
+</button>
+<a class="flex items-center gap-space-xs px-space-md py-space-sm rounded-full bg-brand-black text-canvas hover:bg-primary-container font-label-md text-label-md transition-all shadow-sm" href="#carrier-bundles">
+<span class="material-symbols-outlined text-[16px]">bolt</span>
+<span>Instant Top-Up</span>
+</a>
+</div>
+</div>
+<!-- Organiser Account Status Card -->
+<div class="w-full bg-surface rounded-lg p-space-md md:p-space-lg flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-space-md">
+<!-- Organiser Context -->
+<div class="flex items-center gap-space-md">
+<div class="w-12 h-12 rounded-full bg-surface-elevated flex items-center justify-center text-brand-black shadow-sm flex-shrink-0">
+<span class="material-symbols-outlined text-[24px]">verified_user</span>
+</div>
+<div class="flex flex-col min-w-0">
+<div class="flex items-center gap-space-xs flex-wrap">
+<span class="font-headline-sm text-headline-sm text-brand-black truncate">Josh</span>
+<span class="px-space-sm py-0.5 rounded-full bg-surface-container-high text-brand-black font-label-md text-label-md uppercase tracking-wider" id="active-plan-pill">Free Plan</span>
+</div>
+<span class="font-body-sm text-body-sm text-text-muted truncate">josh@techleaders.africa • Ghana Carrier Node</span>
+</div>
+</div>
+<!-- Live Metrics Cluster -->
+<div class="grid grid-cols-2 sm:grid-cols-3 gap-space-sm md:gap-space-md flex-1 max-w-xl">
+<!-- Metric 1: SMS Pool -->
+<div class="bg-surface-elevated rounded-DEFAULT p-space-sm md:p-space-md flex flex-col justify-between">
+<span class="font-caption text-caption text-text-muted uppercase">SMS Balance</span>
+<div class="flex items-baseline gap-1 mt-1">
+<span class="font-metric-num text-metric-num text-brand-black" id="live-sms-count">14</span>
+<span class="font-body-sm text-body-sm text-text-muted">credits</span>
+</div>
+<div class="mt-2 flex items-center gap-1">
+<span class="w-2 h-2 rounded-full bg-accent-alert inline-block animate-pulse"></span>
+<span class="font-caption text-caption text-accent-alert font-semibold">Low (&lt; 20 left)</span>
+</div>
+</div>
+<!-- Metric 2: Active Events Limit -->
+<div class="bg-surface-elevated rounded-DEFAULT p-space-sm md:p-space-md flex flex-col justify-between">
+<span class="font-caption text-caption text-text-muted uppercase">Active Events</span>
+<div class="flex items-baseline gap-1 mt-1">
+<span class="font-metric-num text-metric-num text-brand-black" id="live-event-quota">1/1</span>
+<span class="font-body-sm text-body-sm text-text-muted">cap</span>
+</div>
+<div class="w-full bg-surface-container-high h-1.5 rounded-full mt-2 overflow-hidden">
+<div class="bg-brand-black h-full rounded-full" id="live-event-bar" style="width: 100%;"></div>
+</div>
+</div>
+<!-- Metric 3: Headcount Cap -->
+<div class="bg-surface-elevated rounded-DEFAULT p-space-sm md:p-space-md col-span-2 sm:col-span-1 flex flex-col justify-between">
+<span class="font-caption text-caption text-text-muted uppercase">Max Attendees</span>
+<div class="flex items-baseline gap-1 mt-1">
+<span class="font-metric-num text-metric-num text-brand-black" id="live-attendee-cap">48</span>
+<span class="font-body-sm text-body-sm text-text-muted">/ 50 limit</span>
+</div>
+<span class="font-caption text-caption text-text-muted truncate mt-2">Summit '26: 96% full</span>
+</div>
+</div>
+</div>
+</div>
+<!-- SECTION: PLANS & LIMITS COMPARISON -->
+<section class="flex flex-col gap-space-md mb-space-xl">
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm">
+<div>
+<h2 class="font-headline-md text-headline-md text-brand-black tracking-tight">Subscription Tiers</h2>
+<p class="font-body-sm text-body-sm text-text-muted">Enforced at registration time via PostgreSQL schema triggers.</p>
+</div>
+<!-- Billing Toggle: Monthly vs Annual -->
+<div class="inline-flex items-center p-1 bg-surface rounded-full self-start sm:self-auto">
+<button class="px-space-md py-space-xs rounded-full font-label-md text-label-md bg-surface-elevated text-brand-black shadow-sm transition-all" id="toggle-monthly" type="button">Monthly</button>
+<button class="px-space-md py-space-xs rounded-full font-label-md text-label-md text-text-muted hover:text-brand-black transition-all flex items-center gap-1" id="toggle-annual" type="button">
+<span>Annual</span>
+<span class="px-1.5 py-0.2 rounded-full bg-surface-container-highest text-brand-black text-[10px] font-semibold">2 mos free</span>
+</button>
+</div>
+</div>
+<!-- Cards Grid: Free vs Pro Tier -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-space-md items-stretch">
+<!-- FREE TIER CARD -->
+<div class="bg-surface rounded-lg p-space-lg flex flex-col justify-between gap-space-lg relative">
+<div class="flex flex-col gap-space-md">
+<!-- Header Tag -->
+<div class="flex items-center justify-between">
+<span class="font-headline-sm text-headline-sm text-brand-black">Free Plan</span>
+<span class="px-space-sm py-space-xs rounded-full bg-surface-elevated text-brand-black font-label-md text-label-md shadow-sm">
+              Current Tier
+            </span>
+</div>
+<!-- Price Display -->
+<div class="flex flex-col">
+<div class="flex items-baseline gap-1">
+<span class="font-display-lg text-display-lg text-brand-black">$0</span>
+<span class="font-body-md text-body-md text-text-muted">/ month</span>
+</div>
+<span class="font-caption text-caption text-text-muted mt-0.5">Lifetime free for emerging independent community organizers</span>
+</div>
+<!-- Quota Meters -->
+<div class="flex flex-col gap-space-sm pt-space-xs">
+<!-- Quota Item 1 -->
+<div class="bg-surface-elevated rounded-DEFAULT p-space-sm flex flex-col gap-1">
+<div class="flex justify-between font-label-md text-label-md">
+<span class="text-on-surface">Active Events Limit</span>
+<span class="text-brand-black font-bold">1 / 1 (Maxed)</span>
+</div>
+<div class="w-full bg-surface-container-high h-1.5 rounded-full overflow-hidden">
+<div class="bg-brand-black h-full rounded-full" style="width: 100%;"></div>
+</div>
+<span class="font-caption text-caption text-text-muted">Cannot publish concurrent drafts</span>
+</div>
+<!-- Quota Item 2 -->
+<div class="bg-surface-elevated rounded-DEFAULT p-space-sm flex flex-col gap-1">
+<div class="flex justify-between font-label-md text-label-md">
+<span class="text-on-surface">Attendee Registration Gate</span>
+<span class="text-brand-black font-bold">48 / 50 (96%)</span>
+</div>
+<div class="w-full bg-surface-container-high h-1.5 rounded-full overflow-hidden">
+<div class="bg-accent-alert h-full rounded-full" style="width: 96%;"></div>
+</div>
+<span class="font-caption text-caption text-text-muted">2 slots remaining before public gate shuts</span>
+</div>
+</div>
+<!-- Feature Breakdown -->
+<div class="flex flex-col gap-space-xs pt-space-sm">
+<div class="flex items-center gap-space-sm text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-brand-black">check_circle</span>
+<span class="font-body-sm text-body-sm">20 starting Arkesel carrier SMS credits</span>
+</div>
+<div class="flex items-center gap-space-sm text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-brand-black">check_circle</span>
+<span class="font-body-sm text-body-sm">Standard QR ticket generation &amp; check-in app</span>
+</div>
+<div class="flex items-center gap-space-sm text-text-muted">
+<span class="material-symbols-outlined text-[18px]">lock</span>
+<span class="font-body-sm text-body-sm">Custom SMS/Email templates (system default only)</span>
+</div>
+<div class="flex items-center gap-space-sm text-text-muted">
+<span class="material-symbols-outlined text-[18px]">lock</span>
+<span class="font-body-sm text-body-sm">Attendee raw CSV exports locked</span>
+</div>
+<div class="flex items-center gap-space-sm text-text-muted">
+<span class="material-symbols-outlined text-[18px]">lock</span>
+<span class="font-body-sm text-body-sm">Post-event thank you: Email only (SMS disabled)</span>
+</div>
+<div class="flex items-center gap-space-sm text-text-muted">
+<span class="material-symbols-outlined text-[18px]">info</span>
+<span class="font-body-sm text-body-sm">Registration pages show "Powered by EventCore"</span>
+</div>
+</div>
+</div>
+<!-- Button State -->
+<button class="w-full py-space-sm px-space-md rounded-full bg-surface-container-high text-text-muted font-label-md text-label-md cursor-not-allowed text-center transition-all" disabled="">
+          Active Tier • Free Plan
+        </button>
+</div>
+<!-- PRO TIER CARD (HIGHLIGHTED) -->
+<div class="bg-surface-elevated rounded-lg p-space-lg flex flex-col justify-between gap-space-lg relative shadow-md">
+<!-- Floating Accent Pill -->
+<div class="flex flex-col gap-space-md">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-space-xs">
+<span class="font-headline-sm text-headline-sm text-brand-black">Pro Tier</span>
+<span class="material-symbols-outlined text-[20px] text-brand-black">stars</span>
+</div>
+<span class="px-space-sm py-space-xs rounded-full bg-brand-black text-canvas font-label-md text-label-md tracking-wider uppercase">
+              Unlimited Scale
+            </span>
+</div>
+<!-- Price Display Dynamic -->
+<div class="flex flex-col">
+<div class="flex items-baseline gap-1">
+<span class="font-display-lg text-display-lg text-brand-black" id="pro-price-val">$29</span>
+<span class="font-body-md text-body-md text-text-muted" id="pro-price-period">/ month</span>
+</div>
+<span class="font-caption text-caption text-text-muted mt-0.5" id="pro-price-note">Billed monthly • Cancel anytime with zero downtime</span>
+</div>
+<!-- Key Upgrades Visual Pill Bar -->
+<div class="grid grid-cols-2 gap-space-sm">
+<div class="p-space-sm rounded-DEFAULT bg-surface flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-[20px] text-brand-black">all_inclusive</span>
+<div class="flex flex-col">
+<span class="font-label-md text-label-md text-brand-black">Unlimited</span>
+<span class="font-caption text-caption text-text-muted">Concurrent Events</span>
+</div>
+</div>
+<div class="p-space-sm rounded-DEFAULT bg-surface flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-[20px] text-brand-black">group_add</span>
+<div class="flex flex-col">
+<span class="font-label-md text-label-md text-brand-black">No Attendee Cap</span>
+<span class="font-caption text-caption text-text-muted">Zero Gatekeeping</span>
+</div>
+</div>
+</div>
+<!-- Feature Breakdown -->
+<div class="flex flex-col gap-space-xs pt-space-xs">
+<div class="flex items-center gap-space-sm text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-brand-black">check_circle</span>
+<span class="font-body-sm text-body-sm"><strong>500 bonus SMS credits</strong> added to carrier balance monthly</span>
+</div>
+<div class="flex items-center gap-space-sm text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-brand-black">check_circle</span>
+<span class="font-body-sm text-body-sm">Custom alphanumeric Sender ID registration (11 chars)</span>
+</div>
+<div class="flex items-center gap-space-sm text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-brand-black">check_circle</span>
+<span class="font-body-sm text-body-sm">Fully customizable SMS &amp; Email templates with dynamic tokens</span>
+</div>
+<div class="flex items-center gap-space-sm text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-brand-black">check_circle</span>
+<span class="font-body-sm text-body-sm">Instant Attendee CSV &amp; Excel export with check-in timestamps</span>
+</div>
+<div class="flex items-center gap-space-sm text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-brand-black">check_circle</span>
+<span class="font-body-sm text-body-sm">Multi-channel thank-you broadcasts (simultaneous SMS + Resend Email)</span>
+</div>
+<div class="flex items-center gap-space-sm text-on-surface">
+<span class="material-symbols-outlined text-[18px] text-brand-black">check_circle</span>
+<span class="font-body-sm text-body-sm">100% white-label: zero EventCore badge on registration pages</span>
+</div>
+</div>
+</div>
+<!-- Upgrade CTA & Live Feedback -->
+<div class="flex flex-col gap-space-xs">
+<button class="w-full py-space-sm px-space-md rounded-full bg-brand-black hover:bg-primary-container text-canvas font-label-md text-label-md text-center transition-all shadow-md flex items-center justify-center gap-space-xs" id="upgrade-pro-btn" type="button">
+<span>Upgrade to Pro Tier</span>
+<span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</button>
+<p class="font-caption text-caption text-text-muted text-center">Instant unlock • Sandboxed schema enforcement</p>
+</div>
+</div>
+</div>
+</section>
+<!-- SECTION: SMS CREDIT BUNDLES & REAL-TIME TOP-UP -->
+<section class="flex flex-col gap-space-md mb-space-xl" id="carrier-bundles">
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-space-sm">
+<div>
+<div class="flex items-center gap-space-xs">
+<span class="w-2 h-2 rounded-full bg-brand-black"></span>
+<span class="font-label-md text-label-md text-text-muted uppercase tracking-wider">Arkesel Carrier Node v2</span>
+</div>
+<h2 class="font-headline-md text-headline-md text-brand-black tracking-tight">Direct Carrier SMS Bundles</h2>
+<p class="font-body-sm text-body-sm text-text-muted">High-priority Tier-1 route delivery across MTN Ghana, Telecel, and AT networks. Credits never expire and rollover automatically.</p>
+</div>
+<div class="flex items-center gap-space-sm text-text-muted font-body-sm text-body-sm">
+<span class="material-symbols-outlined text-[18px]">verified</span>
+<span>Standard GSM-7 (160 chars/part)</span>
+</div>
+</div>
+<!-- 3 Pre-configured Tier Cards -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-space-md">
+<!-- Pack 1: Starter -->
+<div class="bg-surface rounded-lg p-space-md md:p-space-lg flex flex-col justify-between gap-space-md hover:bg-surface-elevated transition-all">
+<div class="flex flex-col gap-space-sm">
+<div class="flex justify-between items-center">
+<span class="font-headline-sm text-headline-sm text-brand-black">Starter Pack</span>
+<span class="px-space-xs py-0.5 rounded-full bg-surface-container font-caption text-caption text-brand-black">250 SMS</span>
+</div>
+<div class="flex items-baseline gap-1">
+<span class="font-metric-num text-metric-num text-brand-black">GH₵ 50</span>
+<span class="font-caption text-caption text-text-muted">(~$3.80)</span>
+</div>
+<div class="flex items-center gap-space-xs text-text-muted font-label-md text-label-md">
+<span>GH₵ 0.20 per SMS</span>
+</div>
+<p class="font-body-sm text-body-sm text-text-muted">
+            Ideal for single workshops, boutique meetups, or quick RSVPs.
+          </p>
+</div>
+<button class="w-full py-space-sm px-space-md rounded-full bg-surface-elevated hover:bg-brand-black hover:text-canvas text-brand-black font-label-md text-label-md text-center transition-all shadow-sm" onclick="topUpCredits(250, 'Starter Pack')" type="button">
+          Top Up 250 Credits
+        </button>
+</div>
+<!-- Pack 2: Growth (Best Value) -->
+<div class="bg-surface-elevated rounded-lg p-space-md md:p-space-lg flex flex-col justify-between gap-space-md shadow-md relative">
+<div class="flex flex-col gap-space-sm">
+<div class="flex justify-between items-center">
+<span class="font-headline-sm text-headline-sm text-brand-black">Growth Pack</span>
+<span class="px-space-sm py-0.5 rounded-full bg-brand-black text-canvas font-caption text-caption font-semibold">Best Value</span>
+</div>
+<div class="flex items-baseline gap-1">
+<span class="font-metric-num text-metric-num text-brand-black">GH₵ 175</span>
+<span class="font-caption text-caption text-text-muted">(~$13.20)</span>
+</div>
+<div class="flex items-center gap-space-xs text-on-surface font-label-md text-label-md">
+<span>GH₵ 0.175 per SMS</span>
+<span class="px-1.5 py-0.2 rounded-full bg-surface text-brand-black text-[10px]">12.5% savings</span>
+</div>
+<p class="font-body-sm text-body-sm text-text-muted">
+            Recommended for conferences, morning event reminders, and post-event survey blasts.
+          </p>
+</div>
+<button class="w-full py-space-sm px-space-md rounded-full bg-brand-black hover:bg-primary-container text-canvas font-label-md text-label-md text-center transition-all shadow-sm" onclick="topUpCredits(1000, 'Growth Pack')" type="button">
+          Top Up 1,000 Credits
+        </button>
+</div>
+<!-- Pack 3: Enterprise -->
+<div class="bg-surface rounded-lg p-space-md md:p-space-lg flex flex-col justify-between gap-space-md hover:bg-surface-elevated transition-all">
+<div class="flex flex-col gap-space-sm">
+<div class="flex justify-between items-center">
+<span class="font-headline-sm text-headline-sm text-brand-black">Summit Pack</span>
+<span class="px-space-xs py-0.5 rounded-full bg-surface-container font-caption text-caption text-brand-black">5,000 SMS</span>
+</div>
+<div class="flex items-baseline gap-1">
+<span class="font-metric-num text-metric-num text-brand-black">GH₵ 750</span>
+<span class="font-caption text-caption text-text-muted">(~$56.50)</span>
+</div>
+<div class="flex items-center gap-space-xs text-text-muted font-label-md text-label-md">
+<span>GH₵ 0.15 per SMS</span>
+<span class="px-1.5 py-0.2 rounded-full bg-surface-container text-brand-black text-[10px]">25% savings</span>
+</div>
+<p class="font-body-sm text-body-sm text-text-muted">
+            For multi-day national summits, automated turnstile entrance pings, and high-volume rosters.
+          </p>
+</div>
+<button class="w-full py-space-sm px-space-md rounded-full bg-surface-elevated hover:bg-brand-black hover:text-canvas text-brand-black font-label-md text-label-md text-center transition-all shadow-sm" onclick="topUpCredits(5000, 'Summit Pack')" type="button">
+          Top Up 5,000 Credits
+        </button>
+</div>
+</div>
+<!-- Custom Quantity Calculator Widget -->
+<div class="bg-surface rounded-lg p-space-md md:p-space-lg flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-space-md">
+<div class="flex flex-col gap-space-xs max-w-md">
+<div class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-[18px] text-brand-black">tune</span>
+<span class="font-headline-sm text-headline-sm text-brand-black">Custom Credit Quantity</span>
+</div>
+<p class="font-body-sm text-body-sm text-text-muted">
+          Need a specific amount? Drag the slider or adjust the input to calculate live Ghanaian Cedi billing totals.
+        </p>
+</div>
+<div class="flex flex-col sm:flex-row items-center gap-space-md flex-1 max-w-xl">
+<div class="w-full flex flex-col gap-2">
+<div class="flex justify-between items-center text-label-md font-label-md">
+<span class="text-text-muted">Quantity</span>
+<span class="text-brand-black font-bold" id="slider-credits-label">2,500 SMS Credits</span>
+</div>
+<input class="w-full h-2 bg-surface-container-high rounded-full appearance-none cursor-pointer accent-black" id="custom-slider" max="10000" min="100" step="100" type="range" value="2500"/>
+<div class="flex justify-between text-caption font-caption text-text-muted">
+<span>100</span>
+<span>5,000</span>
+<span>10,000</span>
+</div>
+</div>
+<div class="bg-surface-elevated rounded-DEFAULT p-space-sm md:p-space-md flex flex-col items-center justify-center min-w-[160px] text-center shadow-sm">
+<span class="font-caption text-caption text-text-muted uppercase">Estimated Total</span>
+<span class="font-metric-num text-metric-num text-brand-black" id="custom-calc-price">GH₵ 400</span>
+<button class="mt-2 w-full py-1.5 px-space-sm rounded-full bg-brand-black text-canvas font-label-md text-label-md hover:bg-primary-container transition-all" id="custom-topup-btn" type="button">
+            Checkout
+          </button>
+</div>
+</div>
+</div>
+</section>
+<!-- SECTION: TRANSPARENT TECHNICAL SPEC MATRIX -->
+<section class="flex flex-col gap-space-md mb-space-xl">
+<div>
+<h2 class="font-headline-md text-headline-md text-brand-black tracking-tight">Specification &amp; Schema Enforcements</h2>
+<p class="font-body-sm text-body-sm text-text-muted">Direct mapping of Section 6 of the Events App Creator Technical Specification.</p>
+</div>
+<div class="overflow-x-auto bg-surface rounded-lg p-space-md">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="text-text-muted font-label-md text-label-md">
+<th class="py-space-sm px-space-md">Feature Capability</th>
+<th class="py-space-sm px-space-md w-44">Free Tier</th>
+<th class="py-space-sm px-space-md w-44 text-brand-black font-bold">Pro Tier ($29/mo)</th>
+<th class="py-space-sm px-space-md hidden sm:table-cell">Enforcement Layer</th>
+</tr>
+</thead>
+<tbody class="font-body-sm text-body-sm text-on-surface">
+<!-- Row 1 -->
+<tr class="hover:bg-surface-container/40 transition-colors">
+<td class="py-space-sm px-space-md font-medium text-brand-black">Concurrent Active Events</td>
+<td class="py-space-sm px-space-md">1 Active Event Max</td>
+<td class="py-space-sm px-space-md text-brand-black font-semibold">Unlimited concurrent</td>
+<td class="py-space-sm px-space-md text-text-muted hidden sm:table-cell">Database Constraint: <code>plan_limits</code></td>
+</tr>
+<!-- Row 2 -->
+<tr class="hover:bg-surface-container/40 transition-colors">
+<td class="py-space-sm px-space-md font-medium text-brand-black">Attendee Headcount Limit</td>
+<td class="py-space-sm px-space-md">50 Registrations / event</td>
+<td class="py-space-sm px-space-md text-brand-black font-semibold">Unlimited registrations</td>
+<td class="py-space-sm px-space-md text-text-muted hidden sm:table-cell">Trigger: <code>check_attendee_cap()</code></td>
+</tr>
+<!-- Row 3 -->
+<tr class="hover:bg-surface-container/40 transition-colors">
+<td class="py-space-sm px-space-md font-medium text-brand-black">Monthly Arkesel SMS Grant</td>
+<td class="py-space-sm px-space-md">20 initial credits</td>
+<td class="py-space-sm px-space-md text-brand-black font-semibold">500 free credits / mo</td>
+<td class="py-space-sm px-space-md text-text-muted hidden sm:table-cell">PostgreSQL Cron: <code>monthly_sms_grant</code></td>
+</tr>
+<!-- Row 4 -->
+<tr class="hover:bg-surface-container/40 transition-colors">
+<td class="py-space-sm px-space-md font-medium text-brand-black">Alphanumeric Sender ID</td>
+<td class="py-space-sm px-space-md">Generic "EVENTCORE"</td>
+<td class="py-space-sm px-space-md text-brand-black font-semibold">Custom (11 Alphanumeric)</td>
+<td class="py-space-sm px-space-md text-text-muted hidden sm:table-cell">Arkesel Carrier Registry</td>
+</tr>
+<!-- Row 5 -->
+<tr class="hover:bg-surface-container/40 transition-colors">
+<td class="py-space-sm px-space-md font-medium text-brand-black">Dynamic Message Templates</td>
+<td class="py-space-sm px-space-md text-text-muted">System default only</td>
+<td class="py-space-sm px-space-md text-brand-black font-semibold">Full Custom Variables</td>
+<td class="py-space-sm px-space-md text-text-muted hidden sm:table-cell">Template Engine Validator</td>
+</tr>
+<!-- Row 6 -->
+<tr class="hover:bg-surface-container/40 transition-colors">
+<td class="py-space-sm px-space-md font-medium text-brand-black">Attendee CSV Data Export</td>
+<td class="py-space-sm px-space-md text-text-muted">Locked</td>
+<td class="py-space-sm px-space-md text-brand-black font-semibold">Full Unlocked</td>
+<td class="py-space-sm px-space-md text-text-muted hidden sm:table-cell">RLS: <code>can_export_attendees</code></td>
+</tr>
+<!-- Row 7 -->
+<tr class="hover:bg-surface-container/40 transition-colors">
+<td class="py-space-sm px-space-md font-medium text-brand-black">Multi-Channel Thank-You Blasts</td>
+<td class="py-space-sm px-space-md">Email only</td>
+<td class="py-space-sm px-space-md text-brand-black font-semibold">Dual SMS + Resend Email</td>
+<td class="py-space-sm px-space-md text-text-muted hidden sm:table-cell">Queue Worker Dispatcher</td>
+</tr>
+<!-- Row 8 -->
+<tr class="hover:bg-surface-container/40 transition-colors">
+<td class="py-space-sm px-space-md font-medium text-brand-black">Public Registration Page Branding</td>
+<td class="py-space-sm px-space-md">EventCore Footer Badge</td>
+<td class="py-space-sm px-space-md text-brand-black font-semibold">Zero Branding / White-label</td>
+<td class="py-space-sm px-space-md text-text-muted hidden sm:table-cell">SSR Template Renderer</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<!-- SECTION: DEVELOPER SANDBOX NOTICE & SIMULATOR (SECTION 6 SPEC) -->
+<div class="bg-surface rounded-lg p-space-md md:p-space-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-space-md">
+<div class="flex items-start gap-space-md">
+<div class="w-10 h-10 rounded-full bg-surface-elevated flex items-center justify-center text-brand-black shadow-sm flex-shrink-0 mt-0.5">
+<span class="material-symbols-outlined text-[20px]">code</span>
+</div>
+<div class="flex flex-col gap-0.5">
+<div class="flex items-center gap-space-xs">
+<span class="font-headline-sm text-headline-sm text-brand-black">Billing Engine Sandbox Mode</span>
+<span class="px-space-xs py-0.5 rounded-full bg-surface-elevated text-brand-black font-caption text-caption font-semibold">Section 6 Active</span>
+</div>
+<p class="font-body-sm text-body-sm text-text-muted max-w-2xl">
+          As specified, real monetary payment checkout is deferred for this milestone. Clicking upgrade or top-up triggers immediate client-state emulation, updating <code>organisers.plan</code> and <code>organisers.sms_credits</code> in real-time.
+        </p>
+</div>
+</div>
+<!-- Quick Reset Action -->
+<button class="px-space-md py-space-sm rounded-full bg-surface-elevated hover:bg-surface-container text-brand-black font-label-md text-label-md transition-all self-end md:self-auto flex items-center gap-space-xs flex-shrink-0 shadow-sm" id="reset-state-btn" type="button">
+<span class="material-symbols-outlined text-[16px]">restart_alt</span>
+<span>Reset to Default Free Tier</span>
+</button>
+</div>
+<!-- TOAST / STATUS FEEDBACK MODAL (CLIENT-SIDE) -->
+<div class="fixed bottom-6 right-6 md:right-10 z-50 transform translate-y-32 opacity-0 transition-all duration-300 pointer-events-none flex items-center gap-space-sm px-space-md py-space-sm rounded-full bg-brand-black text-canvas shadow-xl" id="toast-notification">
+<span class="material-symbols-outlined text-[18px]" id="toast-icon">check_circle</span>
+<span class="font-body-sm text-body-sm" id="toast-message">Balance updated successfully!</span>
+</div>
+</div>
+<script>
+  (function initBillingModule() {
+    // Current Simulated State
+    let currentPlan = 'free'; // 'free' | 'pro'
+    let currentSmsCredits = 14;
+    let isAnnual = false;
+
+    // Elements
+    const liveSmsCount = document.getElementById('live-sms-count');
+    const liveEventQuota = document.getElementById('live-event-quota');
+    const liveEventBar = document.getElementById('live-event-bar');
+    const liveAttendeeCap = document.getElementById('live-attendee-cap');
+    const activePlanPill = document.getElementById('active-plan-pill');
+    const upgradeProBtn = document.getElementById('upgrade-pro-btn');
+    const resetStateBtn = document.getElementById('reset-state-btn');
+    const quickTestCreditsBtn = document.getElementById('quick-test-credits-btn');
+
+    const toggleMonthly = document.getElementById('toggle-monthly');
+    const toggleAnnual = document.getElementById('toggle-annual');
+    const proPriceVal = document.getElementById('pro-price-val');
+    const proPricePeriod = document.getElementById('pro-price-period');
+    const proPriceNote = document.getElementById('pro-price-note');
+
+    const customSlider = document.getElementById('custom-slider');
+    const sliderCreditsLabel = document.getElementById('slider-credits-label');
+    const customCalcPrice = document.getElementById('custom-calc-price');
+    const customTopupBtn = document.getElementById('custom-topup-btn');
+
+    const toast = document.getElementById('toast-notification');
+    const toastMsg = document.getElementById('toast-message');
+    const toastIcon = document.getElementById('toast-icon');
+
+    function showToast(message, iconName = 'check_circle') {
+      if (!toast) return;
+      toastMsg.textContent = message;
+      toastIcon.textContent = iconName;
+      toast.classList.remove('translate-y-32', 'opacity-0', 'pointer-events-none');
+      toast.classList.add('translate-y-0', 'opacity-100');
+      setTimeout(() => {
+        toast.classList.add('translate-y-32', 'opacity-0', 'pointer-events-none');
+        toast.classList.remove('translate-y-0', 'opacity-100');
+      }, 3500);
+    }
+
+    function updateStateUI() {
+      // SMS display
+      liveSmsCount.textContent = currentSmsCredits.toLocaleString();
+      
+      // Pro Plan UI adjustments
+      if (currentPlan === 'pro') {
+        activePlanPill.textContent = 'PRO TIER ACTIVE';
+        activePlanPill.className = 'px-space-sm py-0.5 rounded-full bg-brand-black text-canvas font-label-md text-label-md uppercase tracking-wider';
+        liveEventQuota.textContent = '∞';
+        liveEventBar.style.width = '15%';
+        liveAttendeeCap.textContent = '∞';
+        upgradeProBtn.disabled = true;
+        upgradeProBtn.innerHTML = `<span>Pro Tier Active</span><span class="material-symbols-outlined text-[16px]">verified</span>`;
+        upgradeProBtn.className = 'w-full py-space-sm px-space-md rounded-full bg-surface text-text-muted font-label-md text-label-md text-center cursor-not-allowed flex items-center justify-center gap-space-xs';
+      } else {
+        activePlanPill.textContent = 'Free Plan';
+        activePlanPill.className = 'px-space-sm py-0.5 rounded-full bg-surface-container-high text-brand-black font-label-md text-label-md uppercase tracking-wider';
+        liveEventQuota.textContent = '1/1';
+        liveEventBar.style.width = '100%';
+        liveAttendeeCap.textContent = '48';
+        upgradeProBtn.disabled = false;
+        upgradeProBtn.innerHTML = `<span>Upgrade to Pro Tier</span><span class="material-symbols-outlined text-[16px]">arrow_forward</span>`;
+        upgradeProBtn.className = 'w-full py-space-sm px-space-md rounded-full bg-brand-black hover:bg-primary-container text-canvas font-label-md text-label-md text-center transition-all shadow-md flex items-center justify-center gap-space-xs';
+      }
+    }
+
+    // Handlers
+    window.topUpCredits = function(amount, packName) {
+      currentSmsCredits += amount;
+      updateStateUI();
+      showToast(`+${amount.toLocaleString()} SMS added via ${packName}!`);
+    };
+
+    if (upgradeProBtn) {
+      upgradeProBtn.addEventListener('click', () => {
+        if (currentPlan === 'pro') return;
+        currentPlan = 'pro';
+        currentSmsCredits += 500; // Monthly free grant bonus
+        updateStateUI();
+        showToast('Successfully upgraded to Pro Tier! +500 SMS granted.', 'stars');
+      });
+    }
+
+    if (resetStateBtn) {
+      resetStateBtn.addEventListener('click', () => {
+        currentPlan = 'free';
+        currentSmsCredits = 14;
+        updateStateUI();
+        showToast('Account reverted to Free Tier sandbox state.', 'refresh');
+      });
+    }
+
+    if (quickTestCreditsBtn) {
+      quickTestCreditsBtn.addEventListener('click', () => {
+        window.topUpCredits(100, 'Test Credits Simulator');
+      });
+    }
+
+    // Toggle Monthly / Annual Pricing
+    if (toggleMonthly && toggleAnnual) {
+      toggleMonthly.addEventListener('click', () => {
+        isAnnual = false;
+        toggleMonthly.className = 'px-space-md py-space-xs rounded-full font-label-md text-label-md bg-surface-elevated text-brand-black shadow-sm transition-all';
+        toggleAnnual.className = 'px-space-md py-space-xs rounded-full font-label-md text-label-md text-text-muted hover:text-brand-black transition-all flex items-center gap-1';
+        proPriceVal.textContent = '$29';
+        proPricePeriod.textContent = '/ month';
+        proPriceNote.textContent = 'Billed monthly • Cancel anytime with zero downtime';
+      });
+
+      toggleAnnual.addEventListener('click', () => {
+        isAnnual = true;
+        toggleAnnual.className = 'px-space-md py-space-xs rounded-full font-label-md text-label-md bg-surface-elevated text-brand-black shadow-sm transition-all flex items-center gap-1';
+        toggleMonthly.className = 'px-space-md py-space-xs rounded-full font-label-md text-label-md text-text-muted hover:text-brand-black transition-all';
+        proPriceVal.textContent = '$290';
+        proPricePeriod.textContent = '/ year';
+        proPriceNote.textContent = 'Includes 2 months free • Save $58 annually';
+      });
+    }
+
+    // Custom Calculator Slider Handler
+    function updateCalculator() {
+      if (!customSlider) return;
+      const count = parseInt(customSlider.value, 10);
+      sliderCreditsLabel.textContent = `${count.toLocaleString()} SMS Credits`;
+      
+      // Tiered bulk rate calculation:
+      // Base: 0.20, >= 1000: 0.175, >= 5000: 0.15
+      let rate = 0.20;
+      if (count >= 5000) {
+        rate = 0.15;
+      } else if (count >= 1000) {
+        rate = 0.175;
+      }
+      const totalGHS = Math.round(count * rate);
+      customCalcPrice.textContent = `GH₵ ${totalGHS.toLocaleString()}`;
+    }
+
+    if (customSlider) {
+      customSlider.addEventListener('input', updateCalculator);
+      updateCalculator();
+    }
+
+    if (customTopupBtn && customSlider) {
+      customTopupBtn.addEventListener('click', () => {
+        const count = parseInt(customSlider.value, 10);
+        window.topUpCredits(count, 'Custom Bundle');
+      });
+    }
+
+    // Initial sync
+    updateStateUI();
+  })();
+</script></main></div><nav class="md:hidden fixed bottom-margin-mobile left-margin-mobile right-margin-mobile z-50 bg-brand-black/95 backdrop-blur-lg rounded-full py-space-xs px-space-md flex items-center justify-around shadow-[0_12px_32px_-8px_rgba(11,11,11,0.2)]" data-active-classes="text-on-primary"><a class="p-space-sm text-secondary-fixed-dim hover:text-on-primary" data-path="overview" href="#"><span class="material-symbols-outlined text-[22px]">dashboard</span></a><a class="p-space-sm text-secondary-fixed-dim hover:text-on-primary" data-path="events" href="#"><span class="material-symbols-outlined text-[22px]">calendar_today</span></a><a class="p-space-sm text-secondary-fixed-dim hover:text-on-primary" data-path="messages" href="#"><span class="material-symbols-outlined text-[22px]">chat_bubble</span></a><a class="p-space-sm text-secondary-fixed-dim hover:text-on-primary" data-path="upgrade-and-credits" href="#"><span class="material-symbols-outlined text-[22px]">credit_card</span></a><a class="p-space-sm text-secondary-fixed-dim hover:text-on-primary" data-path="settings" href="#"><span class="material-symbols-outlined text-[22px]">settings</span></a></nav></body></html>

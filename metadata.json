@@ -1,0 +1,6 @@
+{
+  "name": "Events App — Africa Tech & Creators",
+  "description": "Event registration, ticketing, Arkesel SMS pass delivery, and offline-first gate check-in built for African tech communities and creators.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
