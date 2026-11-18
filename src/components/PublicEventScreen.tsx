@@ -33,8 +33,11 @@ interface PublicEventScreenProps {
   initialFocus?: 'top' | 'register';
   isLoadingEvents?: boolean;
   isSignedIn?: boolean;
+  hasSetEvent?: boolean;
   onBackHome: () => void;
   onOpenStudio: () => void;
+  onNavigateSignUp?: () => void;
+  onCreateEvent?: () => void;
   onRegisterAttendee: (eventId: string, attendee: Attendee) => Promise<Attendee | void> | void;
   onOpenDisposableCamera?: (eventId: string, guestName?: string) => void;
   onOpenLegal?: (doc: 'terms' | 'privacy') => void;
@@ -93,8 +96,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   initialFocus = 'top',
   isLoadingEvents = false,
   isSignedIn = false,
+  hasSetEvent = false,
   onBackHome,
   onOpenStudio,
+  onNavigateSignUp,
+  onCreateEvent,
   onRegisterAttendee,
   onOpenDisposableCamera,
   onOpenLegal,
@@ -203,6 +209,14 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEvent || submitting) return;
+    if (!isSignedIn || !hasSetEvent) {
+      setDuplicateError(
+        !isSignedIn
+          ? 'Please sign up first to unlock Check-In Registration.'
+          : 'Please create or set an event first to enable Check-In Registration.'
+      );
+      return;
+    }
     if (!name.trim()) {
       setDuplicateError('Please enter your full name to register.');
       return;
@@ -315,6 +329,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   }
 
   const spotsRemaining = Math.max(0, selectedEvent.capacity - selectedEvent.registered);
+  const canCheckInRegister = Boolean(isSignedIn && hasSetEvent);
   const isQrPassPublished = selectedEvent.qrPassPublished !== false;
   const occupancyPct = Math.min(
     100,
@@ -673,7 +688,40 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 id="register-section"
                 className="scroll-mt-24 bg-white rounded-[32px] p-6 shadow-md space-y-5"
               >
-                {!isQrPassPublished ? (
+                {!canCheckInRegister ? (
+                  <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-3 text-center">
+                    <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <h3 className="font-display text-lg font-bold text-[#0B0B0B] tracking-tight">
+                      {!isSignedIn
+                        ? 'Sign Up Required for Check-In Registration'
+                        : 'Set Up an Event to Enable Check-In Registration'}
+                    </h3>
+                    <p className="text-xs text-[#71717A] leading-relaxed max-w-md mx-auto">
+                      {!isSignedIn
+                        ? 'Check-in registration is only available after signing up and setting up an event.'
+                        : 'You are signed in, but no event has been set yet. Create your first event to unlock check-in registration.'}
+                    </p>
+                    <div className="pt-1 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!isSignedIn && onNavigateSignUp) {
+                            onNavigateSignUp();
+                          } else if (isSignedIn && onCreateEvent) {
+                            onCreateEvent();
+                          } else {
+                            onOpenStudio();
+                          }
+                        }}
+                        className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold transition-colors"
+                      >
+                        {!isSignedIn ? 'Sign Up to Unlock' : 'Create & Set Event'}
+                      </button>
+                    </div>
+                  </div>
+                ) : !isQrPassPublished ? (
                   <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2.5 text-center">
                     <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
                       <ShieldCheck className="w-5 h-5" />

@@ -1047,8 +1047,14 @@ export default function App() {
   const effectiveRole: AppRole =
     profile.appRole ??
     (profile.email?.toLowerCase() === creatorEmail.toLowerCase() ? 'creator' : 'organizer');
+  const hasSetEvent = isSignedIn && safeEvents.length > 0;
   const unresolvedCount = safeAlerts.filter((a) => !a.resolved).length;
-  const landingEvents = safePublicEvents.length > 0 ? safePublicEvents : safeEvents;
+  const landingEvents =
+    isSignedIn && safeEvents.length > 0
+      ? safeEvents
+      : safePublicEvents.length > 0
+        ? safePublicEvents
+        : safeEvents;
   const featuredEvent = landingEvents[0] ?? INITIAL_EVENTS[0];
 
   const sessionTimeoutModal =
@@ -1144,6 +1150,7 @@ export default function App() {
           allEvents={landingEvents.length > 0 ? landingEvents : [featuredEvent]}
           recentAttendees={safeAttendees}
           isSignedIn={isSignedIn}
+          hasSetEvent={hasSetEvent}
           onNavigateSignIn={(email) => {
             setPendingTarget(null);
             setSessionTimeoutNotice(null);
@@ -1162,6 +1169,26 @@ export default function App() {
           }}
           onCreateEvent={openCreateWizard}
           onNavigateDemoEvent={(eventId, focusSection = 'top') => {
+            if (focusSection === 'register') {
+              if (!isSignedIn) {
+                setPendingTarget({
+                  route: 'studio',
+                  screen: 'events',
+                  subScreen: 'create-event',
+                  label: 'Check-In Registration',
+                });
+                setSessionTimeoutNotice(null);
+                setRoute('signup');
+                syncBrowserPath('/signup');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                return;
+              }
+              if (!hasSetEvent) {
+                setApiBannerError('Set up an event first to unlock Check-In Registration.');
+                openCreateWizard();
+                return;
+              }
+            }
             setPublicPreviewEventId(eventId || featuredEvent.id);
             setPublicPreviewFocus(focusSection);
             setRoute('demo-event');
@@ -1304,12 +1331,19 @@ export default function App() {
     return (
       <>
         <PublicEventScreen
-          events={safePublicEvents.length > 0 ? safePublicEvents : safeEvents}
+          events={
+            isSignedIn && safeEvents.length > 0
+              ? safeEvents
+              : safePublicEvents.length > 0
+                ? safePublicEvents
+                : safeEvents
+          }
           attendees={safeAttendees}
           initialEventId={publicPreviewEventId}
           initialFocus={publicPreviewFocus}
           isLoadingEvents={publicEventsLoading}
           isSignedIn={isSignedIn}
+          hasSetEvent={hasSetEvent}
           onBackHome={navigateHome}
           onOpenStudio={() =>
             requireSignedIn({
@@ -1318,6 +1352,19 @@ export default function App() {
               label: 'Creator Studio',
             })
           }
+          onNavigateSignUp={() => {
+            setPendingTarget({
+              route: 'studio',
+              screen: 'events',
+              subScreen: 'create-event',
+              label: 'Check-In Registration',
+            });
+            setSessionTimeoutNotice(null);
+            setRoute('signup');
+            syncBrowserPath('/signup');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onCreateEvent={openCreateWizard}
           onRegisterAttendee={handlePublicRegisterAttendee}
           onOpenDisposableCamera={(eventId, guestName) =>
             openPublicCamera(eventId, guestName, 'demo-event')

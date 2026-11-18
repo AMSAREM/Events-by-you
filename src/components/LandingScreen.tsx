@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Layers,
+  Lock,
   Mail,
   MapPin,
   MessageSquare,
@@ -34,6 +35,7 @@ interface LandingScreenProps {
   allEvents?: EventItem[];
   recentAttendees: Attendee[];
   isSignedIn: boolean;
+  hasSetEvent?: boolean;
   onNavigateSignIn: (prefillEmail?: string) => void;
   onNavigateSignUp: (prefillEmail?: string) => void;
   onCreateEvent?: () => void;
@@ -85,6 +87,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
   allEvents = [featuredEvent],
   recentAttendees,
   isSignedIn,
+  hasSetEvent = false,
   onNavigateSignIn,
   onNavigateSignUp,
   onCreateEvent,
@@ -130,6 +133,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
   }, [allEvents, finderCategory, finderCity, finderQuery]);
 
   const topMatchedEvent = matchingEvents[0] ?? featuredEvent;
+  const checkInRegistrationAvailable = isSignedIn && hasSetEvent;
 
   useEffect(() => {
     if (sliderPaused) return;
@@ -323,14 +327,36 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => onNavigateDemoEvent(topMatchedEvent.id, 'register')}
-                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/15 text-white hover:bg-white/25 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border border-white/20 backdrop-blur-md transition-all whitespace-nowrap shrink-0 cursor-pointer"
+                      disabled={!checkInRegistrationAvailable}
+                      aria-disabled={!checkInRegistrationAvailable}
+                      title={
+                        !isSignedIn
+                          ? 'Sign up and set an event first to enable Check-In Registration'
+                          : !hasSetEvent
+                            ? 'Create or set an event first to enable Check-In Registration'
+                            : 'Open Check-In Registration'
+                      }
+                      onClick={() => {
+                        if (!checkInRegistrationAvailable) return;
+                        onNavigateDemoEvent(topMatchedEvent.id, 'register');
+                      }}
+                      className={`w-full sm:w-auto inline-flex items-center justify-center gap-2 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border backdrop-blur-md transition-all whitespace-nowrap shrink-0 ${
+                        checkInRegistrationAvailable
+                          ? 'bg-white/15 text-white hover:bg-white/25 border-white/20 cursor-pointer'
+                          : 'bg-white/5 text-white/45 border-white/10 cursor-not-allowed'
+                      }`}
                     >
-                      <UserPlus className="w-4 h-4" />
+                      {checkInRegistrationAvailable ? (
+                        <UserPlus className="w-4 h-4" />
+                      ) : (
+                        <Lock className="w-3.5 h-3.5" />
+                      )}
                       <span>
-                        {topMatchedEvent.qrPassPublished === false
-                          ? 'Check-In Registration (Pending)'
-                          : 'Check-In Registration'}
+                        {!checkInRegistrationAvailable
+                          ? 'Check-In Registration'
+                          : topMatchedEvent.qrPassPublished === false
+                            ? 'Check-In Registration (Pending)'
+                            : 'Check-In Registration'}
                       </span>
                     </button>
                     {onOpenDisposableCamera && (
