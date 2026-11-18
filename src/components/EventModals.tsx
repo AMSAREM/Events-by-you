@@ -39,6 +39,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const [capacity, setCapacity] = useState(250);
   const [ticketPrice, setTicketPrice] = useState(0);
   const [status, setStatus] = useState<EventStatus>('upcoming');
+  const [publishQrPass, setPublishQrPass] = useState(true);
   const [artwork, setArtwork] = useState<ArtworkVariant>('architecture');
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -79,6 +80,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       revenue: status === 'draft' ? 0 : initialReg * (Number(ticketPrice) || 0),
       organizer: organizerName,
       artwork,
+      qrPassPublished: status === 'draft' ? false : publishQrPass,
     };
     onCreate(newEvent);
     onClose();
@@ -271,6 +273,29 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
             </div>
           </div>
 
+          <div className="p-3.5 rounded-2xl bg-[#F5F5F7] flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold text-[#0B0B0B]">
+                Publish Check-In QR Pass (Creator Only)
+              </p>
+              <p className="text-[11px] text-[#71717A] mt-0.5">
+                {status === 'draft'
+                  ? 'Draft productions keep check-in QR passes unpublished until launched.'
+                  : 'Enable guests and walk-in registrations to receive active check-in QR passes.'}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0">
+              <input
+                type="checkbox"
+                disabled={status === 'draft'}
+                checked={status !== 'draft' && publishQrPass}
+                onChange={(e) => setPublishQrPass(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-[#E5E5EA] peer-disabled:opacity-50 rounded-full peer peer-checked:bg-[#0B0B0B] after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+            </label>
+          </div>
+
           <div className="pt-3 flex items-center justify-end gap-3 border-t border-[#E5E5EA]">
             <button
               type="button"
@@ -296,6 +321,8 @@ interface EventDetailModalProps {
   event: EventItem;
   scheduleBlocks: ScheduleBlock[];
   capacityThreshold: number;
+  canPublishQrPass?: boolean;
+  onToggleQrPassPublished?: (eventId: string, published: boolean) => Promise<void> | void;
   onClose: () => void;
   onUpdateEvent: (updated: EventItem) => void;
   onDeleteEvent: (id: string) => void;
@@ -306,6 +333,8 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   event,
   scheduleBlocks,
   capacityThreshold,
+  canPublishQrPass = true,
+  onToggleQrPassPublished,
   onClose,
   onUpdateEvent,
   onDeleteEvent,
@@ -422,6 +451,32 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
                   {st}
                 </button>
               ))}
+            </div>
+            <div className="mt-3 pt-3 border-t border-[#E5E5EA] flex items-center justify-between gap-2">
+              <div>
+                <p className="text-[11px] font-semibold text-[#0B0B0B]">Check-In QR Pass</p>
+                <p className="text-[10px] text-[#71717A]">
+                  {event.qrPassPublished !== false
+                    ? 'Published by event creator'
+                    : 'Unpublished · creator action required'}
+                </p>
+              </div>
+              {canPublishQrPass && onToggleQrPassPublished && (
+                <button
+                  type="button"
+                  disabled={event.status === 'draft'}
+                  onClick={() =>
+                    void onToggleQrPassPublished(event.id, event.qrPassPublished === false)
+                  }
+                  className={`px-3 py-1.5 rounded-full text-[11px] font-semibold transition-colors disabled:opacity-40 whitespace-nowrap ${
+                    event.qrPassPublished !== false
+                      ? 'bg-white border border-[#E5E5EA] text-[#0B0B0B] hover:border-[#0B0B0B]'
+                      : 'bg-[#0B0B0B] text-white hover:bg-zinc-800'
+                  }`}
+                >
+                  {event.qrPassPublished !== false ? 'Unpublish QR' : 'Publish QR Pass'}
+                </button>
+              )}
             </div>
           </div>
 

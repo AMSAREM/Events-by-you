@@ -77,11 +77,16 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
     setTimeout(() => setToastMsg(null), 2400);
   };
 
+  const isEventCreator = profile.appRole !== 'gate_staff';
+
   const eventMap = useMemo(() => {
     const map = new Map<string, EventItem>();
     events.forEach((e) => map.set(e.id, e));
     return map;
   }, [events]);
+
+  const selectedWalkInEvent = eventMap.get(walkInEventId || events[0]?.id || '');
+  const walkInQrPublished = selectedWalkInEvent ? selectedWalkInEvent.qrPassPublished !== false : false;
 
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -252,17 +257,23 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
               </button>
             </form>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              if (eventFilter !== 'all') setWalkInEventId(eventFilter);
-              setWalkInOpen(true);
-            }}
-            className="h-10 px-4 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0"
-          >
-            <UserPlus className="w-3.5 h-3.5" />
-            Check-In Registration
-          </button>
+          {isEventCreator ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (eventFilter !== 'all') setWalkInEventId(eventFilter);
+                setWalkInOpen(true);
+              }}
+              className="h-10 px-4 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              Check-In Registration
+            </button>
+          ) : (
+            <span className="h-10 px-4 rounded-full bg-white/10 text-zinc-200 text-xs font-semibold inline-flex items-center justify-center whitespace-nowrap shrink-0">
+              Gate Staff · Scan Only
+            </span>
+          )}
         </div>
       </section>
 
@@ -325,17 +336,19 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
             Export CSV
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              if (eventFilter !== 'all') setWalkInEventId(eventFilter);
-              setWalkInOpen(true);
-            }}
-            className="px-4 py-2.5 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Walk-In Registration
-          </button>
+          {isEventCreator && (
+            <button
+              type="button"
+              onClick={() => {
+                if (eventFilter !== 'all') setWalkInEventId(eventFilter);
+                setWalkInOpen(true);
+              }}
+              className="px-4 py-2.5 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Walk-In Registration
+            </button>
+          )}
 
           <button
             type="button"
@@ -456,8 +469,8 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
         </div>
       </div>
 
-      {/* Add Walk-In Modal */}
-      {walkInOpen && (
+      {/* Add Walk-In Modal (Creator Only) */}
+      {walkInOpen && isEventCreator && (
         <div
           className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4"
           role="dialog"
@@ -581,6 +594,12 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                 </span>
               </label>
 
+              {!walkInQrPublished && (
+                <div className="p-3 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] text-[11px] text-[#0B0B0B]">
+                  Check-in QR passes have not been published for this event yet. Publish the Check-In QR Pass in the Event Workspace first.
+                </div>
+              )}
+
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -591,7 +610,8 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
+                  disabled={!walkInQrPublished}
+                  className="px-5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Issue Pass
                 </button>

@@ -27,6 +27,7 @@ interface SignUpScreenProps {
   onBackHome: () => void;
   onGoSignIn: () => void;
   onNavigateDemoEvent: () => void;
+  onOpenLegal?: (doc: 'terms' | 'privacy') => void;
   onRequireOtp: (email: string, otpType: 'signup' | 'email') => void;
   onAuthenticated: (session: StoredAuthSession, profile: OrganizerProfile) => void;
 }
@@ -40,6 +41,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
   onBackHome,
   onGoSignIn,
   onNavigateDemoEvent,
+  onOpenLegal,
   onRequireOtp,
   onAuthenticated,
 }) => {
@@ -156,10 +158,10 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
   };
 
   return (
-    <div className="bg-[#F5F5F7] text-[#1A1C1D] min-h-screen flex flex-col justify-between selection:bg-[#0B0B0B] selection:text-white">
+    <div className="bg-[#F5F5F7] text-[#1A1C1D] min-h-dvh w-full max-w-full flex flex-col justify-between overflow-x-clip selection:bg-[#0B0B0B] selection:text-white">
       {/* Header */}
-      <header className="fixed top-0 w-full z-50 bg-[#F5F5F7]/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
-        <div className="h-16 max-w-7xl mx-auto px-6 lg:px-12 flex items-center justify-between">
+      <header className="fixed top-0 inset-x-0 w-full z-50 bg-[#F5F5F7]/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] pt-[env(safe-area-inset-top)]">
+        <div className="h-16 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3">
           <button
             type="button"
             onClick={onBackHome}
@@ -205,18 +207,18 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
         </div>
       </header>
 
-      <main className="w-full pt-16 bg-[#F5F5F7] flex-1 flex flex-col justify-center items-center px-4">
-        <div className="flex flex-col w-full max-w-7xl mx-auto px-2 sm:px-6 lg:px-8 py-8 lg:py-12">
+      <main className="w-full pt-16 bg-[#F5F5F7] flex-1 flex flex-col justify-center px-4 sm:px-6 lg:px-8">
+        <div className="flex flex-col w-full max-w-2xl lg:max-w-6xl mx-auto py-5 sm:py-7 lg:py-8">
           {/* Top Utility Context Bar */}
-          <div className="w-full flex items-center justify-between pb-6 mb-8 border-b border-[#E5E5EA]">
-            <div className="flex items-center gap-2">
-              <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+          <div className="w-full flex flex-wrap items-center justify-between gap-2 pb-4 mb-6 border-b border-[#E5E5EA]">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
               <span className="text-xs font-semibold text-[#444748] tracking-wide">
                 DIRECT CARRIER ROUTES (MTN · TELECEL · AT):{' '}
                 <span className="text-[#0B0B0B] font-bold">100% OPERATIONAL</span>
               </span>
             </div>
-            <div className="hidden sm:flex items-center gap-3">
+            <div className="hidden sm:flex items-center gap-3 shrink-0">
               <span className="text-[11px] text-[#71717A]">Already hosting with us?</span>
               <button
                 type="button"
@@ -229,9 +231,9 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
           </div>
 
           {/* Primary Split-Card Container */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-6 items-start">
             {/* Left Column: Main Sign-Up Form (7 cols) */}
-            <div className="lg:col-span-7 bg-white rounded-3xl p-6 sm:p-10 shadow-sm flex flex-col justify-between">
+            <div className="lg:col-span-7 bg-white rounded-3xl p-5 sm:p-7 lg:p-8 shadow-sm flex flex-col justify-between min-w-0">
               <div>
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#F5F5F7] text-[#1A1C1D] text-xs font-semibold mb-5">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#0B0B0B]" />
@@ -440,10 +442,27 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                       </span>
                       <span className="text-[11px] text-[#444748] leading-relaxed">
                         I agree to the{' '}
-                        <span className="text-[#0B0B0B] underline">Terms of Service</span>,{' '}
-                        <span className="text-[#0B0B0B] underline">
-                          Acceptable Broadcast Use Policy
-                        </span>
+                        <button
+                          type="button"
+                          onClick={(ev) => {
+                            ev.preventDefault();
+                            onOpenLegal?.('terms');
+                          }}
+                          className="text-[#0B0B0B] underline hover:opacity-75"
+                        >
+                          Terms &amp; Conditions
+                        </button>
+                        ,{' '}
+                        <button
+                          type="button"
+                          onClick={(ev) => {
+                            ev.preventDefault();
+                            onOpenLegal?.('privacy');
+                          }}
+                          className="text-[#0B0B0B] underline hover:opacity-75"
+                        >
+                          Privacy Policy
+                        </button>
                         , and NCA SMS delivery regulations regarding attendee consent.
                       </span>
                     </label>
@@ -656,13 +675,27 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
         </div>
       </main>
 
-      <footer className="w-full bg-[#F5F5F7] py-6">
-        <div className="max-w-7xl mx-auto px-6 lg:px-12 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-[#71717A]">
-          <span>© 2025 Events App Inc. All rights reserved.</span>
+      <footer className="w-full bg-[#F5F5F7] py-5 border-t border-[#E5E5EA]/60">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-[#71717A]">
+          <span>© 2026 Events App Inc. All rights reserved.</span>
           <div className="flex items-center gap-6">
-            <span>Privacy Policy</span>
-            <span>Terms of Service</span>
-            <span>Support</span>
+            <button
+              type="button"
+              onClick={() => onOpenLegal?.('privacy')}
+              className="hover:text-[#0B0B0B] transition-colors"
+            >
+              Privacy Policy
+            </button>
+            <button
+              type="button"
+              onClick={() => onOpenLegal?.('terms')}
+              className="hover:text-[#0B0B0B] transition-colors"
+            >
+              Terms &amp; Conditions
+            </button>
+            <a href="/sitemap.xml" className="hover:text-[#0B0B0B] transition-colors">
+              Sitemap
+            </a>
           </div>
         </div>
       </footer>

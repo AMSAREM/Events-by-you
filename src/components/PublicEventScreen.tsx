@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ExternalLink,
   Info,
+  Loader2,
   Mail,
   MapPin,
   MessageSquare,
@@ -29,11 +30,14 @@ interface PublicEventScreenProps {
   events: EventItem[];
   attendees: Attendee[];
   initialEventId?: string;
+  initialFocus?: 'top' | 'register';
+  isLoadingEvents?: boolean;
   isSignedIn?: boolean;
   onBackHome: () => void;
   onOpenStudio: () => void;
   onRegisterAttendee: (eventId: string, attendee: Attendee) => Promise<Attendee | void> | void;
   onOpenDisposableCamera?: (eventId: string, guestName?: string) => void;
+  onOpenLegal?: (doc: 'terms' | 'privacy') => void;
 }
 
 const FLYER_HERO_IMG =
@@ -86,11 +90,14 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   events,
   attendees,
   initialEventId,
+  initialFocus = 'top',
+  isLoadingEvents = false,
   isSignedIn = false,
   onBackHome,
   onOpenStudio,
   onRegisterAttendee,
   onOpenDisposableCamera,
+  onOpenLegal,
 }) => {
   const activeEvents = useMemo(
     () => events.filter((e) => e.status === 'live' || e.status === 'upcoming'),
@@ -100,12 +107,33 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const [selectedEventId, setSelectedEventId] = useState(
     initialEventId || activeEvents[0]?.id || events[0]?.id || ''
   );
+
+  useEffect(() => {
+    if (initialEventId && events.some((e) => e.id === initialEventId)) {
+      setSelectedEventId(initialEventId);
+    } else if (!events.some((e) => e.id === selectedEventId)) {
+      setSelectedEventId(activeEvents[0]?.id || events[0]?.id || '');
+    }
+  }, [initialEventId, events, activeEvents, selectedEventId]);
+
   const selectedEvent =
     events.find((e) => e.id === selectedEventId) ?? activeEvents[0] ?? events[0];
 
+  useEffect(() => {
+    if (initialFocus === 'register' && selectedEvent) {
+      const timer = window.setTimeout(() => {
+        const el = document.getElementById('register-section');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 60);
+      return () => window.clearTimeout(timer);
+    }
+  }, [initialFocus, selectedEvent]);
+
   const [name, setName] = useState('');
   const [countryPrefix, setCountryPrefix] = useState('+233');
-  const [phoneInput, setPhoneInput] = useState('024 123 4567');
+  const [phoneInput, setPhoneInput] = useState('');
   const [email, setEmail] = useState('');
   const [issuedPass, setIssuedPass] = useState<Attendee | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
@@ -116,6 +144,10 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const [heroFailed, setHeroFailed] = useState(false);
   const [mapFailed, setMapFailed] = useState(false);
   const [speakerFailed, setSpeakerFailed] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setHeroFailed(false);
+  }, [selectedEvent?.id, selectedEvent?.flyerUrl]);
 
   const normalizedPhone = useMemo(() => {
     const trimmed = phoneInput.trim();
@@ -170,7 +202,23 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedEvent || !name.trim() || !normalizedPhone || !email.trim() || submitting) return;
+    if (!selectedEvent || submitting) return;
+    if (!name.trim()) {
+      setDuplicateError('Please enter your full name to register.');
+      return;
+    }
+    if (!normalizedPhone || normalizedPhone.replace(/\D/g, '').length < 9) {
+      setDuplicateError('Please enter a valid mobile number for your SMS QR pass.');
+      return;
+    }
+    if (!email.trim()) {
+      setDuplicateError('Please enter your email address for pass confirmation.');
+      return;
+    }
+    if (selectedEvent.qrPassPublished === false) {
+      setDuplicateError('Check-in QR passes have not been published by the event creator yet.');
+      return;
+    }
 
     const cleanTarget = normalizedPhone.replace(/\s+/g, '');
     const alreadyExists = attendees.some(
@@ -187,12 +235,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
     setDuplicateError(null);
     setSubmitting(true);
-    const codePrefix = selectedEvent.title
-      .split(' ')
-      .map((w) => w[0])
-      .join('')
-      .slice(0, 3)
-      .toUpperCase();
+    const codePrefix =
+      selectedEvent.title
+        .split(/\s+/)
+        .map((w) => w.replace(/[^A-Za-z0-9]/g, '')[0] ?? '')
+        .join('')
+        .slice(0, 3)
+        .toUpperCase() || 'EVT';
     const randomNum = Math.floor(1000 + Math.random() * 8999);
 
     const newAttendee: Attendee = {
@@ -223,6 +272,14 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   };
 
   if (!selectedEvent) {
+    if (isLoadingEvents) {
+      return (
+        <div className="min-h-screen bg-[#F5F5F7] text-[#1A1C1D] flex flex-col items-center justify-center gap-3 px-4">
+          <Loader2 className="w-6 h-6 animate-spin text-[#0B0B0B]" />
+          <p className="text-xs font-medium text-[#71717A]">Loading live check-in registration...</p>
+        </div>
+      );
+    }
     return (
       <div className="min-h-screen bg-[#F5F5F7] text-[#1A1C1D] flex flex-col items-center justify-center px-4 text-center">
         <div className="max-w-md w-full bg-white rounded-[28px] p-8 shadow-sm space-y-4">
@@ -258,6 +315,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   }
 
   const spotsRemaining = Math.max(0, selectedEvent.capacity - selectedEvent.registered);
+  const isQrPassPublished = selectedEvent.qrPassPublished !== false;
   const occupancyPct = Math.min(
     100,
     Math.round((selectedEvent.registered / Math.max(1, selectedEvent.capacity)) * 100)
@@ -271,10 +329,10 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     .toUpperCase();
 
   return (
-    <div className="min-h-screen bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col selection:bg-[#0B0B0B] selection:text-white">
+    <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col overflow-x-clip selection:bg-[#0B0B0B] selection:text-white">
       {/* Sticky Top Header matching Mobile Stack Checkout */}
-      <header className="fixed top-0 w-full z-50 bg-[#F5F5F7]/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
-        <div className="h-16 max-w-2xl mx-auto px-3 sm:px-4 flex items-center justify-between gap-2">
+      <header className="fixed top-0 inset-x-0 w-full z-50 bg-[#F5F5F7]/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] pt-[env(safe-area-inset-top)]">
+        <div className="h-16 max-w-3xl mx-auto px-4 sm:px-6 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1 min-w-0">
             <button
               type="button"
@@ -338,8 +396,8 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 w-full pt-20 px-4 pb-10">
-        <div className="max-w-xl mx-auto flex flex-col space-y-6">
+      <main className="flex-1 w-full pt-20 px-4 sm:px-6 pb-10">
+        <div className="max-w-3xl mx-auto flex flex-col space-y-6">
           {shareToast && (
             <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold shadow-lg">
               Event link copied to clipboard!
@@ -378,7 +436,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 <div className="w-full h-80 relative flex flex-col justify-between p-5">
                   {!heroFailed && (
                     <img
-                      src={FLYER_HERO_IMG}
+                      src={selectedEvent.flyerUrl || FLYER_HERO_IMG}
                       alt={selectedEvent.title}
                       referrerPolicy="no-referrer"
                       onError={() => setHeroFailed(true)}
@@ -402,9 +460,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       }}
                       className="bg-white/95 hover:bg-white text-[#0B0B0B] text-[11px] font-semibold px-3 py-1.5 rounded-full shadow-sm transition-colors"
                     >
-                      {selectedEvent.ticketPrice === 0
-                        ? 'Claim Free Pass ↓'
-                        : `Get Pass ($${selectedEvent.ticketPrice}) ↓`}
+                      {!isQrPassPublished
+                        ? 'QR Pass Pending'
+                        : selectedEvent.ticketPrice === 0
+                          ? 'Claim Free Pass ↓'
+                          : `Get Pass ($${selectedEvent.ticketPrice}) ↓`}
                     </button>
                   </div>
 
@@ -611,8 +671,22 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               {/* Frictionless Registration Card */}
               <section
                 id="register-section"
-                className="bg-white rounded-[32px] p-6 shadow-md space-y-5"
+                className="scroll-mt-24 bg-white rounded-[32px] p-6 shadow-md space-y-5"
               >
+                {!isQrPassPublished ? (
+                  <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2.5 text-center">
+                    <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <h3 className="font-display text-lg font-bold text-[#0B0B0B] tracking-tight">
+                      Check-In QR Passes Pending Publication
+                    </h3>
+                    <p className="text-xs text-[#71717A] leading-relaxed max-w-md mx-auto">
+                      Only the event creator can publish check-in QR passes. Guest registration and QR pass delivery will open once the creator publishes check-in passes for this event.
+                    </p>
+                  </div>
+                ) : (
+                  <>
                 <div className="space-y-1">
                   <div className="flex items-center justify-between gap-2 mb-1">
                     <div className="inline-flex items-center gap-1 bg-[#F3F3F5] text-[#0B0B0B] text-[11px] font-medium px-2.5 py-0.5 rounded-full">
@@ -771,6 +845,8 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     <ArrowRight className="w-5 h-5" />
                   </button>
                 </form>
+                  </>
+                )}
               </section>
             </>
           ) : (
@@ -1168,13 +1244,31 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
           )}
 
           {/* Footer Attribution */}
-          <footer className="w-full py-4 flex flex-col items-center justify-center gap-1 text-center">
+          <footer className="w-full py-4 flex flex-col items-center justify-center gap-1.5 text-center">
             <span className="text-[11px] text-[#71717A] uppercase tracking-wider">
               Free Public Tier
             </span>
             <span className="text-[11px] text-[#71717A]">
               Powered by <strong className="text-[#0B0B0B] font-semibold">Events App</strong>
             </span>
+            {onOpenLegal && (
+              <div className="flex items-center gap-4 text-[11px] text-[#71717A] pt-1">
+                <button
+                  type="button"
+                  onClick={() => onOpenLegal('terms')}
+                  className="hover:text-[#0B0B0B] underline underline-offset-4 transition-colors"
+                >
+                  Terms &amp; Conditions
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenLegal('privacy')}
+                  className="hover:text-[#0B0B0B] underline underline-offset-4 transition-colors"
+                >
+                  Privacy Policy
+                </button>
+              </div>
+            )}
           </footer>
         </div>
       </main>

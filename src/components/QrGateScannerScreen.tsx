@@ -35,6 +35,7 @@ interface QrGateScannerScreenProps {
   initialCode?: string;
   onToggleCheckIn: (attendeeId: string) => void;
   onRegisterAttendee: (eventId: string, attendee: Attendee) => void;
+  onToggleQrPassPublished?: (eventId: string, published: boolean) => Promise<void> | void;
   onManageEvent: (event: EventItem) => void;
   onNavigateSettings: () => void;
   onResolveAlert: (id: string) => void;
@@ -71,6 +72,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   initialCode,
   onToggleCheckIn,
   onRegisterAttendee,
+  onToggleQrPassPublished,
   onManageEvent,
   onNavigateSettings,
   onResolveAlert,
@@ -94,6 +96,8 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
 
   const selectedEvent =
     events.find((e) => e.id === selectedEventId) ?? activePool[0] ?? events[0];
+  const isEventCreator = profile.appRole !== 'gate_staff';
+  const isQrPassPublished = selectedEvent ? selectedEvent.qrPassPublished !== false : false;
 
   const [codeInput, setCodeInput] = useState(initialCode ?? '');
   const [searchQuery, setSearchQuery] = useState('');
@@ -448,13 +452,36 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => onManageEvent(selectedEvent)}
-              className="px-4 py-2.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
-            >
-              Open Event Workspace
-            </button>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span
+                className={`px-3 py-1.5 rounded-full text-[11px] font-semibold border whitespace-nowrap ${
+                  isQrPassPublished
+                    ? 'bg-white border-[#E5E5EA] text-[#0B0B0B]'
+                    : 'bg-[#0B0B0B] border-[#0B0B0B] text-white'
+                }`}
+              >
+                {isQrPassPublished ? 'QR Pass Published' : 'QR Pass Unpublished'}
+              </span>
+              {isEventCreator && onToggleQrPassPublished && (
+                <button
+                  type="button"
+                  disabled={selectedEvent.status === 'draft'}
+                  onClick={() =>
+                    void onToggleQrPassPublished(selectedEvent.id, !isQrPassPublished)
+                  }
+                  className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0 disabled:opacity-40"
+                >
+                  {isQrPassPublished ? 'Unpublish QR' : 'Publish QR Pass'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => onManageEvent(selectedEvent)}
+                className="px-4 py-2.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
+              >
+                Open Event Workspace
+              </button>
+            </div>
           </div>
         </section>
       )}
@@ -659,108 +686,151 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               </div>
             </div>
 
-            <form onSubmit={handleWalkInSubmit} className="space-y-3.5">
-              <div>
-                <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
-                  Guest Full Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={walkInName}
-                  onChange={(e) => setWalkInName(e.target.value)}
-                  placeholder="e.g. Efua Mensah"
-                  className="w-full h-10 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-sm text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
-                />
+            {!isEventCreator ? (
+              <div className="p-5 rounded-2xl bg-white border border-[#E5E5EA] space-y-2">
+                <p className="text-xs font-bold text-[#0B0B0B]">
+                  Creator-Only QR Pass Publishing
+                </p>
+                <p className="text-xs text-[#71717A] leading-relaxed">
+                  Only the event creator can publish or issue check-in QR passes. Gate staff can scan and verify existing passes in the scanner panel.
+                </p>
               </div>
+            ) : (
+              <>
+                {selectedEvent && !isQrPassPublished && (
+                  <div className="mb-4 p-4 rounded-2xl bg-white border border-[#E5E5EA] space-y-2.5">
+                    <p className="text-xs font-semibold text-[#0B0B0B]">
+                      Check-In QR Passes Unpublished
+                    </p>
+                    <p className="text-[11px] text-[#71717A] leading-relaxed">
+                      {selectedEvent.status === 'draft'
+                        ? 'Launch this draft event first before publishing check-in QR passes.'
+                        : 'Publish the Check-In QR Pass as the event creator before issuing walk-in QR passes.'}
+                    </p>
+                    {onToggleQrPassPublished && (
+                      <button
+                        type="button"
+                        disabled={selectedEvent.status === 'draft'}
+                        onClick={() => void onToggleQrPassPublished(selectedEvent.id, true)}
+                        className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors disabled:opacity-40"
+                      >
+                        Publish Check-In QR Pass
+                      </button>
+                    )}
+                  </div>
+                )}
 
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-semibold text-[#0B0B0B]">
-                    Mobile Number (SMS QR Delivery)
-                  </label>
-                  {walkInPhone.trim() && (
-                    <span className="text-[11px] font-mono text-emerald-700 font-semibold tabular-nums">
-                      {normalizePhoneE164(walkInPhone)}
+                <form onSubmit={handleWalkInSubmit} className="space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
+                      Guest Full Name
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      disabled={!isQrPassPublished}
+                      value={walkInName}
+                      onChange={(e) => setWalkInName(e.target.value)}
+                      placeholder="e.g. Efua Mensah"
+                      className="w-full h-10 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-sm text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none disabled:opacity-50"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-[#0B0B0B]">
+                        Mobile Number (SMS QR Delivery)
+                      </label>
+                      {walkInPhone.trim() && (
+                        <span className="text-[11px] font-mono text-emerald-700 font-semibold tabular-nums">
+                          {normalizePhoneE164(walkInPhone)}
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      type="tel"
+                      required
+                      disabled={!isQrPassPublished}
+                      value={walkInPhone}
+                      onChange={(e) => setWalkInPhone(e.target.value)}
+                      placeholder="024 555 0199"
+                      className="w-full h-10 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-sm font-mono text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none disabled:opacity-50"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
+                        Email (Optional)
+                      </label>
+                      <input
+                        type="email"
+                        disabled={!isQrPassPublished}
+                        value={walkInEmail}
+                        onChange={(e) => setWalkInEmail(e.target.value)}
+                        placeholder="guest@domain.com"
+                        className="w-full h-10 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none disabled:opacity-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
+                        Pass Tier
+                      </label>
+                      <select
+                        disabled={!isQrPassPublished}
+                        value={walkInTier}
+                        onChange={(e) => setWalkInTier(e.target.value as AttendeeTier)}
+                        className="w-full h-10 px-3 rounded-2xl bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none cursor-pointer disabled:opacity-50"
+                      >
+                        <option value="General">General</option>
+                        <option value="VIP">VIP / High Table</option>
+                        <option value="Speaker">Speaker / Officiant</option>
+                        <option value="Press">Press / Choir / Crew</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
+                      Group / Family / Organization
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!isQrPassPublished}
+                      value={walkInOrg}
+                      onChange={(e) => setWalkInOrg(e.target.value)}
+                      placeholder="e.g. Bride Family Table 4 / Accra Tech Hub"
+                      className="w-full h-10 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none disabled:opacity-50"
+                    />
+                  </div>
+
+                  <label className="flex items-center gap-2.5 pt-1 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      disabled={!isQrPassPublished}
+                      checked={walkInAutoCheckIn}
+                      onChange={(e) => setWalkInAutoCheckIn(e.target.checked)}
+                      className="accent-[#0B0B0B] w-4 h-4"
+                    />
+                    <span className="text-xs font-medium text-[#0B0B0B]">
+                      Check guest in immediately &amp; send Arkesel SMS pass
                     </span>
-                  )}
-                </div>
-                <input
-                  type="tel"
-                  required
-                  value={walkInPhone}
-                  onChange={(e) => setWalkInPhone(e.target.value)}
-                  placeholder="024 555 0199"
-                  className="w-full h-10 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-sm font-mono text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
-                />
-              </div>
+                  </label>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
-                    Email (Optional)
-                  </label>
-                  <input
-                    type="email"
-                    value={walkInEmail}
-                    onChange={(e) => setWalkInEmail(e.target.value)}
-                    placeholder="guest@domain.com"
-                    className="w-full h-10 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
-                    Pass Tier
-                  </label>
-                  <select
-                    value={walkInTier}
-                    onChange={(e) => setWalkInTier(e.target.value as AttendeeTier)}
-                    className="w-full h-10 px-3 rounded-2xl bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none cursor-pointer"
+                  <button
+                    type="submit"
+                    disabled={!isQrPassPublished}
+                    className="w-full h-11 rounded-full bg-[#0B0B0B] text-white text-xs font-bold hover:bg-zinc-800 transition-colors inline-flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    <option value="General">General</option>
-                    <option value="VIP">VIP / High Table</option>
-                    <option value="Speaker">Speaker / Officiant</option>
-                    <option value="Press">Press / Choir / Crew</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
-                  Group / Family / Organization
-                </label>
-                <input
-                  type="text"
-                  value={walkInOrg}
-                  onChange={(e) => setWalkInOrg(e.target.value)}
-                  placeholder="e.g. Bride Family Table 4 / Accra Tech Hub"
-                  className="w-full h-10 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
-                />
-              </div>
-
-              <label className="flex items-center gap-2.5 pt-1 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={walkInAutoCheckIn}
-                  onChange={(e) => setWalkInAutoCheckIn(e.target.checked)}
-                  className="accent-[#0B0B0B] w-4 h-4"
-                />
-                <span className="text-xs font-medium text-[#0B0B0B]">
-                  Check guest in immediately &amp; send Arkesel SMS pass
-                </span>
-              </label>
-
-              <button
-                type="submit"
-                className="w-full h-11 rounded-full bg-[#0B0B0B] text-white text-xs font-bold hover:bg-zinc-800 transition-colors inline-flex items-center justify-center gap-2"
-              >
-                <Sparkles className="w-4 h-4" />
-                <span>Register &amp; Issue QR Pass</span>
-              </button>
-            </form>
+                    <Sparkles className="w-4 h-4" />
+                    <span>Register &amp; Issue QR Pass</span>
+                  </button>
+                </form>
+              </>
+            )}
           </div>
 
-          {walkInSuccess && (
+          {walkInSuccess && isEventCreator && (
             <div className="mt-4 p-4 rounded-2xl bg-white border border-[#E5E5EA] flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-xs font-bold text-[#0B0B0B] flex items-center gap-1.5">

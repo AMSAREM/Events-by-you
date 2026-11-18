@@ -275,6 +275,11 @@ export function createMemoryRouter() {
       return res.status(201).json(result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Registration failed.';
+      if (msg.includes('QR_PASS_NOT_PUBLISHED:')) {
+        return res.status(403).json({
+          error: 'Check-in QR passes have not been published by the event creator yet.',
+        });
+      }
       if (msg.includes('DUPLICATE_PHONE:')) {
         return res.status(409).json({
           error: `Duplicate shield: ${msg.split('DUPLICATE_PHONE:')[1]}`,
@@ -331,7 +336,19 @@ export function createMemoryRouter() {
       const event = memoryStore.updateEvent(req.user!.id, req.params.id, req.body as EventItem);
       return res.json({ event });
     } catch (err) {
-      return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to update event.' });
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to update event.' });
+    }
+  });
+
+  router.patch('/studio/events/:id/qr-pass', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    try {
+      const published = Boolean((req.body as { published?: boolean })?.published);
+      const event = memoryStore.publishQrPass(req.user!.id, req.params.id, published);
+      return res.json({ event });
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to update QR pass state.' });
     }
   });
 
@@ -344,7 +361,7 @@ export function createMemoryRouter() {
     }
   });
 
-  router.post('/studio/events/:eventId/attendees', requireMemoryAuth, requireRole('creator', 'organizer', 'gate_staff'), (req: AuthedRequest, res) => {
+  router.post('/studio/events/:eventId/attendees', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
     try {
       const result = memoryStore.registerStudioAttendee(
         req.user!.id,

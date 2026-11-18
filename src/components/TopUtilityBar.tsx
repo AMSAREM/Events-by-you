@@ -90,7 +90,7 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
         </button>
 
         {alertsOpen && (
-          <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-3xl border border-[#E5E5EA] p-4 z-50 soft-popover-shadow">
+          <div className="absolute right-0 mt-2 w-[min(22rem,calc(100vw-1.5rem))] sm:w-96 bg-white rounded-3xl border border-[#E5E5EA] p-4 z-50 soft-popover-shadow">
             <div className="flex items-center justify-between pb-3 border-b border-[#E5E5EA]">
               <div>
                 <h3 className="text-sm font-semibold text-[#0B0B0B]">Operational Alerts</h3>

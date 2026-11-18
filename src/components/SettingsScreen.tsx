@@ -716,15 +716,15 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-semibold text-[#0B0B0B]">Current Session</span>
                   <span className="text-[11px] font-semibold px-2.5 py-0.5 bg-[#EEEEF0] rounded-full text-[#0B0B0B]">
-                    Active Now
+                    30m Idle Timeout Active
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
                   <Laptop className="w-5 h-5 text-[#71717A] shrink-0" />
                   <div className="text-xs">
-                    <div className="font-semibold text-[#0B0B0B]">Chrome 122 • macOS Sonoma</div>
+                    <div className="font-semibold text-[#0B0B0B]">Authenticated Browser Session</div>
                     <div className="text-[#71717A]">
-                      Accra, Greater Accra Region • 102.176.94.12
+                      Automatically locks and signs out after 30 minutes of inactivity (with a 60-second warning).
                     </div>
                   </div>
                 </div>

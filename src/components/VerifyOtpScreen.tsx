@@ -24,6 +24,7 @@ interface VerifyOtpScreenProps {
   onBackSignIn: () => void;
   onVerified: (session: StoredAuthSession, profile: OrganizerProfile) => void;
   onNavigateDemoEvent: () => void;
+  onOpenLegal?: (doc: 'terms' | 'privacy') => void;
 }
 
 export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
@@ -33,6 +34,7 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
   onBackSignIn,
   onVerified,
   onNavigateDemoEvent,
+  onOpenLegal,
 }) => {
   const [digits, setDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [secondsLeft, setSecondsLeft] = useState(42);
@@ -115,10 +117,10 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
   const formattedTime = `00:${secondsLeft < 10 ? `0${secondsLeft}` : secondsLeft}`;
 
   return (
-    <div className="bg-[#F5F5F7] text-[#1A1C1D] min-h-screen flex flex-col justify-between selection:bg-[#0B0B0B] selection:text-white">
+    <div className="bg-[#F5F5F7] text-[#1A1C1D] min-h-dvh w-full max-w-full flex flex-col justify-between overflow-x-clip selection:bg-[#0B0B0B] selection:text-white">
       {/* Header */}
-      <header className="fixed top-0 w-full z-50 bg-[#F5F5F7]/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
-        <div className="h-16 max-w-7xl mx-auto px-6 lg:px-12 flex items-center justify-between">
+      <header className="fixed top-0 inset-x-0 w-full z-50 bg-[#F5F5F7]/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] pt-[env(safe-area-inset-top)]">
+        <div className="h-16 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3">
           <button
             type="button"
             onClick={onBackHome}
@@ -155,23 +157,23 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
         </div>
       </header>
 
-      <main className="w-full pt-16 bg-[#F5F5F7] flex-1 flex flex-col justify-center items-center px-4">
-        <div className="flex flex-col w-full py-8 max-w-6xl mx-auto">
+      <main className="w-full pt-16 bg-[#F5F5F7] flex-1 flex flex-col justify-center px-4 sm:px-6 lg:px-8">
+        <div className="flex flex-col w-full py-5 sm:py-7 lg:py-8 max-w-2xl lg:max-w-6xl mx-auto">
           {/* System Carrier Status Sub-Banner */}
-          <div className="w-full mb-8 bg-[#F3F3F5] border border-[#E5E5EA] rounded-full px-5 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
-            <div className="flex items-center gap-2.5">
-              <span className="w-2 h-2 rounded-full bg-[#0B0B0B]" />
+          <div className="w-full mb-6 bg-[#F3F3F5] border border-[#E5E5EA] rounded-2xl sm:rounded-full px-4 sm:px-5 py-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 shadow-sm">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="w-2 h-2 rounded-full bg-[#0B0B0B] shrink-0" />
               <span className="text-xs font-semibold uppercase tracking-wider text-[#1A1C1D]">
                 DIRECT CARRIER ROUTES (MTN · TELECEL · AT): 100% OPERATIONAL
               </span>
-              <span className="hidden md:inline-block text-[11px] text-[#71717A] px-2.5 py-0.5 rounded-full bg-[#F5F5F7] tabular-nums">
+              <span className="hidden md:inline-block text-[11px] text-[#71717A] px-2.5 py-0.5 rounded-full bg-[#F5F5F7] tabular-nums shrink-0">
                 Tier-1 Gateway Latency: 29ms
               </span>
             </div>
             <button
               type="button"
               onClick={onBackSignIn}
-              className="inline-flex items-center gap-1 text-xs font-semibold text-[#1A1C1D] hover:text-[#71717A] transition-colors whitespace-nowrap"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-[#1A1C1D] hover:text-[#71717A] transition-colors whitespace-nowrap shrink-0"
             >
               <span>Back to Sign in</span>
               <ArrowRight className="w-4 h-4" />
@@ -179,11 +181,11 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
           </div>
 
           {/* Dual-Column Master Frame */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-6 items-start">
             {/* Left Column: Primary Verification Card */}
             <form
               onSubmit={handleVerify}
-              className="lg:col-span-7 bg-white rounded-3xl p-6 sm:p-10 shadow-sm flex flex-col justify-between"
+              className="lg:col-span-7 bg-white rounded-3xl p-5 sm:p-7 lg:p-8 shadow-sm flex flex-col justify-between min-w-0"
             >
               <div>
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#F5F5F7] text-[#0B0B0B] mb-6">
@@ -437,13 +439,27 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
         </div>
       </main>
 
-      <footer className="w-full bg-[#F5F5F7] py-6">
-        <div className="max-w-7xl mx-auto px-6 lg:px-12 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-[#71717A]">
-          <span>© 2025 Events App Inc. All rights reserved.</span>
+      <footer className="w-full bg-[#F5F5F7] py-5 border-t border-[#E5E5EA]/60">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-[#71717A]">
+          <span>© 2026 Events App Inc. All rights reserved.</span>
           <div className="flex items-center gap-6">
-            <span>Privacy Policy</span>
-            <span>Terms of Service</span>
-            <span>Support</span>
+            <button
+              type="button"
+              onClick={() => onOpenLegal?.('privacy')}
+              className="hover:text-[#0B0B0B] transition-colors"
+            >
+              Privacy Policy
+            </button>
+            <button
+              type="button"
+              onClick={() => onOpenLegal?.('terms')}
+              className="hover:text-[#0B0B0B] transition-colors"
+            >
+              Terms &amp; Conditions
+            </button>
+            <a href="/sitemap.xml" className="hover:text-[#0B0B0B] transition-colors">
+              Sitemap
+            </a>
           </div>
         </div>
       </footer>

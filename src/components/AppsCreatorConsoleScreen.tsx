@@ -842,7 +842,7 @@ const { attendee, event } = await response.json();`;
       </header>
 
       {/* Builder Section Switcher */}
-      <nav aria-label="Builder Console Sections" className="flex items-center gap-1 p-1 bg-[#F5F5F7] rounded-xl overflow-x-auto">
+      <nav aria-label="Builder Console Sections" className="flex flex-nowrap sm:flex-wrap items-center gap-1 p-1 bg-[#F5F5F7] rounded-xl overflow-x-auto max-w-full">
         {(
           [
             { id: 'pulse', label: 'Platform Pulse', icon: Activity },

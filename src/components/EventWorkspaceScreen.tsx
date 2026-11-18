@@ -61,6 +61,7 @@ interface EventWorkspaceScreenProps {
   onToggleScheduleBlock: (blockId: string) => void;
   onAddScheduleBlock: (block: ScheduleBlock) => void;
   onDeleteScheduleBlock?: (blockId: string) => void;
+  onToggleQrPassPublished?: (eventId: string, published: boolean) => Promise<void> | void;
   onNavigateSettings: () => void;
   onResolveAlert: (id: string) => void;
   onSelectAlertEvent: (event: EventItem) => void;
@@ -85,6 +86,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   onToggleScheduleBlock,
   onAddScheduleBlock,
   onDeleteScheduleBlock,
+  onToggleQrPassPublished,
   onNavigateSettings,
   onResolveAlert,
   onSelectAlertEvent,
@@ -92,6 +94,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   onOpenQrScanner,
   onOpenDisposableCamera,
 }) => {
+  const isEventCreator = profile.appRole !== 'gate_staff';
+  const isQrPassPublished = event.qrPassPublished !== false;
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('program');
   const [copiedToast, setCopiedToast] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -329,6 +333,16 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
               />
               {event.status === 'live' ? 'Published' : event.status}
             </span>
+            <span
+              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold border ${
+                isQrPassPublished
+                  ? 'bg-white border-[#E5E5EA] text-[#0B0B0B]'
+                  : 'bg-[#0B0B0B]/5 border-[#0B0B0B]/20 text-[#0B0B0B]'
+              }`}
+            >
+              <QrCode className="w-3 h-3" />
+              {isQrPassPublished ? 'QR Pass Published' : 'QR Pass Unpublished'}
+            </span>
             <button
               type="button"
               onClick={onPreviewPublicEvent}
@@ -371,22 +385,41 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 QR Gate Scanner
               </button>
             )}
-            <button
-              type="button"
-              onClick={handleDownloadQrSvg}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-xs font-semibold shadow-sm whitespace-nowrap shrink-0"
-            >
-              <QrCode className="w-4 h-4" />
-              Badge QR
-            </button>
-            <button
-              type="button"
-              onClick={() => onOpenEditModal(event)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-all text-xs font-semibold shadow-sm whitespace-nowrap shrink-0"
-            >
-              <Edit3 className="w-4 h-4" />
-              Edit Event
-            </button>
+            {isEventCreator && onToggleQrPassPublished && (
+              <button
+                type="button"
+                disabled={event.status === 'draft'}
+                onClick={() => void onToggleQrPassPublished(event.id, !isQrPassPublished)}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-full transition-colors text-xs font-semibold shadow-sm whitespace-nowrap shrink-0 disabled:opacity-40 ${
+                  isQrPassPublished
+                    ? 'bg-white text-[#0B0B0B] border border-[#E5E5EA] hover:border-[#0B0B0B]'
+                    : 'bg-[#0B0B0B] text-white hover:bg-zinc-800'
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4" />
+                {isQrPassPublished ? 'Unpublish QR Pass' : 'Publish QR Pass'}
+              </button>
+            )}
+            {isEventCreator && isQrPassPublished && (
+              <button
+                type="button"
+                onClick={handleDownloadQrSvg}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-xs font-semibold shadow-sm whitespace-nowrap shrink-0"
+              >
+                <QrCode className="w-4 h-4" />
+                Badge QR
+              </button>
+            )}
+            {isEventCreator && (
+              <button
+                type="button"
+                onClick={() => onOpenEditModal(event)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-all text-xs font-semibold shadow-sm whitespace-nowrap shrink-0"
+              >
+                <Edit3 className="w-4 h-4" />
+                Edit Event
+              </button>
+            )}
           </div>
         </div>
 
@@ -741,7 +774,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       <span>Open QR Scanner</span>
                     </button>
                   )}
-                  {onRegisterAttendee && (
+                  {isEventCreator && onRegisterAttendee ? (
                     <button
                       type="button"
                       onClick={() => setAddingWalkIn((p) => !p)}
@@ -750,6 +783,10 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       <UserPlus className="w-3.5 h-3.5" />
                       <span>{addingWalkIn ? 'Close Form' : 'Check-In Registration'}</span>
                     </button>
+                  ) : (
+                    <span className="px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-semibold text-[#71717A] whitespace-nowrap">
+                      Gate Staff · Scan Only
+                    </span>
                   )}
                   <button
                     type="button"
@@ -774,11 +811,28 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 </div>
               </div>
 
-              {addingWalkIn && onRegisterAttendee && (
+              {addingWalkIn && isEventCreator && onRegisterAttendee && (
                 <form
                   onSubmit={handleWalkInSubmit}
                   className="p-4 rounded-2xl bg-white grid grid-cols-1 sm:grid-cols-2 gap-3"
                 >
+                  {!isQrPassPublished && (
+                    <div className="sm:col-span-2 p-3 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-wrap items-center justify-between gap-2 text-xs text-[#0B0B0B]">
+                      <span>
+                        Check-In QR passes are currently unpublished. Publish them as the event creator before issuing guest passes.
+                      </span>
+                      {onToggleQrPassPublished && (
+                        <button
+                          type="button"
+                          disabled={event.status === 'draft'}
+                          onClick={() => void onToggleQrPassPublished(event.id, true)}
+                          className="px-3 py-1 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold disabled:opacity-40"
+                        >
+                          Publish QR Pass
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <input
                     type="text"
                     required
@@ -815,7 +869,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     </select>
                     <button
                       type="submit"
-                      className="flex-1 h-10 px-4 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 transition-colors whitespace-nowrap"
+                      disabled={!isQrPassPublished}
+                      className="flex-1 h-10 px-4 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       Register &amp; Check In
                     </button>
@@ -1013,6 +1068,31 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   </button>
                 </div>
               </div>
+
+              <div className="p-4 rounded-2xl bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-[#E5E5EA]">
+                <div>
+                  <span className="text-xs font-semibold text-[#0B0B0B] block">
+                    Check-In QR Pass Publication (Creator Only)
+                  </span>
+                  <span className="text-xs text-[#71717A]">
+                    {!isEventCreator
+                      ? 'Only the event creator can publish or export check-in QR passes.'
+                      : isQrPassPublished
+                        ? 'Check-in QR passes are published for public RSVP and kiosk badges.'
+                        : 'Unpublished — guests cannot claim QR passes until published by the event creator.'}
+                  </span>
+                </div>
+                {isEventCreator && onToggleQrPassPublished && (
+                  <button
+                    type="button"
+                    disabled={event.status === 'draft'}
+                    onClick={() => void onToggleQrPassPublished(event.id, !isQrPassPublished)}
+                    className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors disabled:opacity-40 whitespace-nowrap shrink-0"
+                  >
+                    {isQrPassPublished ? 'Unpublish Check-In QR' : 'Publish Check-In QR Pass'}
+                  </button>
+                )}
+              </div>
             </section>
           )}
         </div>
@@ -1162,60 +1242,94 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
               <ShieldCheck className="w-4.5 h-4.5 text-[#71717A]" />
             </div>
 
-            <div className="p-4 bg-white rounded-2xl shadow-sm flex items-center justify-center">
-              <svg className="w-40 h-40" fill="currentColor" viewBox="0 0 100 100" aria-hidden="true">
-                <path d="M10 10 h24 v24 h-24 z M14 14 h16 v16 h-16 z M18 18 h8 v8 h-8 z" fill="#0B0B0B" />
-                <path d="M66 10 h24 v24 h-24 z M70 14 h16 v16 h-16 z M74 18 h8 v8 h-8 z" fill="#0B0B0B" />
-                <path d="M10 66 h24 v24 h-24 z M14 70 h16 v16 h-16 z M18 74 h8 v8 h-8 z" fill="#0B0B0B" />
-                <rect fill="#0B0B0B" height="6" width="6" x="40" y="12" />
-                <rect fill="#0B0B0B" height="6" width="6" x="50" y="12" />
-                <rect fill="#0B0B0B" height="6" width="8" x="44" y="24" />
-                <rect fill="#0B0B0B" height="8" width="6" x="12" y="44" />
-                <rect fill="#0B0B0B" height="6" width="8" x="24" y="42" />
-                <rect fill="#0B0B0B" height="8" width="8" x="40" y="40" />
-                <rect fill="#0B0B0B" height="6" width="6" x="52" y="44" />
-                <rect fill="#0B0B0B" height="6" width="10" x="66" y="40" />
-                <rect fill="#0B0B0B" height="6" width="8" x="80" y="44" />
-                <rect fill="#0B0B0B" height="8" width="6" x="44" y="56" />
-                <rect fill="#0B0B0B" height="6" width="8" x="60" y="54" />
-                <rect fill="#0B0B0B" height="6" width="6" x="74" y="58" />
-                <rect fill="#0B0B0B" height="8" width="6" x="40" y="70" />
-                <rect fill="#0B0B0B" height="6" width="8" x="54" y="72" />
-                <rect fill="#0B0B0B" height="8" width="10" x="68" y="70" />
-                <rect fill="#0B0B0B" height="8" width="6" x="82" y="76" />
-                <rect fill="#0B0B0B" height="6" width="10" x="44" y="84" />
-                <rect fill="#0B0B0B" height="6" width="6" x="60" y="84" />
-              </svg>
-            </div>
+            {isEventCreator && isQrPassPublished ? (
+              <>
+                <div className="p-4 bg-white rounded-2xl shadow-sm flex items-center justify-center">
+                  <svg className="w-40 h-40" fill="currentColor" viewBox="0 0 100 100" aria-hidden="true">
+                    <path d="M10 10 h24 v24 h-24 z M14 14 h16 v16 h-16 z M18 18 h8 v8 h-8 z" fill="#0B0B0B" />
+                    <path d="M66 10 h24 v24 h-24 z M70 14 h16 v16 h-16 z M74 18 h8 v8 h-8 z" fill="#0B0B0B" />
+                    <path d="M10 66 h24 v24 h-24 z M14 70 h16 v16 h-16 z M18 74 h8 v8 h-8 z" fill="#0B0B0B" />
+                    <rect fill="#0B0B0B" height="6" width="6" x="40" y="12" />
+                    <rect fill="#0B0B0B" height="6" width="6" x="50" y="12" />
+                    <rect fill="#0B0B0B" height="6" width="8" x="44" y="24" />
+                    <rect fill="#0B0B0B" height="8" width="6" x="12" y="44" />
+                    <rect fill="#0B0B0B" height="6" width="8" x="24" y="42" />
+                    <rect fill="#0B0B0B" height="8" width="8" x="40" y="40" />
+                    <rect fill="#0B0B0B" height="6" width="6" x="52" y="44" />
+                    <rect fill="#0B0B0B" height="6" width="10" x="66" y="40" />
+                    <rect fill="#0B0B0B" height="6" width="8" x="80" y="44" />
+                    <rect fill="#0B0B0B" height="8" width="6" x="44" y="56" />
+                    <rect fill="#0B0B0B" height="6" width="8" x="60" y="54" />
+                    <rect fill="#0B0B0B" height="6" width="6" x="74" y="58" />
+                    <rect fill="#0B0B0B" height="8" width="6" x="40" y="70" />
+                    <rect fill="#0B0B0B" height="6" width="8" x="54" y="72" />
+                    <rect fill="#0B0B0B" height="8" width="10" x="68" y="70" />
+                    <rect fill="#0B0B0B" height="8" width="6" x="82" y="76" />
+                    <rect fill="#0B0B0B" height="6" width="10" x="44" y="84" />
+                    <rect fill="#0B0B0B" height="6" width="6" x="60" y="84" />
+                  </svg>
+                </div>
 
-            <div className="w-full flex flex-col gap-1">
-              <span className="text-[13px] font-semibold text-[#0B0B0B]">
-                Kiosk &amp; Attendee Entry Pass
-              </span>
-              <p className="text-[11px] text-[#71717A]">
-                Display at the registration reception for speedy self-scan check-ins
-              </p>
-            </div>
+                <div className="w-full flex flex-col gap-1">
+                  <span className="text-[13px] font-semibold text-[#0B0B0B]">
+                    Kiosk &amp; Attendee Entry Pass
+                  </span>
+                  <p className="text-[11px] text-[#71717A]">
+                    Published by event creator for live check-ins and kiosk display
+                  </p>
+                </div>
 
-            <div className="grid grid-cols-2 gap-2 w-full pt-1">
-              <button
-                type="button"
-                onClick={handleDownloadQrSvg}
-                className="py-2 px-3 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-xs font-semibold shadow-sm"
-              >
-                SVG Vector
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  triggerToast('Badge QR sheet prepared for printing');
-                }}
-                className="py-2 px-3 rounded-full bg-[#0B0B0B] text-white hover:opacity-90 transition-all text-xs font-semibold shadow-sm inline-flex items-center justify-center gap-1.5"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Print Badge</span>
-              </button>
-            </div>
+                <div className="grid grid-cols-2 gap-2 w-full pt-1">
+                  <button
+                    type="button"
+                    onClick={handleDownloadQrSvg}
+                    className="py-2 px-3 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-xs font-semibold shadow-sm"
+                  >
+                    SVG Vector
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerToast('Badge QR sheet prepared for printing');
+                    }}
+                    className="py-2 px-3 rounded-full bg-[#0B0B0B] text-white hover:opacity-90 transition-all text-xs font-semibold shadow-sm inline-flex items-center justify-center gap-1.5"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Print Badge</span>
+                  </button>
+                </div>
+              </>
+            ) : isEventCreator ? (
+              <div className="w-full p-5 rounded-2xl bg-white border border-[#E5E5EA] space-y-3">
+                <p className="text-xs font-semibold text-[#0B0B0B]">
+                  Check-In QR Pass Unpublished
+                </p>
+                <p className="text-[11px] text-[#71717A] leading-relaxed">
+                  {event.status === 'draft'
+                    ? 'Launch this draft event first, then publish the Check-In QR Pass so guests can receive tickets.'
+                    : 'Only the event creator can publish check-in QR passes. Publish to enable public RSVPs and kiosk badge exports.'}
+                </p>
+                {onToggleQrPassPublished && (
+                  <button
+                    type="button"
+                    disabled={event.status === 'draft'}
+                    onClick={() => void onToggleQrPassPublished(event.id, true)}
+                    className="w-full py-2.5 px-4 rounded-full bg-[#0B0B0B] text-white hover:bg-zinc-800 transition-colors text-xs font-semibold disabled:opacity-40"
+                  >
+                    Publish Check-In QR Pass
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="w-full p-5 rounded-2xl bg-white border border-[#E5E5EA] space-y-1.5">
+                <p className="text-xs font-semibold text-[#0B0B0B]">
+                  Creator-Only QR Pass Control
+                </p>
+                <p className="text-[11px] text-[#71717A] leading-relaxed">
+                  Only the event creator can publish or export check-in QR passes. Use the QR Gate Scanner to verify existing passes.
+                </p>
+              </div>
+            )}
           </section>
         </div>
       </div>

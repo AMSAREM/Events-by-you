@@ -32,6 +32,7 @@ export const EventsScreen: React.FC<EventsScreenProps> = ({
   onNavigateSettings,
   onResolveAlert,
 }) => {
+  const isEventCreator = profile.appRole !== 'gate_staff';
   const [statusFilter, setStatusFilter] = useState<'all' | EventStatus>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -133,14 +134,16 @@ export const EventsScreen: React.FC<EventsScreenProps> = ({
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={onOpenCreateModal}
-            className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
-          >
-            <Plus className="w-4 h-4" />
-            Create Event
-          </button>
+          {isEventCreator && (
+            <button
+              type="button"
+              onClick={onOpenCreateModal}
+              className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              Create Event
+            </button>
+          )}
         </div>
       </div>
 
@@ -180,13 +183,15 @@ export const EventsScreen: React.FC<EventsScreenProps> = ({
           <p className="text-xs text-[#71717A] mt-1">
             Clear your active filters or publish a new event.
           </p>
-          <button
-            type="button"
-            onClick={onOpenCreateModal}
-            className="mt-4 px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
-          >
-            Create Event
-          </button>
+          {isEventCreator && (
+            <button
+              type="button"
+              onClick={onOpenCreateModal}
+              className="mt-4 px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
+            >
+              Create Event
+            </button>
+          )}
         </div>
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
@@ -209,12 +214,18 @@ export const EventsScreen: React.FC<EventsScreenProps> = ({
                     />
                   </div>
 
-                  <div className="flex items-center gap-2 text-xs text-[#71717A] mt-4">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-[#71717A] mt-4">
                     <span className="capitalize font-medium text-[#0B0B0B]">{evt.status}</span>
                     <span aria-hidden="true">·</span>
                     <span>{evt.category}</span>
                     <span aria-hidden="true">·</span>
                     <span className="tabular-nums">{evt.date}</span>
+                    {evt.qrPassPublished === false && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-semibold text-[#0B0B0B]">QR Pass Unpublished</span>
+                      </>
+                    )}
                   </div>
 
                   <h2 className="text-lg font-bold tracking-tight text-[#0B0B0B] mt-1">
@@ -295,6 +306,7 @@ export const EventsScreen: React.FC<EventsScreenProps> = ({
                     <p className="text-xs text-[#71717A] mt-0.5 truncate">
                       <span className="capitalize text-[#0B0B0B] font-medium">{evt.status}</span> ·{' '}
                       {evt.date} · {evt.venue}, {evt.city}
+                      {evt.qrPassPublished === false ? ' · QR Pass Unpublished' : ''}
                     </p>
                   </div>
                 </div>

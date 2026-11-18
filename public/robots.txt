@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Allow: /terms
+Allow: /privacy
+Disallow: /api/
+Disallow: /studio
+Disallow: /camera
+
+Sitemap: /sitemap.xml

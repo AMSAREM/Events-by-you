@@ -53,6 +53,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
   onOpenPlans,
   onResolveAlert,
 }) => {
+  const isEventCreator = profile.appRole !== 'gate_staff';
   const [catalogFilter, setCatalogFilter] = useState<'all' | EventStatus>('all');
   const [highlightIndex, setHighlightIndex] = useState(0);
   const [timeRange, setTimeRange] = useState<TimeRange>('7D');
@@ -107,13 +108,13 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
     hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_356px] gap-6 items-start">
+    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_356px] gap-5 lg:gap-6 items-start">
       {/* CENTER COLUMN: Greeting, Prominent QR & Check-In Bar, Upcoming Highlight, Event Catalog */}
-      <div className="space-y-6 min-w-0">
+      <div className="space-y-5 lg:space-y-6 min-w-0">
         {/* Personalized Greeting Banner */}
-        <section className="bg-[#F5F5F7] rounded-3xl p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-6">
-          <div className="max-w-xl">
-            <h1 className="font-display text-[28px] sm:text-[36px] leading-[1.15] font-bold tracking-[-0.03em] text-[#0B0B0B] text-balance">
+        <section className="bg-[#F5F5F7] rounded-3xl p-4 sm:p-6 lg:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-5 sm:gap-6">
+          <div className="max-w-xl min-w-0">
+            <h1 className="font-display text-[24px] sm:text-[32px] lg:text-[36px] leading-[1.15] font-bold tracking-[-0.03em] text-[#0B0B0B] text-balance">
               {greeting}, {profile.firstName}.
             </h1>
             <p className="text-sm text-[#71717A] mt-2 leading-relaxed">
@@ -151,14 +152,16 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                 <UserPlus className="w-4 h-4" />
                 Check-In Registration
               </button>
-              <button
-                type="button"
-                onClick={onOpenCreateModal}
-                className="px-4 py-2.5 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                New Event
-              </button>
+              {isEventCreator && (
+                <button
+                  type="button"
+                  onClick={onOpenCreateModal}
+                  className="px-4 py-2.5 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  New Event
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onNavigateEvents}
@@ -364,13 +367,15 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                 <p className="text-xs text-[#71717A] mt-1">
                   Adjust your search query or create a new event.
                 </p>
-                <button
-                  type="button"
-                  onClick={onOpenCreateModal}
-                  className="mt-4 px-5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
-                >
-                  Create Event
-                </button>
+                {isEventCreator && (
+                  <button
+                    type="button"
+                    onClick={onOpenCreateModal}
+                    className="mt-4 px-5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
+                  >
+                    Create Event
+                  </button>
+                )}
               </div>
             ) : (
               filteredCatalog.map((evt) => {
@@ -403,6 +408,14 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                           <span className="tabular-nums text-[#0B0B0B] font-medium">
                             {evt.registered}/{evt.capacity}
                           </span>
+                          {evt.qrPassPublished === false && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-semibold text-[#0B0B0B]">
+                                QR Pass Unpublished
+                              </span>
+                            </>
+                          )}
                           {hasIssue && (
                             <>
                               <span aria-hidden="true">·</span>

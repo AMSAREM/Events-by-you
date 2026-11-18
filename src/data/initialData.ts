@@ -53,6 +53,7 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 0,
     organizer: 'Josh Mensah',
     artwork: 'architecture',
+    qrPassPublished: true,
   },
   {
     id: 'evt-wedding-mensah',
@@ -75,6 +76,7 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 0,
     organizer: 'Boateng Family Planners',
     artwork: 'spatial',
+    qrPassPublished: true,
   },
   {
     id: 'evt-church-revival',
@@ -97,6 +99,7 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 0,
     organizer: 'Grace Chapel Ministry',
     artwork: 'forum',
+    qrPassPublished: true,
   },
   {
     id: 'evt-musical-accra',
@@ -120,6 +123,7 @@ export const INITIAL_EVENTS: EventItem[] = [
     organizer: 'GoldCoast Live Music',
     artwork: 'sound',
     broadcastError: '2 Telco DLR retries pending',
+    qrPassPublished: true,
   },
   {
     id: 'evt-funeral-memorial',
@@ -142,6 +146,7 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 0,
     organizer: 'Osei Tutu Royal Family',
     artwork: 'typography',
+    qrPassPublished: true,
   },
   {
     id: 'evt-corporate-gala',
@@ -164,6 +169,7 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 26700,
     organizer: 'Meridian Corporate Group',
     artwork: 'hardware',
+    qrPassPublished: true,
   },
   {
     id: 'evt-cultural-lagos',
@@ -186,6 +192,7 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 0,
     organizer: 'Josh Mensah',
     artwork: 'forum',
+    qrPassPublished: false,
   },
 ];
 

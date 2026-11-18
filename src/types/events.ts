@@ -6,7 +6,9 @@ export type AppRoute =
   | 'verify-otp'
   | 'demo-event'
   | 'camera'
-  | 'studio';
+  | 'studio'
+  | 'terms'
+  | 'privacy';
 
 export type NavScreen =
   | 'overview'
@@ -90,6 +92,7 @@ export interface EventItem {
   flyerUrl?: string;
   venueFormat?: 'in-person' | 'virtual' | 'hybrid';
   senderId?: string;
+  qrPassPublished?: boolean;
 }
 
 export type AttendeeTier = 'VIP' | 'General' | 'Speaker' | 'Press';

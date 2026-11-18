@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Database, Loader2, Sparkles, X } from 'lucide-react';
+import { Clock, Database, Loader2, LogOut, ShieldCheck, Sparkles, X } from 'lucide-react';
 import { INITIAL_EVENTS, INITIAL_PROFILE } from './data/initialData';
 import type {
   AppRole,
@@ -50,7 +50,22 @@ import { SettingsScreen } from './components/SettingsScreen';
 import { QrGateScannerScreen } from './components/QrGateScannerScreen';
 import { DisposableCameraScreen } from './components/DisposableCameraScreen';
 import { AppsCreatorConsoleScreen } from './components/AppsCreatorConsoleScreen';
+import { LegalScreen } from './components/LegalScreen';
 import { EventDetailModal } from './components/EventModals';
+
+const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const SESSION_WARNING_MS = 60 * 1000;
+const LAST_ACTIVITY_KEY = 'eventsapp_last_activity_v1';
+
+function getInitialRouteFromPathname(): AppRoute {
+  if (typeof window === 'undefined') return 'home';
+  const path = window.location.pathname.toLowerCase();
+  if (path === '/terms') return 'terms';
+  if (path === '/privacy') return 'privacy';
+  if (path === '/signin') return 'signin';
+  if (path === '/signup') return 'signup';
+  return 'home';
+}
 
 interface PendingModuleTarget {
   route: 'studio' | 'camera';
@@ -73,7 +88,7 @@ const EMPTY_PROFILE: OrganizerProfile = {
 };
 
 export default function App() {
-  const [route, setRoute] = useState<AppRoute>('home');
+  const [route, setRoute] = useState<AppRoute>(getInitialRouteFromPathname);
   const [isSignedIn, setIsSignedIn] = useState<boolean>(() => Boolean(getStoredSession()));
   const [authBootstrapping, setAuthBootstrapping] = useState<boolean>(() => Boolean(getStoredSession()));
   const [studioLoading, setStudioLoading] = useState(false);
@@ -84,6 +99,9 @@ export default function App() {
   const [creatorPasswordConfigured, setCreatorPasswordConfigured] = useState<boolean>(false);
   const [creatorUnlocked, setCreatorUnlocked] = useState<boolean>(() => Boolean(getStoredCreatorToken()));
   const [apiBannerError, setApiBannerError] = useState<string | null>(null);
+  const [sessionTimeoutNotice, setSessionTimeoutNotice] = useState<string | null>(null);
+  const [sessionWarningSecondsLeft, setSessionWarningSecondsLeft] = useState<number | null>(null);
+  const lastActivityRef = useRef<number>(Date.now());
 
   const [prefillEmail, setPrefillEmail] = useState<string>('');
   const [authEmail, setAuthEmail] = useState<string>('');
@@ -116,6 +134,8 @@ export default function App() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [workspaceEventId, setWorkspaceEventId] = useState<string | null>(null);
   const [publicPreviewEventId, setPublicPreviewEventId] = useState<string | undefined>(undefined);
+  const [publicPreviewFocus, setPublicPreviewFocus] = useState<'top' | 'register'>('top');
+  const [publicEventsLoading, setPublicEventsLoading] = useState<boolean>(true);
 
   const notifyError = useCallback((err: unknown, fallback: string) => {
     const msg = err instanceof Error ? err.message : fallback;
@@ -123,11 +143,14 @@ export default function App() {
   }, []);
 
   const loadPublicEvents = useCallback(async () => {
+    setPublicEventsLoading(true);
     try {
       const res = await api.public.getEvents();
       setPublicEvents(Array.isArray(res?.events) ? res.events : []);
     } catch {
       setPublicEvents([]);
+    } finally {
+      setPublicEventsLoading(false);
     }
   }, []);
 
@@ -151,9 +174,21 @@ export default function App() {
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unable to load workspace from Supabase.';
-      if (msg.toLowerCase().includes('session') || msg.toLowerCase().includes('authentication')) {
+      const lower = msg.toLowerCase();
+      if (
+        lower.includes('session') ||
+        lower.includes('authentication') ||
+        lower.includes('timed out') ||
+        lower.includes('inactivity')
+      ) {
         saveStoredSession(null);
         setIsSignedIn(false);
+        if (lower.includes('timed out') || lower.includes('inactivity')) {
+          setSessionTimeoutNotice(
+            'Your session timed out after 30 minutes of inactivity. Sign in again to continue.'
+          );
+          setRoute('signin');
+        }
       } else {
         setApiBannerError(msg);
       }
@@ -257,6 +292,43 @@ export default function App() {
     applyModuleTarget(target);
   };
 
+  const syncBrowserPath = useCallback((nextPath: string) => {
+    if (typeof window === 'undefined') return;
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState(null, '', nextPath);
+    }
+  }, []);
+
+  const openLegalRoute = useCallback(
+    (doc: 'terms' | 'privacy') => {
+      setRoute(doc);
+      syncBrowserPath(doc === 'terms' ? '/terms' : '/privacy');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+    [syncBrowserPath]
+  );
+
+  const navigateHome = useCallback(() => {
+    setRoute('home');
+    syncBrowserPath('/');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [syncBrowserPath]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const pathRoute = getInitialRouteFromPathname();
+      setRoute((prev) => {
+        if (pathRoute !== 'home') return pathRoute;
+        if (prev === 'terms' || prev === 'privacy' || prev === 'signin' || prev === 'signup') {
+          return 'home';
+        }
+        return prev;
+      });
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   const handleAuthenticated = async (
     session: StoredAuthSession,
     nextProfile: OrganizerProfile,
@@ -264,8 +336,18 @@ export default function App() {
   ) => {
     saveStoredSession(session);
     if (nextProfile) setProfile(nextProfile);
+    const now = Date.now();
+    lastActivityRef.current = now;
+    try {
+      localStorage.setItem(LAST_ACTIVITY_KEY, String(now));
+    } catch {
+      // Ignore storage failures
+    }
+    setSessionTimeoutNotice(null);
+    setSessionWarningSecondsLeft(null);
     setIsSignedIn(true);
     setApiBannerError(null);
+    syncBrowserPath('/');
     if (getStoredCreatorToken()) {
       setCreatorUnlocked(true);
     }
@@ -295,34 +377,155 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleSignOut = async () => {
+  const handleSignOut = useCallback(
+    async (reason?: unknown) => {
+      const isTimeout = reason === 'timeout';
+      try {
+        await api.auth.signOut();
+      } catch {
+        // Clear local session regardless
+      }
+      saveStoredSession(null);
+      saveStoredCreatorToken(null);
+      try {
+        localStorage.removeItem(LAST_ACTIVITY_KEY);
+      } catch {
+        // Ignore storage errors
+      }
+      setCreatorUnlocked(false);
+      setIsSignedIn(false);
+      setSessionWarningSecondsLeft(null);
+      setSessionTimeoutNotice(
+        isTimeout
+          ? 'Your session timed out after 30 minutes of inactivity. Sign in again to continue.'
+          : null
+      );
+      setEvents([]);
+      setAttendees([]);
+      setScheduleBlocks([]);
+      setAlerts([]);
+      setDisposableShots([]);
+      setRollSettings({});
+      setCreatorApps([]);
+      setCreatorAppLogs([]);
+      setProfile(EMPTY_PROFILE);
+      setPendingTarget(null);
+      setStudioSubScreen(null);
+      setWorkspaceEventId(null);
+      setSelectedEventId(null);
+      setActiveScreen('overview');
+      setRoute(isTimeout ? 'signin' : 'home');
+      syncBrowserPath(isTimeout ? '/signin' : '/');
+      void loadPublicEvents();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+    [loadPublicEvents, syncBrowserPath]
+  );
+
+  const sessionWarningVisibleRef = useRef(false);
+  useEffect(() => {
+    sessionWarningVisibleRef.current = sessionWarningSecondsLeft !== null;
+  }, [sessionWarningSecondsLeft]);
+
+  const staySignedIn = useCallback(() => {
+    const now = Date.now();
+    lastActivityRef.current = now;
     try {
-      await api.auth.signOut();
+      localStorage.setItem(LAST_ACTIVITY_KEY, String(now));
     } catch {
-      // Clear local session regardless
+      // Ignore storage errors
     }
-    saveStoredSession(null);
-    saveStoredCreatorToken(null);
-    setCreatorUnlocked(false);
-    setIsSignedIn(false);
-    setEvents([]);
-    setAttendees([]);
-    setScheduleBlocks([]);
-    setAlerts([]);
-    setDisposableShots([]);
-    setRollSettings({});
-    setCreatorApps([]);
-    setCreatorAppLogs([]);
-    setProfile(EMPTY_PROFILE);
-    setPendingTarget(null);
-    setStudioSubScreen(null);
-    setWorkspaceEventId(null);
-    setSelectedEventId(null);
-    setActiveScreen('overview');
-    setRoute('home');
-    void loadPublicEvents();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
+    setSessionWarningSecondsLeft(null);
+    void api.auth.getSession().catch(() => {
+      // If server already expired the session, next studio call will handle sign-out cleanly
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isSignedIn) {
+      setSessionWarningSecondsLeft(null);
+      return;
+    }
+
+    const now = Date.now();
+    let initialActivity = now;
+    try {
+      const storedRaw = localStorage.getItem(LAST_ACTIVITY_KEY);
+      const parsed = storedRaw ? Number(storedRaw) : NaN;
+      if (Number.isFinite(parsed) && parsed > 0) {
+        initialActivity = parsed;
+      } else {
+        localStorage.setItem(LAST_ACTIVITY_KEY, String(now));
+      }
+    } catch {
+      // Ignore storage errors
+    }
+
+    if (now - initialActivity >= SESSION_IDLE_TIMEOUT_MS) {
+      void handleSignOut('timeout');
+      return;
+    }
+
+    lastActivityRef.current = initialActivity;
+    let lastStorageWrite = 0;
+
+    const recordActivity = () => {
+      if (sessionWarningVisibleRef.current) return;
+      const ts = Date.now();
+      lastActivityRef.current = ts;
+      if (ts - lastStorageWrite >= 4000) {
+        lastStorageWrite = ts;
+        try {
+          localStorage.setItem(LAST_ACTIVITY_KEY, String(ts));
+        } catch {
+          // Ignore storage errors
+        }
+      }
+    };
+
+    const handleStorageSync = (e: StorageEvent) => {
+      if (e.key === LAST_ACTIVITY_KEY) {
+        if (!e.newValue) {
+          void handleSignOut('manual');
+          return;
+        }
+        const ts = Number(e.newValue);
+        if (Number.isFinite(ts) && ts > lastActivityRef.current) {
+          lastActivityRef.current = ts;
+          setSessionWarningSecondsLeft(null);
+        }
+      }
+    };
+
+    const eventsToWatch = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'] as const;
+    eventsToWatch.forEach((evtName) => {
+      window.addEventListener(evtName, recordActivity, { passive: true });
+    });
+    window.addEventListener('storage', handleStorageSync);
+
+    const timer = window.setInterval(() => {
+      const elapsed = Date.now() - lastActivityRef.current;
+      const remaining = SESSION_IDLE_TIMEOUT_MS - elapsed;
+      if (remaining <= 0) {
+        window.clearInterval(timer);
+        void handleSignOut('timeout');
+        return;
+      }
+      if (remaining <= SESSION_WARNING_MS) {
+        setSessionWarningSecondsLeft(Math.max(1, Math.ceil(remaining / 1000)));
+      } else if (sessionWarningVisibleRef.current) {
+        setSessionWarningSecondsLeft(null);
+      }
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+      eventsToWatch.forEach((evtName) => {
+        window.removeEventListener(evtName, recordActivity);
+      });
+      window.removeEventListener('storage', handleStorageSync);
+    };
+  }, [handleSignOut, isSignedIn]);
 
   const handleSeedStarterData = async () => {
     if (seedingStarter) return;
@@ -364,6 +567,16 @@ export default function App() {
   const creatingEventRef = useRef(false);
 
   const handleCreateEventWithBlocks = async (newEvt: EventItem, newBlocks: ScheduleBlock[]) => {
+    if (!isSignedIn) {
+      openCreateWizard();
+      return;
+    }
+    if (effectiveRole === 'gate_staff') {
+      setApiBannerError(
+        'Access denied: Only event creators can create events and publish check-in QR passes.'
+      );
+      return;
+    }
     if (creatingEventRef.current) return;
     creatingEventRef.current = true;
     try {
@@ -385,6 +598,12 @@ export default function App() {
   };
 
   const openCreateWizard = () => {
+    if (isSignedIn && effectiveRole === 'gate_staff') {
+      setApiBannerError(
+        'Access denied: Only event creators can create events and publish check-in QR passes.'
+      );
+      return;
+    }
     requireSignedIn({
       route: 'studio',
       screen: 'events',
@@ -523,6 +742,23 @@ export default function App() {
       setPublicEvents((prev) => prev.map((e) => (e.id === updated.id ? res.event : e)));
     } catch (err) {
       notifyError(err, 'Failed to update event in Supabase.');
+    }
+  };
+
+  const handleToggleQrPassPublished = async (eventId: string, published: boolean) => {
+    if (effectiveRole === 'gate_staff') {
+      setApiBannerError(
+        'Access denied: Only the event creator can publish or unpublish check-in QR passes.'
+      );
+      return;
+    }
+    try {
+      const res = await api.studio.publishQrPass(eventId, published);
+      setEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
+      setPublicEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
+      setApiBannerError(null);
+    } catch (err) {
+      notifyError(err, 'Only the event creator can publish check-in QR passes.');
     }
   };
 
@@ -815,56 +1051,164 @@ export default function App() {
   const landingEvents = safePublicEvents.length > 0 ? safePublicEvents : safeEvents;
   const featuredEvent = landingEvents[0] ?? INITIAL_EVENTS[0];
 
+  const sessionTimeoutModal =
+    isSignedIn && sessionWarningSecondsLeft !== null ? (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="session-timeout-title"
+        className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+      >
+        <div className="w-full max-w-md rounded-[28px] bg-white border border-[#E5E5EA] shadow-2xl p-6 space-y-5">
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
+              <Clock className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#71717A]">
+                <ShieldCheck className="w-3.5 h-3.5 text-[#0B0B0B]" />
+                <span>Inactivity Security Lock</span>
+              </div>
+              <h2
+                id="session-timeout-title"
+                className="font-display text-lg font-bold tracking-tight text-[#0B0B0B] mt-0.5"
+              >
+                Your session is about to expire
+              </h2>
+              <p className="text-xs text-[#71717A] leading-relaxed mt-1">
+                For workspace protection, inactive sessions sign out automatically after 30 minutes.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] px-4 py-3 flex items-center justify-between">
+            <span className="text-xs font-medium text-[#71717A]">Signing out automatically in</span>
+            <span className="font-mono text-lg font-bold text-[#0B0B0B] tabular-nums">
+              {sessionWarningSecondsLeft}s
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-2.5">
+            <button
+              type="button"
+              onClick={() => void handleSignOut('manual')}
+              className="px-4 py-2.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Sign Out Now</span>
+            </button>
+            <button
+              type="button"
+              onClick={staySignedIn}
+              className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-xs font-semibold text-white transition-colors"
+            >
+              Stay Signed In
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null;
+
+  if (route === 'terms' || route === 'privacy') {
+    return (
+      <>
+        <LegalScreen
+          doc={route}
+          isSignedIn={isSignedIn}
+          onSwitchDoc={openLegalRoute}
+          onBackHome={navigateHome}
+          onNavigateSignIn={() => {
+            setSessionTimeoutNotice(null);
+            setRoute('signin');
+            syncBrowserPath('/signin');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onNavigateStudio={() =>
+            requireSignedIn({
+              route: 'studio',
+              screen: 'overview',
+              label: 'Creator Studio',
+            })
+          }
+        />
+        {sessionTimeoutModal}
+      </>
+    );
+  }
+
   if (route === 'home') {
     return (
-      <LandingScreen
-        featuredEvent={featuredEvent}
-        allEvents={landingEvents.length > 0 ? landingEvents : [featuredEvent]}
-        recentAttendees={safeAttendees}
-        isSignedIn={isSignedIn}
-        onNavigateSignIn={(email) => {
-          setPendingTarget(null);
-          setPrefillEmail(email ?? '');
-          setRoute('signin');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onNavigateSignUp={(email) => {
-          setPendingTarget(null);
-          setPrefillEmail(email ?? '');
-          setRoute('signup');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onNavigateDemoEvent={(eventId) => {
-          setPublicPreviewEventId(eventId || featuredEvent.id);
-          setRoute('demo-event');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onNavigateStudio={() =>
-          requireSignedIn({
-            route: 'studio',
-            screen: 'overview',
-            label: 'Creator Studio',
-          })
-        }
-        onSignOut={handleSignOut}
-        onOpenQrScanner={(eventId) => openQrScanner(eventId || featuredEvent.id)}
-        onOpenDisposableCamera={(eventId) =>
-          openPublicCamera(eventId || featuredEvent.id, undefined, 'home')
-        }
-        onUpgradePro={() =>
-          requireSignedIn({
-            route: 'studio',
-            screen: 'billing',
-            label: 'Plan & Billing',
-          })
-        }
-        onQuickStartEmail={(email) => {
-          setPendingTarget(null);
-          setPrefillEmail(email);
-          setRoute('signup');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-      />
+      <>
+        <LandingScreen
+          featuredEvent={featuredEvent}
+          allEvents={landingEvents.length > 0 ? landingEvents : [featuredEvent]}
+          recentAttendees={safeAttendees}
+          isSignedIn={isSignedIn}
+          onNavigateSignIn={(email) => {
+            setPendingTarget(null);
+            setSessionTimeoutNotice(null);
+            setPrefillEmail(email ?? '');
+            setRoute('signin');
+            syncBrowserPath('/signin');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onNavigateSignUp={(email) => {
+            setPendingTarget(null);
+            setSessionTimeoutNotice(null);
+            setPrefillEmail(email ?? '');
+            setRoute('signup');
+            syncBrowserPath('/signup');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onCreateEvent={openCreateWizard}
+          onNavigateDemoEvent={(eventId, focusSection = 'top') => {
+            setPublicPreviewEventId(eventId || featuredEvent.id);
+            setPublicPreviewFocus(focusSection);
+            setRoute('demo-event');
+            if (focusSection !== 'register') {
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+          }}
+          onNavigateStudio={() =>
+            requireSignedIn({
+              route: 'studio',
+              screen: 'overview',
+              label: 'Creator Studio',
+            })
+          }
+          onSignOut={() => void handleSignOut('manual')}
+          onOpenQrScanner={(eventId) => openQrScanner(eventId || featuredEvent.id)}
+          onOpenDisposableCamera={(eventId) =>
+            openPublicCamera(eventId || featuredEvent.id, undefined, 'home')
+          }
+          onUpgradePro={() =>
+            requireSignedIn({
+              route: 'studio',
+              screen: 'billing',
+              label: 'Plan & Billing',
+            })
+          }
+          onQuickStartEmail={(email) => {
+            if (isSignedIn) {
+              openCreateWizard();
+              return;
+            }
+            setPrefillEmail(email);
+            setSessionTimeoutNotice(null);
+            setPendingTarget({
+              route: 'studio',
+              screen: 'events',
+              subScreen: 'create-event',
+              label: 'Create Event Wizard',
+            });
+            setRoute('signin');
+            syncBrowserPath('/signin');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onOpenLegal={openLegalRoute}
+        />
+        {sessionTimeoutModal}
+      </>
     );
   }
 
@@ -875,11 +1219,12 @@ export default function App() {
         redirectNotice={pendingTarget?.label}
         onBackHome={() => {
           setPendingTarget(null);
-          setRoute('home');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
+          navigateHome();
         }}
         onGoSignIn={() => {
+          setSessionTimeoutNotice(null);
           setRoute('signin');
+          syncBrowserPath('/signin');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onNavigateDemoEvent={() => {
@@ -887,6 +1232,7 @@ export default function App() {
           setRoute('demo-event');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
+        onOpenLegal={openLegalRoute}
         onRequireOtp={(email, nextOtpType) => {
           setAuthEmail(email);
           setOtpType(nextOtpType);
@@ -904,11 +1250,12 @@ export default function App() {
         initialEmail={authEmail || prefillEmail || profile.email}
         onBackHome={() => {
           setPendingTarget(null);
-          setRoute('home');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
+          navigateHome();
         }}
         onBackSignIn={() => {
+          setSessionTimeoutNotice(null);
           setRoute('signin');
+          syncBrowserPath('/signin');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onProceedToOtp={(email) => {
@@ -922,6 +1269,7 @@ export default function App() {
           setRoute('demo-event');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
+        onOpenLegal={openLegalRoute}
       />
     );
   }
@@ -933,11 +1281,12 @@ export default function App() {
         otpType={otpType}
         onBackHome={() => {
           setPendingTarget(null);
-          setRoute('home');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
+          navigateHome();
         }}
         onBackSignIn={() => {
+          setSessionTimeoutNotice(null);
           setRoute('signin');
+          syncBrowserPath('/signin');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onVerified={handleAuthenticated}
@@ -946,39 +1295,43 @@ export default function App() {
           setRoute('demo-event');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
+        onOpenLegal={openLegalRoute}
       />
     );
   }
 
   if (route === 'demo-event') {
     return (
-      <PublicEventScreen
-        events={safePublicEvents.length > 0 ? safePublicEvents : safeEvents}
-        attendees={safeAttendees}
-        initialEventId={publicPreviewEventId}
-        isSignedIn={isSignedIn}
-        onBackHome={() => {
-          setRoute('home');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onOpenStudio={() =>
-          requireSignedIn({
-            route: 'studio',
-            screen: 'overview',
-            label: 'Creator Studio',
-          })
-        }
-        onRegisterAttendee={handlePublicRegisterAttendee}
-        onOpenDisposableCamera={(eventId, guestName) =>
-          openPublicCamera(eventId, guestName, 'demo-event')
-        }
-      />
+      <>
+        <PublicEventScreen
+          events={safePublicEvents.length > 0 ? safePublicEvents : safeEvents}
+          attendees={safeAttendees}
+          initialEventId={publicPreviewEventId}
+          initialFocus={publicPreviewFocus}
+          isLoadingEvents={publicEventsLoading}
+          isSignedIn={isSignedIn}
+          onBackHome={navigateHome}
+          onOpenStudio={() =>
+            requireSignedIn({
+              route: 'studio',
+              screen: 'overview',
+              label: 'Creator Studio',
+            })
+          }
+          onRegisterAttendee={handlePublicRegisterAttendee}
+          onOpenDisposableCamera={(eventId, guestName) =>
+            openPublicCamera(eventId, guestName, 'demo-event')
+          }
+          onOpenLegal={openLegalRoute}
+        />
+        {sessionTimeoutModal}
+      </>
     );
   }
 
   if (authBootstrapping) {
     return (
-      <div className="min-h-screen bg-[#F5F5F7] text-[#0B0B0B] flex flex-col items-center justify-center gap-3">
+      <div className="min-h-dvh w-full bg-[#F5F5F7] text-[#0B0B0B] flex flex-col items-center justify-center gap-3 px-4">
         <Loader2 className="w-6 h-6 animate-spin text-[#0B0B0B]" />
         <p className="text-xs font-medium text-[#71717A]">
           Syncing your workspace...
@@ -987,12 +1340,13 @@ export default function App() {
     );
   }
 
-  // Strict Auth Gate: Sign-in is required for Creator Studio, Disposable Camera, and all event modules
+  // Strict Auth Gate: Sign-in is required for Creator Studio, Event Creation, Disposable Camera, and all event modules
   if (route === 'signin' || !isSignedIn) {
     return (
       <SignInScreen
         initialEmail={prefillEmail}
         creatorEmail={creatorEmail}
+        sessionTimeoutNotice={sessionTimeoutNotice}
         redirectNotice={
           pendingTarget?.label ??
           (route === 'camera'
@@ -1003,27 +1357,34 @@ export default function App() {
         }
         onBackHome={() => {
           setPendingTarget(null);
-          setRoute('home');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
+          setSessionTimeoutNotice(null);
+          navigateHome();
         }}
         onNavigateDemoEvent={() => {
           setPendingTarget(null);
+          setSessionTimeoutNotice(null);
           setRoute('demo-event');
+          syncBrowserPath('/');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onForgotPassword={(email) => {
           setAuthEmail(email);
+          setSessionTimeoutNotice(null);
           setRoute('reset-password');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onGoSignUp={(email) => {
           setPrefillEmail(email);
+          setSessionTimeoutNotice(null);
           setRoute('signup');
+          syncBrowserPath('/signup');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
+        onOpenLegal={openLegalRoute}
         onRequireOtp={(email, nextOtpType) => {
           setAuthEmail(email);
           setOtpType(nextOtpType);
+          setSessionTimeoutNotice(null);
           setRoute('verify-otp');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
@@ -1034,34 +1395,39 @@ export default function App() {
 
   if (route === 'camera') {
     return (
-      <DisposableCameraScreen
-        mode="public"
-        events={activeEvents}
-        shots={safeDisposableShots}
-        rollSettings={safeRollSettings}
-        alerts={safeAlerts}
-        profile={profile}
-        initialEventId={cameraEventId || activeEvents[0]?.id}
-        initialGuestName={cameraGuestName}
-        onAddShot={handleAddShot}
-        onToggleLikeShot={handleToggleLikeShot}
-        onDeleteShot={handleDeleteShot}
-        onDevelopRoll={handleDevelopRoll}
-        onUpdateRollSettings={handleUpdateRollSettings}
-        onBack={() => {
-          setRoute(cameraReturnRoute);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onOpenStudio={() => {
-          openStudioCamera(cameraEventId || activeEvents[0]?.id);
-        }}
-      />
+      <>
+        <DisposableCameraScreen
+          mode="public"
+          events={activeEvents}
+          shots={safeDisposableShots}
+          rollSettings={safeRollSettings}
+          alerts={safeAlerts}
+          profile={profile}
+          initialEventId={cameraEventId || activeEvents[0]?.id}
+          initialGuestName={cameraGuestName}
+          onAddShot={handleAddShot}
+          onToggleLikeShot={handleToggleLikeShot}
+          onDeleteShot={handleDeleteShot}
+          onDevelopRoll={handleDevelopRoll}
+          onUpdateRollSettings={handleUpdateRollSettings}
+          onBack={() => {
+            setRoute(cameraReturnRoute);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onOpenStudio={() => {
+            openStudioCamera(cameraEventId || activeEvents[0]?.id);
+          }}
+        />
+        {sessionTimeoutModal}
+      </>
     );
   }
 
+
+
   return (
-    <div className="min-h-screen bg-white text-[#0B0B0B]">
-      <div className="w-full max-w-[1440px] mx-auto px-3.5 sm:px-6 lg:px-8 pt-3.5 sm:pt-6 pb-[calc(5.75rem+env(safe-area-inset-bottom))] md:pb-10 block md:flex md:gap-6 lg:gap-8 md:items-start overflow-x-clip">
+    <div className="min-h-dvh w-full max-w-full bg-white text-[#0B0B0B] overflow-x-clip">
+      <div className="w-full max-w-[1600px] mx-auto px-3 sm:px-5 md:px-6 lg:px-8 xl:px-10 pt-3 sm:pt-5 lg:pt-6 pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:pb-8 flex flex-col md:flex-row md:gap-5 lg:gap-7 xl:gap-8 md:items-start min-w-0 overflow-x-clip">
         {/* Left Floating Dark Pill Capsule Navigation */}
         <NavigationRail
           activeScreen={activeScreen}
@@ -1201,6 +1567,7 @@ export default function App() {
               onToggleScheduleBlock={handleToggleScheduleBlock}
               onAddScheduleBlock={handleAddScheduleBlock}
               onDeleteScheduleBlock={handleDeleteScheduleBlock}
+              onToggleQrPassPublished={handleToggleQrPassPublished}
               onNavigateSettings={() => {
                 setWorkspaceEventId(null);
                 setActiveScreen('settings');
@@ -1242,6 +1609,7 @@ export default function App() {
                   initialCode={checkinPrefillCode}
                   onToggleCheckIn={handleToggleCheckIn}
                   onRegisterAttendee={handleStudioRegisterAttendee}
+                  onToggleQrPassPublished={handleToggleQrPassPublished}
                   onManageEvent={handleOpenWorkspace}
                   onNavigateSettings={() => setActiveScreen('settings')}
                   onResolveAlert={handleResolveAlert}
@@ -1384,12 +1752,16 @@ export default function App() {
           event={selectedEvent}
           scheduleBlocks={safeScheduleBlocks}
           capacityThreshold={profile.capacityAlertThreshold}
+          canPublishQrPass={effectiveRole !== 'gate_staff'}
+          onToggleQrPassPublished={handleToggleQrPassPublished}
           onClose={() => setSelectedEventId(null)}
           onUpdateEvent={handleUpdateEvent}
           onDeleteEvent={handleDeleteEvent}
           onOpenAttendees={(id) => handleNavigateAttendees(id)}
         />
       )}
+
+      {sessionTimeoutModal}
     </div>
   );
 }

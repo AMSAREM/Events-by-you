@@ -118,6 +118,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   );
   const [enforceUniquePhone, setEnforceUniquePhone] = useState(true);
   const [autoCloseCap, setAutoCloseCap] = useState(true);
+  const [publishQrPass, setPublishQrPass] = useState(true);
   const [copiedSlug, setCopiedSlug] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -329,6 +330,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
         flyerUrl: flyerUrl || undefined,
         venueFormat,
         senderId,
+        qrPassPublished: publishStatus === 'draft' ? false : publishQrPass,
       };
 
       const createdBlocks: ScheduleBlock[] = draftBlocks.map((blk, i) => ({
@@ -1040,6 +1042,26 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                     {instantDispatch ? 'Auto SMS + Resend active' : 'Manual dispatch only'}
                   </p>
                 </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white flex items-center justify-between gap-4 border border-[#E5E5EA]">
+                <div>
+                  <p className="text-xs font-semibold text-[#0B0B0B]">
+                    Check-In QR Pass Publishing (Creator Only)
+                  </p>
+                  <p className="text-[11px] text-[#71717A] mt-0.5">
+                    Only the event creator can publish check-in QR passes for public RSVPs and gate scanning. Draft events always keep QR passes unpublished.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={publishQrPass}
+                    onChange={(e) => setPublishQrPass(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-[#E5E5EA] rounded-full peer peer-checked:bg-[#0B0B0B] after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+                </label>
               </div>
 
               <div className="flex flex-wrap items-center justify-end gap-3 pt-2">

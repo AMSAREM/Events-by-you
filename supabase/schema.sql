@@ -129,8 +129,12 @@ create table if not exists public.events (
   flyer_url text,
   venue_format text default 'in-person' check (venue_format in ('in-person', 'virtual', 'hybrid')),
   sender_id text,
+  qr_pass_published boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+alter table public.events
+  add column if not exists qr_pass_published boolean not null default false;
 
 create index if not exists idx_events_organizer on public.events(organizer_id);
 create index if not exists idx_events_status on public.events(status);
@@ -252,17 +256,42 @@ drop policy if exists "Organizers can delete own events" on public.events;
 create policy "Organizers can delete own events" on public.events
   for delete using ((auth.uid() = organizer_id and public.current_app_role() in ('creator', 'organizer')) or public.is_creator());
 
--- Attendees RLS (strict organizer access for list/check-in)
+-- Attendees RLS (strict creator/owner access for publishing QR passes & managing roster)
 drop policy if exists "Organizers can manage attendees of own events" on public.attendees;
 create policy "Organizers can manage attendees of own events" on public.attendees
-  for all using (
+  for select using (
     exists (
       select 1 from public.events e
       where e.id = attendees.event_id and e.organizer_id = auth.uid()
     )
-  )
-  with check (
+  );
+
+drop policy if exists "Event creators can issue attendee QR passes" on public.attendees;
+create policy "Event creators can issue attendee QR passes" on public.attendees
+  for insert with check (
+    public.current_app_role() in ('creator', 'organizer')
+    and exists (
+      select 1 from public.events e
+      where e.id = attendees.event_id
+        and e.organizer_id = auth.uid()
+        and e.qr_pass_published = true
+    )
+  );
+
+drop policy if exists "Organizers can update attendee check-ins" on public.attendees;
+create policy "Organizers can update attendee check-ins" on public.attendees
+  for update using (
     exists (
+      select 1 from public.events e
+      where e.id = attendees.event_id and e.organizer_id = auth.uid()
+    )
+  );
+
+drop policy if exists "Event creators can remove attendees" on public.attendees;
+create policy "Event creators can remove attendees" on public.attendees
+  for delete using (
+    public.current_app_role() in ('creator', 'organizer')
+    and exists (
       select 1 from public.events e
       where e.id = attendees.event_id and e.organizer_id = auth.uid()
     )
@@ -344,6 +373,10 @@ begin
   select * into v_event from public.events where id = p_event_id and status in ('live', 'upcoming') for update;
   if not found then
     raise exception 'Event not found or not open for registration';
+  end if;
+
+  if not v_event.qr_pass_published then
+    raise exception 'QR_PASS_NOT_PUBLISHED:%', v_event.title;
   end if;
 
   if exists (select 1 from public.attendees where event_id = p_event_id and phone = p_phone) then

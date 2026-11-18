@@ -52,7 +52,7 @@ import {
 } from './server/helpers.ts';
 import { createMemoryRouter } from './server/memoryRoutes.ts';
 import { createBuilderRouter } from './server/builderRoutes.ts';
-import { platformRuntime } from './server/memoryStore.ts';
+import { memoryStore, platformRuntime } from './server/memoryStore.ts';
 
 function sha256Hex(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -245,6 +245,82 @@ async function createAppServer() {
   const app = express();
   app.use(express.json({ limit: '15mb' }));
 
+  app.get(['/robots.txt', '/robot.txt'], (req, res) => {
+    const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
+    const host = (req.headers['x-forwarded-host'] as string) || req.get('host') || 'localhost:3000';
+    const baseUrl = (process.env.APP_URL || `${proto}://${host}`).replace(/\/+$/, '');
+    res.type('text/plain; charset=utf-8').send(
+      [
+        'User-agent: *',
+        'Allow: /',
+        'Allow: /terms',
+        'Allow: /privacy',
+        'Disallow: /api/',
+        'Disallow: /studio',
+        'Disallow: /camera',
+        '',
+        `Sitemap: ${baseUrl}/sitemap.xml`,
+        '',
+      ].join('\n')
+    );
+  });
+
+  app.get('/sitemap.xml', async (req, res) => {
+    const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
+    const host = (req.headers['x-forwarded-host'] as string) || req.get('host') || 'localhost:3000';
+    const baseUrl = (process.env.APP_URL || `${proto}://${host}`).replace(/\/+$/, '');
+    const today = new Date().toISOString().split('T')[0];
+
+    let publicEvents: EventItem[] = [];
+    try {
+      if (isSupabaseConfigured()) {
+        const svc = createServiceSupabaseClient() ?? createPublicSupabaseClient();
+        const { data } = await svc
+          .from('events')
+          .select('*')
+          .in('status', ['live', 'upcoming'])
+          .order('iso_date', { ascending: true });
+        publicEvents = (data ?? []).map((r) => mapEventRow(r as Record<string, unknown>));
+      } else {
+        publicEvents = memoryStore.getPublicEvents();
+      }
+    } catch {
+      publicEvents = [];
+    }
+
+    const escapeXml = (str: string) =>
+      str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+
+    const staticPaths = [
+      { path: '/', changefreq: 'daily', priority: '1.0' },
+      { path: '/signin', changefreq: 'monthly', priority: '0.6' },
+      { path: '/signup', changefreq: 'monthly', priority: '0.7' },
+      { path: '/terms', changefreq: 'monthly', priority: '0.5' },
+      { path: '/privacy', changefreq: 'monthly', priority: '0.5' },
+    ];
+
+    const urlEntries = [
+      ...staticPaths.map(
+        (u) => `  <url>\n    <loc>${escapeXml(baseUrl + u.path)}</loc>\n    <lastmod>${today}</lastmod>\n    <changefreq>${u.changefreq}</changefreq>\n    <priority>${u.priority}</priority>\n  </url>`
+      ),
+      ...publicEvents.map(
+        (evt) =>
+          `  <url>\n    <loc>${escapeXml(`${baseUrl}/?event=${encodeURIComponent(evt.slug || evt.id)}`)}</loc>\n    <lastmod>${escapeXml(evt.isoDate || today)}</lastmod>\n    <changefreq>daily</changefreq>\n    <priority>0.8</priority>\n  </url>`
+      ),
+    ];
+
+    res
+      .type('application/xml; charset=utf-8')
+      .send(
+        `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urlEntries.join('\n')}\n</urlset>\n`
+      );
+  });
+
   app.get('/api/health', (_req, res) => {
     const creator = getCreatorCredentials();
     const configured = isSupabaseConfigured();
@@ -255,6 +331,7 @@ async function createAppServer() {
       inMemoryFallback: !configured,
       creatorEmail: creator.email,
       creatorPasswordConfigured: creator.configured,
+      sessionTimeoutMinutes: 30,
       timestamp: new Date().toISOString(),
     });
   });
@@ -795,6 +872,11 @@ async function createAppServer() {
         });
 
         if (rpcErr) {
+          if (rpcErr.message.includes('QR_PASS_NOT_PUBLISHED:')) {
+            return res.status(403).json({
+              error: 'Check-in QR passes have not been published by the event creator yet.',
+            });
+          }
           if (rpcErr.message.includes('DUPLICATE_PHONE:')) {
             platformRuntime.recordDuplicateBlock(eventId);
             return res.status(409).json({
@@ -896,6 +978,7 @@ async function createAppServer() {
           flyer_url: evt.flyerUrl ?? null,
           venue_format: evt.venueFormat ?? 'in-person',
           sender_id: evt.senderId ?? null,
+          qr_pass_published: evt.qrPassPublished ?? evt.status !== 'draft',
         }));
 
       let idSuffix = user.id.slice(0, 6);
@@ -1121,6 +1204,7 @@ async function createAppServer() {
         flyer_url: event.flyerUrl ?? null,
         venue_format: event.venueFormat ?? 'in-person',
         sender_id: event.senderId ?? null,
+        qr_pass_published: event.status === 'draft' ? false : Boolean(event.qrPassPublished),
       };
 
       const { data: createdEvt, error: evtErr } = await client
@@ -1164,28 +1248,35 @@ async function createAppServer() {
   app.patch('/api/studio/events/:id', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const updated = req.body as EventItem;
     try {
+      const updatePayload: Record<string, unknown> = {
+        slug: updated.slug,
+        title: updated.title,
+        subtitle: updated.subtitle,
+        category: updated.category,
+        status: updated.status,
+        date: updated.date,
+        iso_date: updated.isoDate,
+        time: updated.time,
+        venue: updated.venue,
+        city: updated.city,
+        capacity: updated.capacity,
+        ticket_price: updated.ticketPrice,
+        organizer: updated.organizer,
+        artwork: updated.artwork,
+        broadcast_error: updated.broadcastError ?? null,
+        flyer_url: updated.flyerUrl ?? null,
+        venue_format: updated.venueFormat ?? 'in-person',
+        sender_id: updated.senderId ?? null,
+      };
+      if (updated.status === 'draft') {
+        updatePayload.qr_pass_published = false;
+      } else if (updated.qrPassPublished !== undefined) {
+        updatePayload.qr_pass_published = Boolean(updated.qrPassPublished);
+      }
+
       const { data, error } = await req
         .supabase!.from('events')
-        .update({
-          slug: updated.slug,
-          title: updated.title,
-          subtitle: updated.subtitle,
-          category: updated.category,
-          status: updated.status,
-          date: updated.date,
-          iso_date: updated.isoDate,
-          time: updated.time,
-          venue: updated.venue,
-          city: updated.city,
-          capacity: updated.capacity,
-          ticket_price: updated.ticketPrice,
-          organizer: updated.organizer,
-          artwork: updated.artwork,
-          broadcast_error: updated.broadcastError ?? null,
-          flyer_url: updated.flyerUrl ?? null,
-          venue_format: updated.venueFormat ?? 'in-person',
-          sender_id: updated.senderId ?? null,
-        })
+        .update(updatePayload)
         .eq('id', req.params.id)
         .eq('organizer_id', req.user!.id)
         .select('*')
@@ -1194,6 +1285,45 @@ async function createAppServer() {
       return res.json({ event: mapEventRow(data as Record<string, unknown>) });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update event.';
+      return res.status(500).json({ error: message });
+    }
+  });
+
+  app.patch('/api/studio/events/:id/qr-pass', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    const published = Boolean((req.body as { published?: boolean })?.published);
+    try {
+      const client = req.supabase!;
+      const { data: evt, error: fetchErr } = await client
+        .from('events')
+        .select('*')
+        .eq('id', req.params.id)
+        .maybeSingle();
+      if (fetchErr || !evt) {
+        return res.status(404).json({ error: 'Event not found.' });
+      }
+      const evtRec = evt as Record<string, unknown>;
+      if (String(evtRec.organizer_id) !== req.user!.id) {
+        return res.status(403).json({
+          error: 'Only the event creator can publish or unpublish check-in QR passes.',
+        });
+      }
+      if (published && evtRec.status === 'draft') {
+        return res.status(400).json({
+          error: 'Publish the event before publishing check-in QR passes.',
+        });
+      }
+
+      const { data: updated, error: updErr } = await client
+        .from('events')
+        .update({ qr_pass_published: published })
+        .eq('id', req.params.id)
+        .eq('organizer_id', req.user!.id)
+        .select('*')
+        .single();
+      if (updErr) return res.status(400).json({ error: updErr.message });
+      return res.json({ event: mapEventRow(updated as Record<string, unknown>) });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update check-in QR pass status.';
       return res.status(500).json({ error: message });
     }
   });
@@ -1213,7 +1343,7 @@ async function createAppServer() {
     }
   });
 
-  app.post('/api/studio/events/:eventId/attendees', requireSupabaseAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
+  app.post('/api/studio/events/:eventId/attendees', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const attendee = req.body as Attendee;
     const { eventId } = req.params;
     try {
@@ -1222,10 +1352,20 @@ async function createAppServer() {
         .from('events')
         .select('*')
         .eq('id', eventId)
-        .eq('organizer_id', req.user!.id)
-        .single();
+        .maybeSingle();
       if (evtFetchErr || !evt) {
         return res.status(404).json({ error: 'Event not found in your organizer studio.' });
+      }
+      const evtCheckRec = evt as Record<string, unknown>;
+      if (String(evtCheckRec.organizer_id) !== req.user!.id) {
+        return res.status(403).json({
+          error: 'Only the event creator can issue check-in QR passes for this event.',
+        });
+      }
+      if (evtCheckRec.qr_pass_published === false) {
+        return res.status(403).json({
+          error: 'Check-in QR passes have not been published yet. Publish the Check-In QR Pass as the event creator first.',
+        });
       }
 
       const normalizedPhone = normalizePhoneE164(attendee.phone);

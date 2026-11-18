@@ -36,13 +36,15 @@ interface LandingScreenProps {
   isSignedIn: boolean;
   onNavigateSignIn: (prefillEmail?: string) => void;
   onNavigateSignUp: (prefillEmail?: string) => void;
-  onNavigateDemoEvent: (eventId?: string) => void;
+  onCreateEvent?: () => void;
+  onNavigateDemoEvent: (eventId?: string, focusSection?: 'top' | 'register') => void;
   onNavigateStudio: () => void;
   onSignOut?: () => void;
   onOpenQrScanner?: (eventId?: string) => void;
   onOpenDisposableCamera?: (eventId?: string) => void;
   onUpgradePro?: () => void;
   onQuickStartEmail: (email: string) => void;
+  onOpenLegal?: (doc: 'terms' | 'privacy') => void;
 }
 
 const SHOWCASE_CARDS = [
@@ -85,6 +87,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
   isSignedIn,
   onNavigateSignIn,
   onNavigateSignUp,
+  onCreateEvent,
   onNavigateDemoEvent,
   onNavigateStudio,
   onSignOut,
@@ -92,6 +95,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
   onOpenDisposableCamera,
   onUpgradePro,
   onQuickStartEmail,
+  onOpenLegal,
 }) => {
   const [quickEmail, setQuickEmail] = useState('');
   const [quickSent, setQuickSent] = useState(false);
@@ -160,7 +164,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
   );
 
   return (
-    <div className="min-h-screen bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col">
+    <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col overflow-x-clip">
       {/* FIXED TOP HEADER */}
       <header className="fixed top-0 inset-x-0 w-full z-50 bg-[#F5F5F7]/88 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] pt-[env(safe-area-inset-top)]">
         <div className="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-10 xl:px-12 py-2.5 md:py-0 md:h-20 flex flex-wrap md:flex-nowrap items-center justify-between gap-x-2.5 sm:gap-x-4 lg:gap-x-6 gap-y-2">
@@ -233,19 +237,21 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => (isSignedIn ? onNavigateStudio() : onNavigateSignUp())}
+              onClick={() =>
+                onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignIn()
+              }
               className="inline-flex items-center justify-center bg-[#0B0B0B] text-white text-xs font-semibold px-3.5 sm:px-4 lg:px-5 py-2 sm:py-2.5 rounded-full hover:bg-neutral-800 transition-colors shadow-[0_12px_32px_-8px_rgba(11,11,11,0.16)] whitespace-nowrap shrink-0"
             >
-              <span className="lg:hidden">{isSignedIn ? 'Studio' : 'Get Started'}</span>
+              <span className="lg:hidden">{isSignedIn ? 'Studio' : 'Create Event'}</span>
               <span className="hidden lg:inline">
-                {isSignedIn ? 'Open Studio' : 'Create Event / Get Started Free'}
+                {isSignedIn ? 'Open Studio' : 'Create Event (Sign In)'}
               </span>
             </button>
           </div>
         </div>
       </header>
 
-      <main className="w-full pt-[92px] sm:pt-[98px] md:pt-20 flex-1 overflow-x-clip">
+      <main className="w-full pt-[102px] sm:pt-[106px] md:pt-20 flex-1 overflow-x-clip">
         {/* SECTION 1: DARK IMMERSIVE HERO + INTERACTIVE EVENT FINDER */}
         <div className="relative w-full overflow-hidden">
           <section className="relative w-full overflow-hidden bg-[#0B0B0B] text-white">
@@ -264,8 +270,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </div>
             )}
 
-            <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 xl:px-12 pt-10 sm:pt-14 md:pt-16 lg:pt-20 pb-12 sm:pb-16 lg:pb-20">
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 sm:gap-10 lg:gap-12 xl:gap-14 items-center">
+            <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 xl:px-12 pt-8 sm:pt-12 md:pt-14 pb-10 sm:pb-14 lg:pb-16">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-7 sm:gap-9 lg:gap-12 items-center">
                 {/* Left 7 Columns: Headline, Check-In & QR Scanner CTAs, Categories & Partners */}
                 <div className="lg:col-span-7 flex flex-col justify-between min-w-0">
                   <p className="text-[11px] sm:text-xs font-semibold text-zinc-300 tracking-wide mb-3 sm:mb-5">
@@ -317,11 +323,15 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => onNavigateDemoEvent(topMatchedEvent.id)}
-                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/15 text-white hover:bg-white/25 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border border-white/20 backdrop-blur-md transition-all whitespace-nowrap shrink-0"
+                      onClick={() => onNavigateDemoEvent(topMatchedEvent.id, 'register')}
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/15 text-white hover:bg-white/25 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border border-white/20 backdrop-blur-md transition-all whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       <UserPlus className="w-4 h-4" />
-                      <span>Check-In Registration</span>
+                      <span>
+                        {topMatchedEvent.qrPassPublished === false
+                          ? 'Check-In Registration (Pending)'
+                          : 'Check-In Registration'}
+                      </span>
                     </button>
                     {onOpenDisposableCamera && (
                       <button
@@ -335,7 +345,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     )}
                     <button
                       type="button"
-                      onClick={() => (isSignedIn ? onNavigateStudio() : onNavigateSignUp())}
+                      onClick={() =>
+                        onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignIn()
+                      }
                       className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-transparent text-white/85 hover:text-white text-xs font-semibold px-4 py-3 sm:py-3.5 rounded-full transition-colors whitespace-nowrap shrink-0"
                     >
                       <span>Create Your Event</span>
@@ -492,11 +504,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                       <div className="pt-2 text-center border-t border-[#E5E5EA]">
                         <button
                           type="button"
-                          onClick={() => (isSignedIn ? onNavigateStudio() : onNavigateSignUp())}
+                          onClick={() =>
+                            onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignIn()
+                          }
                           className="text-xs text-[#71717A] hover:text-[#0B0B0B] transition-colors inline-flex items-center gap-1"
                         >
                           <span className="text-[#0B0B0B] font-semibold">Organizing an event?</span>
-                          <span>Create in 2 minutes</span>
+                          <span>Sign in to create in 2 minutes</span>
                           <ArrowRight className="w-3.5 h-3.5" />
                         </button>
                       </div>
@@ -1736,7 +1750,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
 
       {/* FOOTER */}
       <footer className="w-full bg-[#F3F3F5] border-t border-[#E5E5EA]">
-        <div className="max-w-7xl mx-auto px-6 lg:px-12 pt-10 pb-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 xl:px-12 pt-10 pb-8">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-8 pb-8">
             <div className="lg:col-span-2 flex flex-col gap-4">
               <div className="flex items-center gap-2">
@@ -1856,10 +1870,27 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
 
           <div className="pt-4 border-t border-[#E5E5EA] flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-[#71717A]">
             <p>© 2026 Events App Inc. Built for weddings, funerals, church, musical, corporate &amp; tech gatherings.</p>
-            <div className="flex items-center gap-6">
-              <span>Privacy</span>
-              <span>Compliance</span>
-              <span>System Status</span>
+            <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6">
+              <button
+                type="button"
+                onClick={() => onOpenLegal?.('terms')}
+                className="hover:text-[#0B0B0B] transition-colors"
+              >
+                Terms &amp; Conditions
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenLegal?.('privacy')}
+                className="hover:text-[#0B0B0B] transition-colors"
+              >
+                Privacy Policy
+              </button>
+              <a href="/sitemap.xml" className="hover:text-[#0B0B0B] transition-colors">
+                Sitemap
+              </a>
+              <a href="/robots.txt" className="hover:text-[#0B0B0B] transition-colors">
+                Robots
+              </a>
             </div>
           </div>
         </div>

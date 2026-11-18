@@ -133,6 +133,10 @@ export function mapEventRow(row: Record<string, unknown>): EventItem {
     venueFormat:
       (row.venue_format as EventItem['venueFormat']) || 'in-person',
     senderId: row.sender_id != null ? String(row.sender_id) : undefined,
+    qrPassPublished:
+      row.qr_pass_published !== undefined
+        ? Boolean(row.qr_pass_published)
+        : (row.status as EventItem['status']) !== 'draft',
   };
 }
 

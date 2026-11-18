@@ -333,6 +333,13 @@ export const api = {
         true
       ),
 
+    publishQrPass: (eventId: string, published: boolean) =>
+      request<{ event: EventItem }>(
+        `/api/studio/events/${encodeURIComponent(eventId)}/qr-pass`,
+        { method: 'PATCH', body: JSON.stringify({ published }) },
+        true
+      ),
+
     deleteEvent: (eventId: string) =>
       request<{ ok: boolean }>(
         `/api/studio/events/${encodeURIComponent(eventId)}`,

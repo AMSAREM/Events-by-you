@@ -47,10 +47,13 @@ export interface MemoryUser {
   createdAt: string;
 }
 
+export const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
 export interface MemorySession {
   accessToken: string;
   refreshToken: string;
   expiresAt: number;
+  lastActivityAt: number;
   userId: string;
 }
 
@@ -177,7 +180,13 @@ function createMemorySession(userId: string): MemorySession {
   const accessToken = `mem_acc_${crypto.randomBytes(24).toString('hex')}`;
   const refreshToken = `mem_ref_${crypto.randomBytes(24).toString('hex')}`;
   const expiresAt = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
-  const session: MemorySession = { accessToken, refreshToken, expiresAt, userId };
+  const session: MemorySession = {
+    accessToken,
+    refreshToken,
+    expiresAt,
+    lastActivityAt: Date.now(),
+    userId,
+  };
   db.sessionsByAccessToken.set(accessToken, session);
   db.sessionsByRefreshToken.set(refreshToken, session);
   return session;
@@ -578,11 +587,13 @@ export const memoryStore = {
   getUserByAccessToken(accessToken: string): MemoryUser | null {
     const session = db.sessionsByAccessToken.get(accessToken);
     if (!session) return null;
-    if (session.expiresAt * 1000 < Date.now()) {
+    const nowMs = Date.now();
+    if (session.expiresAt * 1000 < nowMs || nowMs - session.lastActivityAt > SESSION_IDLE_TIMEOUT_MS) {
       db.sessionsByAccessToken.delete(accessToken);
       db.sessionsByRefreshToken.delete(session.refreshToken);
       return null;
     }
+    session.lastActivityAt = nowMs;
     const user = db.users.get(session.userId) ?? null;
     if (!user || user.suspended) return null;
     return user;
@@ -614,6 +625,9 @@ export const memoryStore = {
     const evt = db.events.get(payload.eventId);
     if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
       throw new Error('Event not found or not open for registration.');
+    }
+    if (evt.qrPassPublished === false) {
+      throw new Error(`QR_PASS_NOT_PUBLISHED:${evt.title}`);
     }
 
     const normalizedPhone = normalizePhoneE164(payload.phone);
@@ -735,6 +749,7 @@ export const memoryStore = {
       ...event,
       id: uniqueEventId,
       slug: uniqueSlug,
+      qrPassPublished: event.status === 'draft' ? false : Boolean(event.qrPassPublished),
     };
     db.events.set(uniqueEventId, { ...created, organizerId: userId });
 
@@ -750,17 +765,54 @@ export const memoryStore = {
 
   updateEvent(userId: string, eventId: string, updated: EventItem): EventItem {
     const existing = db.events.get(eventId);
-    if (!existing || existing.organizerId !== userId) {
-      throw new Error('Event not found.');
+    if (!existing) {
+      const err = new Error('Event not found.');
+      (err as Error & { status?: number }).status = 404;
+      throw err;
     }
+    if (existing.organizerId !== userId) {
+      const err = new Error('Only the event creator can update this event.');
+      (err as Error & { status?: number }).status = 403;
+      throw err;
+    }
+    const nextStatus = updated.status ?? existing.status;
     const next = {
       ...existing,
       ...updated,
       id: eventId,
       organizerId: userId,
+      qrPassPublished:
+        nextStatus === 'draft'
+          ? false
+          : updated.qrPassPublished !== undefined
+            ? Boolean(updated.qrPassPublished)
+            : Boolean(existing.qrPassPublished),
     };
     db.events.set(eventId, next);
     const { organizerId: _org, ...clean } = next;
+    return clean;
+  },
+
+  publishQrPass(userId: string, eventId: string, published: boolean): EventItem {
+    const existing = db.events.get(eventId);
+    if (!existing) {
+      const err = new Error('Event not found.');
+      (err as Error & { status?: number }).status = 404;
+      throw err;
+    }
+    if (existing.organizerId !== userId) {
+      const err = new Error('Only the event creator can publish or unpublish check-in QR passes.');
+      (err as Error & { status?: number }).status = 403;
+      throw err;
+    }
+    if (published && existing.status === 'draft') {
+      const err = new Error('Publish the event before publishing check-in QR passes.');
+      (err as Error & { status?: number }).status = 400;
+      throw err;
+    }
+    existing.qrPassPublished = Boolean(published);
+    db.events.set(eventId, existing);
+    const { organizerId: _org, ...clean } = existing;
     return clean;
   },
 
@@ -784,8 +836,22 @@ export const memoryStore = {
 
   registerStudioAttendee(userId: string, eventId: string, attendee: Attendee) {
     const evt = db.events.get(eventId);
-    if (!evt || evt.organizerId !== userId) {
-      throw new Error('Event not found in your organizer studio.');
+    if (!evt) {
+      const err = new Error('Event not found in your organizer studio.');
+      (err as Error & { status?: number }).status = 404;
+      throw err;
+    }
+    if (evt.organizerId !== userId) {
+      const err = new Error('Only the event creator can issue check-in QR passes for this event.');
+      (err as Error & { status?: number }).status = 403;
+      throw err;
+    }
+    if (evt.qrPassPublished === false) {
+      const err = new Error(
+        'Check-in QR passes have not been published yet. Publish the Check-In QR Pass as the event creator first.'
+      );
+      (err as Error & { status?: number }).status = 403;
+      throw err;
     }
     const normalizedPhone = normalizePhoneE164(attendee.phone);
     const duplicate = Array.from(db.attendees.values()).find(

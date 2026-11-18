@@ -23,6 +23,7 @@ interface ResetPasswordScreenProps {
   onBackSignIn: () => void;
   onProceedToOtp: (email: string) => void;
   onNavigateDemoEvent: () => void;
+  onOpenLegal?: (doc: 'terms' | 'privacy') => void;
 }
 
 export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
@@ -31,6 +32,7 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
   onBackSignIn,
   onProceedToOtp,
   onNavigateDemoEvent,
+  onOpenLegal,
 }) => {
   const [method, setMethod] = useState<'email' | 'sms'>('email');
   const [contactValue, setContactValue] = useState(initialEmail || 'amoakoimml@gmail.com');
@@ -63,10 +65,10 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
   };
 
   return (
-    <div className="bg-[#F9F9FB] text-[#1A1C1D] min-h-screen flex flex-col justify-between selection:bg-[#0B0B0B] selection:text-white">
+    <div className="bg-[#F9F9FB] text-[#1A1C1D] min-h-dvh w-full max-w-full flex flex-col justify-between overflow-x-clip selection:bg-[#0B0B0B] selection:text-white">
       {/* Header */}
-      <header className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
-        <div className="h-16 max-w-7xl mx-auto px-6 flex items-center justify-between">
+      <header className="fixed top-0 inset-x-0 z-50 bg-white/80 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] pt-[env(safe-area-inset-top)]">
+        <div className="h-16 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3">
           <button
             type="button"
             onClick={onBackHome}
@@ -103,13 +105,13 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
         </div>
       </header>
 
-      <main className="w-full pt-16 flex-1 flex flex-col items-center justify-center px-3 md:px-6">
-        <div className="w-full max-w-7xl mx-auto py-6 md:py-10">
+      <main className="w-full pt-16 flex-1 flex flex-col justify-center px-4 sm:px-6 lg:px-8">
+        <div className="w-full max-w-2xl lg:max-w-6xl mx-auto py-5 sm:py-7 lg:py-8">
           {/* Top Status Banner Pill */}
           <div className="w-full mb-6">
-            <div className="bg-[#F5F5F7] rounded-full px-5 py-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 shadow-sm">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[#0B0B0B]" />
+            <div className="bg-[#F5F5F7] rounded-2xl sm:rounded-full px-4 sm:px-5 py-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 shadow-sm">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-2 h-2 rounded-full bg-[#0B0B0B] shrink-0" />
                 <span className="text-[11px] font-semibold tracking-wider uppercase text-[#1A1C1D]">
                   DIRECT CARRIER ROUTES &amp; SUPABASE AUTH RECOVERY: 100% OPERATIONAL
                 </span>
@@ -117,7 +119,7 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
               <button
                 type="button"
                 onClick={onBackSignIn}
-                className="inline-flex items-center gap-1 text-xs font-semibold text-[#1A1C1D] hover:text-[#0B0B0B] transition-colors whitespace-nowrap"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-[#1A1C1D] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
               >
                 <span>Remember your password? Sign in to studio</span>
                 <ArrowRight className="w-4 h-4" />
@@ -126,9 +128,9 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
           </div>
 
           {/* Two-Column Asymmetrical Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-6 items-start">
             {/* Left Column: Primary Recovery Card */}
-            <section className="lg:col-span-7 bg-white rounded-[28px] p-6 sm:p-8 shadow-[0_12px_32px_-8px_rgba(11,11,11,0.06)] flex flex-col">
+            <section className="lg:col-span-7 bg-white rounded-[28px] p-5 sm:p-7 lg:p-8 shadow-[0_12px_32px_-8px_rgba(11,11,11,0.06)] flex flex-col min-w-0">
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#F5F5F7] w-fit mb-4">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#0B0B0B]" />
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-[#1A1C1D]">
@@ -409,12 +411,26 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
       </main>
 
       <footer className="w-full bg-white border-t border-[#E5E5EA] py-5">
-        <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-2 text-[11px] text-[#71717A]">
-          <p>© 2025 Events App Inc. All rights reserved.</p>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-2 text-[11px] text-[#71717A]">
+          <p>© 2026 Events App Inc. All rights reserved.</p>
           <div className="flex items-center gap-6">
-            <span>Privacy Policy</span>
-            <span>Terms of Service</span>
-            <span>Support</span>
+            <button
+              type="button"
+              onClick={() => onOpenLegal?.('privacy')}
+              className="hover:text-[#0B0B0B] transition-colors"
+            >
+              Privacy Policy
+            </button>
+            <button
+              type="button"
+              onClick={() => onOpenLegal?.('terms')}
+              className="hover:text-[#0B0B0B] transition-colors"
+            >
+              Terms &amp; Conditions
+            </button>
+            <a href="/sitemap.xml" className="hover:text-[#0B0B0B] transition-colors">
+              Sitemap
+            </a>
           </div>
         </div>
       </footer>
