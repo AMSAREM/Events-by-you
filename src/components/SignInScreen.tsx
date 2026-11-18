@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  AlertCircle,
   ArrowRight,
   Check,
   Eye,
@@ -8,37 +9,123 @@ import {
   Mail,
   ShieldCheck,
   Star,
+  Terminal,
   User,
 } from 'lucide-react';
+import {
+  api,
+  saveStoredCreatorToken,
+  saveStoredSession,
+  type StoredAuthSession,
+} from '../lib/api';
+import type { OrganizerProfile } from '../types/events';
 
 interface SignInScreenProps {
   initialEmail?: string;
+  redirectNotice?: string;
+  creatorEmail?: string;
   onBackHome: () => void;
   onNavigateDemoEvent: () => void;
   onForgotPassword: (email: string) => void;
   onGoSignUp: (email: string) => void;
-  onSubmitCredentials: (email: string) => void;
-  onAuthenticated: (email: string, name?: string) => void;
+  onRequireOtp: (email: string, otpType: 'signup' | 'email') => void;
+  onAuthenticated: (
+    session: StoredAuthSession,
+    profile: OrganizerProfile,
+    openCreatorConsole?: boolean
+  ) => void;
 }
 
 export const SignInScreen: React.FC<SignInScreenProps> = ({
   initialEmail = '',
+  redirectNotice,
+  creatorEmail = 'amoakoimml@gmail.com',
   onBackHome,
   onNavigateDemoEvent,
   onForgotPassword,
   onGoSignUp,
-  onSubmitCredentials,
+  onRequireOtp,
   onAuthenticated,
 }) => {
-  const [email, setEmail] = useState(initialEmail || 'josh@techleaders.africa');
-  const [password, setPassword] = useState('••••••••••••');
+  const [loginMode, setLoginMode] = useState<'organiser' | 'creator'>('organiser');
+  const [email, setEmail] = useState(initialEmail || creatorEmail);
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberDevice, setRememberDevice] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [sendingOtp, setSendingOtp] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState<'google' | 'github' | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) return;
-    onSubmitCredentials(email.trim());
+    if (!email.trim() || !password) return;
+    setSubmitting(true);
+    setErrorMsg(null);
+    try {
+      if (loginMode === 'creator') {
+        const res = await api.auth.creatorLogin(email.trim(), password);
+        if (res.creatorToken) {
+          saveStoredCreatorToken(res.creatorToken);
+        }
+        if (res.requiresOtp) {
+          onRequireOtp(res.email || email.trim(), res.otpType || 'signup');
+          return;
+        }
+        if (res.session && res.profile) {
+          saveStoredSession(res.session);
+          onAuthenticated(res.session, res.profile, true);
+        } else {
+          setErrorMsg('Unable to open Apps Creator session.');
+        }
+      } else {
+        const res = await api.auth.signIn(email.trim(), password);
+        if (res.requiresOtp) {
+          onRequireOtp(res.email || email.trim(), res.otpType || 'signup');
+          return;
+        }
+        if (res.session && res.profile) {
+          saveStoredSession(res.session);
+          onAuthenticated(res.session, res.profile, false);
+        } else {
+          setErrorMsg('Unable to complete sign-in. Please verify your email and password.');
+        }
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Sign-in failed.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleSendOtp = async () => {
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setErrorMsg('Enter your creator email address first.');
+      return;
+    }
+    setSendingOtp(true);
+    setErrorMsg(null);
+    try {
+      await api.auth.sendOtp(cleanEmail);
+      onRequireOtp(cleanEmail, 'email');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to send 6-digit email code.');
+    } finally {
+      setSendingOtp(false);
+    }
+  };
+
+  const handleOAuth = async (provider: 'google' | 'github') => {
+    setOauthLoading(provider);
+    setErrorMsg(null);
+    try {
+      const { url } = await api.auth.getOAuthUrl(provider, window.location.origin);
+      window.location.assign(url);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'OAuth login failed.');
+      setOauthLoading(null);
+    }
   };
 
   return (
@@ -96,18 +183,68 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                   <span className="tracking-wide uppercase">Events App Creator Access</span>
                 </div>
 
+                {redirectNotice && (
+                  <div className="mb-5 p-3.5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-start gap-2.5 text-xs text-[#0B0B0B]">
+                    <Lock className="w-4 h-4 shrink-0 mt-0.5 text-[#0B0B0B]" />
+                    <div className="min-w-0">
+                      <p className="font-semibold">
+                        Sign in required for {redirectNotice}
+                      </p>
+                      <p className="text-[11px] text-[#71717A] mt-0.5">
+                        All event modules are reserved for signed-in users managing their events. Sign in below to continue directly to {redirectNotice}.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 <h1 className="font-display text-[32px] sm:text-[36px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.03em] mb-2">
-                  Welcome back, Organiser
+                  {loginMode === 'creator' ? 'Apps Creator Console Login' : 'Welcome back, Organiser'}
                 </h1>
-                <p className="text-sm text-[#71717A] mb-8">
-                  Sign in to manage your events, attendee rosters, and multi-channel SMS/Email broadcasts.
+                <p className="text-sm text-[#71717A] mb-5">
+                  {loginMode === 'creator'
+                    ? `Authenticate as the App Creator (${creatorEmail}) using CREATOR_PASSWORD.`
+                    : 'Sign in to manage your events, attendee rosters, and multi-channel SMS/Email broadcasts.'}
                 </p>
+
+                {/* Login Role Switch */}
+                <div className="flex items-center gap-1 p-1 bg-[#F5F5F7] rounded-xl mb-6 w-fit">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginMode('organiser');
+                      setErrorMsg(null);
+                    }}
+                    className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                      loginMode === 'organiser'
+                        ? 'bg-white text-[#0B0B0B] shadow-xs'
+                        : 'text-[#71717A] hover:text-[#0B0B0B]'
+                    }`}
+                  >
+                    Organiser Account
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginMode('creator');
+                      setEmail(creatorEmail);
+                      setErrorMsg(null);
+                    }}
+                    className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap ${
+                      loginMode === 'creator'
+                        ? 'bg-[#0B0B0B] text-white shadow-xs'
+                        : 'text-[#71717A] hover:text-[#0B0B0B]'
+                    }`}
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    App Creator (Developer)
+                  </button>
+                </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
 
                   <div>
                     <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5" htmlFor="email">
-                      Work Email
+                      {loginMode === 'creator' ? 'Creator Email' : 'Work Email'}
                     </label>
                     <div className="relative flex items-center">
                       <Mail className="w-4.5 h-4.5 text-[#71717A] absolute left-4 pointer-events-none" />
@@ -117,27 +254,31 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                         required
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
-                        placeholder="josh@techleaders.africa"
+                        placeholder={creatorEmail}
                         className="w-full bg-[#F5F5F7] rounded-full py-3.5 pl-11 pr-4 text-sm text-[#0B0B0B] placeholder:text-[#71717A] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#0B0B0B] transition-all"
                       />
                     </div>
                     <p className="text-[11px] text-[#71717A] mt-1.5 ml-3">
-                      Used for organizer dashboard access and critical broadcast delivery logs.
+                      {loginMode === 'creator'
+                        ? 'Verified against CREATOR_EMAIL and CREATOR_PASSWORD environment credentials.'
+                        : `Primary creator email: ${creatorEmail} · Sign in with password, 6-digit email code, or OAuth.`}
                     </p>
                   </div>
 
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-semibold text-[#0B0B0B]" htmlFor="password">
-                        Password
+                        {loginMode === 'creator' ? 'CREATOR_PASSWORD' : 'Password'}
                       </label>
-                      <button
-                        type="button"
-                        onClick={() => onForgotPassword(email.trim() || 'josh@techleaders.africa')}
-                        className="text-[11px] font-medium text-[#71717A] hover:text-[#0B0B0B] transition-colors"
-                      >
-                        Forgot password?
-                      </button>
+                      {loginMode === 'organiser' && (
+                        <button
+                          type="button"
+                          onClick={() => onForgotPassword(email.trim() || creatorEmail)}
+                          className="text-[11px] font-medium text-[#71717A] hover:text-[#0B0B0B] transition-colors"
+                        >
+                          Forgot password?
+                        </button>
+                      )}
                     </div>
                     <div className="relative flex items-center">
                       <Lock className="w-4.5 h-4.5 text-[#71717A] absolute left-4 pointer-events-none" />
@@ -182,16 +323,43 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                     </label>
                   </div>
 
+                  {errorMsg && (
+                    <div className="p-3.5 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 flex items-start gap-2.5 text-xs font-medium text-[#0B0B0B]">
+                      <AlertCircle className="w-4 h-4 text-[#EF4444] shrink-0 mt-0.5" />
+                      <span>{errorMsg}</span>
+                    </div>
+                  )}
+
                   <button
                     type="submit"
-                    className="w-full mt-2 bg-[#0B0B0B] text-white rounded-full py-3.5 px-6 text-sm font-semibold flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.99] transition-all"
+                    disabled={submitting || sendingOtp}
+                    className="w-full mt-2 bg-[#0B0B0B] text-white rounded-full py-3.5 px-6 text-sm font-semibold flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.99] transition-all disabled:opacity-60"
                   >
-                    <span>Sign In to Creator Studio</span>
+                    <span>
+                      {submitting
+                        ? 'Verifying...'
+                        : loginMode === 'creator'
+                          ? 'Unlock Apps Creator Console'
+                          : 'Sign In to Creator Studio'}
+                    </span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
-                  <p className="text-[11px] text-center text-[#71717A]">
-                    Preview mode: submit with prefilled credentials or use Google/GitHub for instant studio access.
-                  </p>
+
+                  {loginMode === 'organiser' && (
+                    <button
+                      type="button"
+                      disabled={submitting || sendingOtp}
+                      onClick={handleSendOtp}
+                      className="w-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] rounded-full py-3 px-6 text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-60"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      <span>
+                        {sendingOtp
+                          ? 'Sending 6-Digit Code...'
+                          : 'Send 6-Digit Email Login Code (Passwordless)'}
+                      </span>
+                    </button>
+                  )}
                 </form>
 
                 {/* Divider */}
@@ -206,8 +374,9 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-6">
                   <button
                     type="button"
-                    onClick={() => onAuthenticated(email || 'josh@techleaders.africa')}
-                    className="flex items-center justify-center gap-2 py-3 px-4 bg-[#F5F5F7] hover:bg-[#EEEEF0] rounded-full text-[#0B0B0B] text-xs font-semibold transition-colors"
+                    disabled={oauthLoading !== null}
+                    onClick={() => handleOAuth('google')}
+                    className="flex items-center justify-center gap-2 py-3 px-4 bg-[#F5F5F7] hover:bg-[#EEEEF0] rounded-full text-[#0B0B0B] text-xs font-semibold transition-colors disabled:opacity-60"
                   >
                     <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true">
                       <path
@@ -227,12 +396,13 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                         fill="#EA4335"
                       />
                     </svg>
-                    <span>Google</span>
+                    <span>{oauthLoading === 'google' ? 'Redirecting...' : 'Google'}</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => onAuthenticated(email || 'josh@techleaders.africa')}
-                    className="flex items-center justify-center gap-2 py-3 px-4 bg-[#F5F5F7] hover:bg-[#EEEEF0] rounded-full text-[#0B0B0B] text-xs font-semibold transition-colors"
+                    disabled={oauthLoading !== null}
+                    onClick={() => handleOAuth('github')}
+                    className="flex items-center justify-center gap-2 py-3 px-4 bg-[#F5F5F7] hover:bg-[#EEEEF0] rounded-full text-[#0B0B0B] text-xs font-semibold transition-colors disabled:opacity-60"
                   >
                     <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24" aria-hidden="true">
                       <path
@@ -241,7 +411,7 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                         d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
                       />
                     </svg>
-                    <span>GitHub</span>
+                    <span>{oauthLoading === 'github' ? 'Redirecting...' : 'GitHub'}</span>
                   </button>
                 </div>
               </div>

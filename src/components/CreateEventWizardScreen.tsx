@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -31,7 +31,7 @@ interface CreateEventWizardScreenProps {
   events: EventItem[];
   onCancel: () => void;
   onNavigateBilling: () => void;
-  onCreateEvent: (event: EventItem, blocks: ScheduleBlock[]) => void;
+  onCreateEvent: (event: EventItem, blocks: ScheduleBlock[]) => Promise<void> | void;
 }
 
 const DEFAULT_FLYER_URL =
@@ -119,6 +119,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const [enforceUniquePhone, setEnforceUniquePhone] = useState(true);
   const [autoCloseCap, setAutoCloseCap] = useState(true);
   const [copiedSlug, setCopiedSlug] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -126,8 +127,6 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const activeEventsCount = events.filter((e) => e.status === 'live' || e.status === 'upcoming').length;
   const activeEventSample = events.find((e) => e.status === 'live') ?? events[0];
   const isAtFreeLimit = isFreePlan && activeEventsCount >= 1;
-
-  const generatedEventId = useMemo(() => `evt-${Date.now()}`, []);
 
   const handleTitleChange = (val: string) => {
     setTitle(val);
@@ -301,46 +300,53 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     }
   };
 
-  const handleFinish = (publishStatus: 'upcoming' | 'draft') => {
-    const finalCap = isFreePlan ? Math.min(50, Math.max(10, capacity)) : Math.max(10, capacity);
-    const createdEvent: EventItem = {
-      id: generatedEventId,
-      slug: slug.trim() || 'new-event',
-      title: title.trim() || 'Untitled Production',
-      subtitle: overview.trim(),
-      category: category || tags[0] || 'Events',
-      status: publishStatus,
-      date: dateLabel.trim() || 'Dec 18, 2026',
-      isoDate: '2026-12-18',
-      time: timeLabel.trim() || '09:00 GMT',
-      venue: venueFormat === 'virtual' ? 'Livestream Stage' : venue.trim() || 'Main Auditorium',
-      city: city.trim() || 'Accra',
-      capacity: finalCap,
-      registered: 0,
-      checkedIn: 0,
-      smsDispatched: 0,
-      ticketPrice: Math.max(0, ticketPrice),
-      revenue: 0,
-      organizer: profile.studio || profile.name,
-      artwork,
-      flyerUrl: flyerUrl || undefined,
-      venueFormat,
-      senderId,
-    };
+  const handleFinish = async (publishStatus: 'upcoming' | 'draft') => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      const eventId = `evt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const finalCap = isFreePlan ? Math.min(50, Math.max(10, capacity)) : Math.max(10, capacity);
+      const createdEvent: EventItem = {
+        id: eventId,
+        slug: slug.trim() || 'new-event',
+        title: title.trim() || 'Untitled Production',
+        subtitle: overview.trim(),
+        category: category || tags[0] || 'Events',
+        status: publishStatus,
+        date: dateLabel.trim() || 'Dec 18, 2026',
+        isoDate: '2026-12-18',
+        time: timeLabel.trim() || '09:00 GMT',
+        venue: venueFormat === 'virtual' ? 'Livestream Stage' : venue.trim() || 'Main Auditorium',
+        city: city.trim() || 'Accra',
+        capacity: finalCap,
+        registered: 0,
+        checkedIn: 0,
+        smsDispatched: 0,
+        ticketPrice: Math.max(0, ticketPrice),
+        revenue: 0,
+        organizer: profile.studio || profile.name,
+        artwork,
+        flyerUrl: flyerUrl || undefined,
+        venueFormat,
+        senderId,
+      };
 
-    const createdBlocks: ScheduleBlock[] = draftBlocks.map((blk, i) => ({
-      id: `sch-${Date.now()}-${i}`,
-      eventId: generatedEventId,
-      time: blk.time,
-      duration: '60m',
-      title: blk.title,
-      stage: blk.stage,
-      lead: blk.lead,
-      completed: false,
-      day: 'Sat',
-    }));
+      const createdBlocks: ScheduleBlock[] = draftBlocks.map((blk, i) => ({
+        id: `sch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${i}`,
+        eventId,
+        time: blk.time,
+        duration: '60m',
+        title: blk.title,
+        stage: blk.stage,
+        lead: blk.lead,
+        completed: false,
+        day: 'Sat',
+      }));
 
-    onCreateEvent(createdEvent, createdBlocks);
+      await onCreateEvent(createdEvent, createdBlocks);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const steps = [
@@ -1039,17 +1045,19 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
               <div className="flex flex-wrap items-center justify-end gap-3 pt-2">
                 <button
                   type="button"
+                  disabled={submitting}
                   onClick={() => handleFinish('draft')}
-                  className="px-5 py-2.5 rounded-full bg-white text-[#0B0B0B] border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold transition-colors"
+                  className="px-5 py-2.5 rounded-full bg-white text-[#0B0B0B] border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold transition-colors disabled:opacity-50"
                 >
-                  Save as Draft
+                  {submitting ? 'Saving...' : 'Save as Draft'}
                 </button>
                 <button
                   type="button"
+                  disabled={submitting}
                   onClick={() => handleFinish('upcoming')}
-                  className="px-6 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold shadow-sm inline-flex items-center gap-2 transition-colors"
+                  className="px-6 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold shadow-sm inline-flex items-center gap-2 transition-colors disabled:opacity-50"
                 >
-                  <span>Publish Event Live</span>
+                  <span>{submitting ? 'Publishing...' : 'Publish Event Live'}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>

@@ -19,6 +19,7 @@ import {
   Verified,
   Wallet,
 } from 'lucide-react';
+import { api } from '../lib/api';
 import { EventItem, OrganizerProfile, SystemAlert } from '../types/events';
 
 interface SettingsScreenProps {
@@ -100,7 +101,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   // Password inline form
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [newPassword, setNewPassword] = useState('');
-  const [lastPasswordLabel, setLastPasswordLabel] = useState('Last changed 2 months ago (January 2026)');
+  const [updatingPassword, setUpdatingPassword] = useState(false);
+  const [lastPasswordLabel, setLastPasswordLabel] = useState('Manage your Supabase creator password');
 
   // Wallet & Webhook
   const [selectedBundleId, setSelectedBundleId] = useState('500');
@@ -639,24 +641,35 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                       type="password"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="Enter new 12+ char passphrase"
+                      placeholder="Enter new 6+ char creator password"
                       className="flex-1 h-10 px-4 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
                     />
                     <button
                       type="button"
-                      onClick={() => {
+                      disabled={updatingPassword}
+                      onClick={async () => {
                         if (newPassword.trim().length < 6) {
                           showToast('Enter at least 6 characters.');
                           return;
                         }
-                        setNewPassword('');
-                        setPasswordOpen(false);
-                        setLastPasswordLabel('Updated just now');
-                        showToast('Master password updated.');
+                        setUpdatingPassword(true);
+                        try {
+                          await api.auth.updatePassword(newPassword);
+                          setNewPassword('');
+                          setPasswordOpen(false);
+                          setLastPasswordLabel('Updated in Supabase Auth just now');
+                          showToast('Creator password updated in Supabase Auth.');
+                        } catch (err) {
+                          showToast(
+                            err instanceof Error ? err.message : 'Unable to update password.'
+                          );
+                        } finally {
+                          setUpdatingPassword(false);
+                        }
                       }}
-                      className="px-4 py-2 rounded-xl bg-[#0B0B0B] text-white text-xs font-semibold whitespace-nowrap"
+                      className="px-4 py-2 rounded-xl bg-[#0B0B0B] text-white text-xs font-semibold whitespace-nowrap disabled:opacity-60"
                     >
-                      Confirm Update
+                      {updatingPassword ? 'Updating...' : 'Confirm Update'}
                     </button>
                   </div>
                 )}

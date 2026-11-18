@@ -8,6 +8,7 @@ import {
   ChevronDown,
   Eye,
   EyeOff,
+  Lock,
   Mail,
   QrCode,
   Shield,
@@ -17,12 +18,17 @@ import {
   Zap,
 } from 'lucide-react';
 
+import { api, saveStoredSession, type StoredAuthSession } from '../lib/api';
+import type { OrganizerProfile } from '../types/events';
+
 interface SignUpScreenProps {
   initialEmail?: string;
+  redirectNotice?: string;
   onBackHome: () => void;
   onGoSignIn: () => void;
   onNavigateDemoEvent: () => void;
-  onAccountCreated: (email: string, name: string, org: string) => void;
+  onRequireOtp: (email: string, otpType: 'signup' | 'email') => void;
+  onAuthenticated: (session: StoredAuthSession, profile: OrganizerProfile) => void;
 }
 
 const KOJO_THUMBNAIL =
@@ -30,10 +36,12 @@ const KOJO_THUMBNAIL =
 
 export const SignUpScreen: React.FC<SignUpScreenProps> = ({
   initialEmail = '',
+  redirectNotice,
   onBackHome,
   onGoSignIn,
   onNavigateDemoEvent,
-  onAccountCreated,
+  onRequireOtp,
+  onAuthenticated,
 }) => {
   const [fullName, setFullName] = useState('');
   const [orgEmail, setOrgEmail] = useState(initialEmail);
@@ -43,6 +51,8 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [agreed, setAgreed] = useState(true);
   const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState<'google' | 'github' | null>(null);
   const [thumbFailed, setThumbFailed] = useState(false);
 
   const strength = useMemo(() => {
@@ -90,7 +100,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
     };
   }, [password, strength]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!fullName.trim()) {
       setFormError('Please enter your full name.');
@@ -100,16 +110,47 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
       setFormError('Please enter your work or organisation email.');
       return;
     }
+    if (password.length < 6) {
+      setFormError('Password must be at least 6 characters.');
+      return;
+    }
     if (!agreed) {
       setFormError('Please accept the Terms of Service & NCA SMS regulations to continue.');
       return;
     }
     setFormError(null);
-    onAccountCreated(
-      orgEmail.trim(),
-      fullName.trim(),
-      orgName.trim() || 'Accra Gatherings & Events Hub'
-    );
+    setSubmitting(true);
+    try {
+      const res = await api.auth.signUp({
+        email: orgEmail.trim(),
+        password,
+        name: fullName.trim(),
+        studio: orgName.trim() || 'Events Studio',
+        countryGateway,
+      });
+      if (res.session && res.profile) {
+        saveStoredSession(res.session);
+        onAuthenticated(res.session, res.profile);
+      } else {
+        onRequireOtp(res.email || orgEmail.trim(), res.otpType || 'signup');
+      }
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Unable to create account.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleOAuth = async (provider: 'google' | 'github') => {
+    setOauthLoading(provider);
+    setFormError(null);
+    try {
+      const { url } = await api.auth.getOAuthUrl(provider, window.location.origin);
+      window.location.assign(url);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'OAuth signup failed.');
+      setOauthLoading(null);
+    }
   };
 
   return (
@@ -195,6 +236,20 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                   FREE CREATOR ACCOUNT
                 </div>
 
+                {redirectNotice && (
+                  <div className="mb-5 p-3.5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-start gap-2.5 text-xs text-[#0B0B0B]">
+                    <Lock className="w-4 h-4 shrink-0 mt-0.5 text-[#0B0B0B]" />
+                    <div className="min-w-0">
+                      <p className="font-semibold">
+                        Create an account or sign in for {redirectNotice}
+                      </p>
+                      <p className="text-[11px] text-[#71717A] mt-0.5">
+                        You will be taken directly to {redirectNotice} once your account is verified.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 <h1 className="font-display text-[28px] sm:text-[36px] leading-tight text-[#0B0B0B] tracking-[-0.03em] mb-2 font-bold">
                   Start hosting events with high delivery
                 </h1>
@@ -235,7 +290,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                           required
                           value={orgEmail}
                           onChange={(e) => setOrgEmail(e.target.value)}
-                          placeholder="josh@techleaders.africa"
+                          placeholder="amoakoimml@gmail.com"
                           className="w-full bg-[#F5F5F7] rounded-full px-4 py-3 pr-10 text-sm text-[#0B0B0B] placeholder:text-[#71717A] outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-all"
                         />
                         <AtSign className="w-4 h-4 text-[#71717A] absolute right-3.5 top-3.5 pointer-events-none" />
@@ -362,9 +417,12 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
 
                   <button
                     type="submit"
-                    className="w-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-sm font-semibold rounded-full py-3.5 px-6 flex items-center justify-center gap-2 shadow-sm transition-transform active:scale-[0.99]"
+                    disabled={submitting}
+                    className="w-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-sm font-semibold rounded-full py-3.5 px-6 flex items-center justify-center gap-2 shadow-sm transition-transform active:scale-[0.99] disabled:opacity-60"
                   >
-                    <span>Create Free Organiser Account</span>
+                    <span>
+                      {submitting ? 'Creating Account...' : 'Create Free Organiser Account'}
+                    </span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
                 </form>
@@ -381,14 +439,9 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <button
                     type="button"
-                    onClick={() =>
-                      onAccountCreated(
-                        orgEmail || 'josh@eventsapp.africa',
-                        fullName || 'Josh Mensah',
-                        orgName || 'Accra Gatherings & Events Hub'
-                      )
-                    }
-                    className="w-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] rounded-full py-2.5 px-4 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+                    disabled={oauthLoading !== null}
+                    onClick={() => handleOAuth('google')}
+                    className="w-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] rounded-full py-2.5 px-4 text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-60"
                   >
                     <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true">
                       <path
@@ -408,23 +461,18 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                         fill="#EA4335"
                       />
                     </svg>
-                    Continue with Google
+                    {oauthLoading === 'google' ? 'Redirecting...' : 'Continue with Google'}
                   </button>
                   <button
                     type="button"
-                    onClick={() =>
-                      onAccountCreated(
-                        orgEmail || 'josh@eventsapp.africa',
-                        fullName || 'Josh Mensah',
-                        orgName || 'Accra Gatherings & Events Hub'
-                      )
-                    }
-                    className="w-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] rounded-full py-2.5 px-4 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+                    disabled={oauthLoading !== null}
+                    onClick={() => handleOAuth('github')}
+                    className="w-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] rounded-full py-2.5 px-4 text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-60"
                   >
                     <svg className="w-4 h-4 fill-current text-[#0B0B0B]" viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
                     </svg>
-                    Continue with GitHub
+                    {oauthLoading === 'github' ? 'Redirecting...' : 'Continue with GitHub'}
                   </button>
                 </div>
               </div>

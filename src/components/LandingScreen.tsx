@@ -5,6 +5,7 @@ import {
   Bolt,
   Calendar,
   CalendarPlus,
+  Camera,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -37,7 +38,9 @@ interface LandingScreenProps {
   onNavigateSignUp: (prefillEmail?: string) => void;
   onNavigateDemoEvent: (eventId?: string) => void;
   onNavigateStudio: () => void;
+  onSignOut?: () => void;
   onOpenQrScanner?: (eventId?: string) => void;
+  onOpenDisposableCamera?: (eventId?: string) => void;
   onUpgradePro?: () => void;
   onQuickStartEmail: (email: string) => void;
 }
@@ -84,7 +87,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
   onNavigateSignUp,
   onNavigateDemoEvent,
   onNavigateStudio,
+  onSignOut,
   onOpenQrScanner,
+  onOpenDisposableCamera,
   onUpgradePro,
   onQuickStartEmail,
 }) => {
@@ -157,21 +162,21 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
   return (
     <div className="min-h-screen bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col">
       {/* FIXED TOP HEADER */}
-      <header className="fixed top-0 w-full z-50 bg-[#F5F5F7]/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-12 py-2.5 md:py-0 md:h-20 flex flex-wrap md:flex-nowrap items-center justify-between gap-x-3 sm:gap-x-4 lg:gap-x-6 gap-y-2">
+      <header className="fixed top-0 inset-x-0 w-full z-50 bg-[#F5F5F7]/88 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] pt-[env(safe-area-inset-top)]">
+        <div className="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-10 xl:px-12 py-2.5 md:py-0 md:h-20 flex flex-wrap md:flex-nowrap items-center justify-between gap-x-2.5 sm:gap-x-4 lg:gap-x-6 gap-y-2">
           <button
             type="button"
             onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-            className="flex items-center gap-2 sm:gap-2.5 text-left shrink-0"
+            className="flex items-center gap-2 sm:gap-2.5 text-left shrink-0 min-w-0"
           >
             <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
               <Layers className="w-4 h-4" />
             </div>
-            <div className="flex flex-col">
+            <div className="flex flex-col min-w-0">
               <span className="font-display text-sm sm:text-base font-bold text-[#1A1C1D] tracking-tight leading-none whitespace-nowrap">
                 Events App
               </span>
-              <span className="hidden sm:block md:hidden lg:block text-[11px] font-medium text-[#71717A] whitespace-nowrap mt-0.5">
+              <span className="hidden sm:block md:hidden lg:block text-[11px] font-medium text-[#71717A] whitespace-nowrap mt-0.5 truncate">
                 Weddings · Church · Corporate · Tech
               </span>
             </div>
@@ -179,59 +184,52 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
 
           <nav
             aria-label="Primary navigation"
-            className="order-3 md:order-2 w-full md:w-auto min-w-0 flex items-center md:justify-center gap-4 lg:gap-7 overflow-x-auto border-t border-[#E5E5EA]/70 md:border-t-0 pt-2 md:pt-0 text-xs lg:text-sm"
+            className="order-3 md:order-2 w-full md:w-auto min-w-0 flex items-center md:justify-center gap-3.5 sm:gap-5 md:gap-4 lg:gap-7 overflow-x-auto border-t border-[#E5E5EA]/70 md:border-t-0 pt-2 md:pt-0 pb-0.5 md:pb-0 text-xs md:text-[13px] lg:text-sm"
           >
             <button
               type="button"
               onClick={() => scrollToSection('live-preview')}
-              className="text-[#0B0B0B] font-semibold whitespace-nowrap shrink-0"
+              className="text-[#0B0B0B] font-semibold whitespace-nowrap shrink-0 py-0.5"
             >
               Product
             </button>
             <button
               type="button"
               onClick={() => scrollToSection('how-it-works')}
-              className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
+              className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0 py-0.5"
             >
               How It Works
             </button>
             <button
               type="button"
               onClick={() => scrollToSection('features')}
-              className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
+              className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0 py-0.5"
             >
               Features
             </button>
             <button
               type="button"
               onClick={() => scrollToSection('pricing')}
-              className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
+              className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0 py-0.5"
             >
               Pricing
             </button>
             <button
               type="button"
               onClick={() => scrollToSection('community-showcase')}
-              className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
+              className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0 py-0.5"
             >
               Case Studies
             </button>
-            <button
-              type="button"
-              onClick={() => (isSignedIn ? onNavigateStudio() : onNavigateSignIn())}
-              className="sm:hidden text-[#0B0B0B] font-semibold whitespace-nowrap shrink-0 ml-auto"
-            >
-              {isSignedIn ? 'Open Studio' : 'Sign In'}
-            </button>
           </nav>
 
-          <div className="order-2 md:order-3 flex items-center gap-2 sm:gap-3 shrink-0">
+          <div className="order-2 md:order-3 flex items-center gap-1.5 sm:gap-2.5 lg:gap-3 shrink-0">
             <button
               type="button"
-              onClick={() => (isSignedIn ? onNavigateStudio() : onNavigateSignIn())}
-              className="hidden sm:inline-flex text-xs lg:text-sm font-medium text-[#444748] hover:text-[#0B0B0B] transition-colors px-2 lg:px-3 py-1.5 whitespace-nowrap shrink-0"
+              onClick={() => (isSignedIn && onSignOut ? onSignOut() : onNavigateSignIn())}
+              className="inline-flex text-xs md:text-[13px] lg:text-sm font-medium text-[#444748] hover:text-[#0B0B0B] transition-colors px-2 sm:px-2.5 lg:px-3 py-1.5 whitespace-nowrap shrink-0"
             >
-              {isSignedIn ? 'Open Studio' : 'Sign In'}
+              {isSignedIn ? 'Log Out' : 'Sign In'}
             </button>
             <button
               type="button"
@@ -247,7 +245,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
         </div>
       </header>
 
-      <main className="w-full pt-[96px] sm:pt-[100px] md:pt-20 flex-1">
+      <main className="w-full pt-[92px] sm:pt-[98px] md:pt-20 flex-1 overflow-x-clip">
         {/* SECTION 1: DARK IMMERSIVE HERO + INTERACTIVE EVENT FINDER */}
         <div className="relative w-full overflow-hidden">
           <section className="relative w-full overflow-hidden bg-[#0B0B0B] text-white">
@@ -266,19 +264,19 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </div>
             )}
 
-            <div className="relative z-10 max-w-7xl mx-auto px-6 lg:px-12 pt-14 md:pt-20 pb-20">
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-14 items-center">
+            <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 xl:px-12 pt-10 sm:pt-14 md:pt-16 lg:pt-20 pb-12 sm:pb-16 lg:pb-20">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 sm:gap-10 lg:gap-12 xl:gap-14 items-center">
                 {/* Left 7 Columns: Headline, Check-In & QR Scanner CTAs, Categories & Partners */}
-                <div className="lg:col-span-7 flex flex-col justify-between">
-                  <p className="text-xs font-semibold text-zinc-300 tracking-wide mb-5">
+                <div className="lg:col-span-7 flex flex-col justify-between min-w-0">
+                  <p className="text-[11px] sm:text-xs font-semibold text-zinc-300 tracking-wide mb-3 sm:mb-5">
                     Africa&apos;s Event Gateway · Arkesel &amp; Resend Powered
                   </p>
 
-                  <h1 className="font-display text-[36px] leading-[44px] md:text-[54px] md:leading-[62px] text-white tracking-[-0.03em] font-bold text-balance">
+                  <h1 className="font-display text-[30px] leading-[36px] sm:text-[42px] sm:leading-[48px] lg:text-[52px] lg:leading-[60px] xl:text-[56px] xl:leading-[64px] text-white tracking-[-0.03em] font-bold text-balance">
                     Events App Where Every Event Begins
                   </h1>
 
-                  <p className="mt-5 text-sm md:text-[17px] md:leading-[26px] text-white/80 max-w-xl">
+                  <p className="mt-4 sm:mt-5 text-sm sm:text-base lg:text-[17px] lg:leading-[26px] text-white/80 max-w-xl">
                     Built for weddings, funerals, church conventions, musical concerts, corporate
                     galas, and tech summits — guaranteed high-delivery SMS passes, offline-ready QR
                     gate scanning, and frictionless check-in registration.
@@ -293,7 +291,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                           key={cat}
                           type="button"
                           onClick={() => setFinderCategory(active ? 'all' : cat)}
-                          className={`px-3 py-1 rounded-full text-[11px] font-semibold border transition-colors whitespace-nowrap shrink-0 ${
+                          className={`px-3 py-1.5 sm:py-1 rounded-full text-[11px] font-semibold border transition-colors whitespace-nowrap shrink-0 ${
                             active
                               ? 'bg-white text-[#0B0B0B] border-white'
                               : 'bg-white/10 text-white/85 border-white/15 hover:bg-white/20'
@@ -306,13 +304,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   </div>
 
                   {/* Prominent Hero CTAs */}
-                  <div className="mt-8 flex flex-wrap items-center gap-3.5">
+                  <div className="mt-7 sm:mt-8 flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-3.5">
                     <button
                       type="button"
                       onClick={() =>
                         onOpenQrScanner ? onOpenQrScanner(topMatchedEvent.id) : onNavigateStudio()
                       }
-                      className="inline-flex items-center gap-2 bg-white text-[#0B0B0B] text-xs font-bold px-6 py-3.5 rounded-full shadow-lg hover:bg-neutral-200 transition-all hover:-translate-y-0.5 whitespace-nowrap shrink-0"
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white text-[#0B0B0B] text-xs font-bold px-5 sm:px-6 py-3.5 rounded-full shadow-lg hover:bg-neutral-200 transition-all hover:-translate-y-0.5 whitespace-nowrap shrink-0"
                     >
                       <QrCode className="w-4 h-4" />
                       <span>Open QR Code Scanner</span>
@@ -320,26 +318,41 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => onNavigateDemoEvent(topMatchedEvent.id)}
-                      className="inline-flex items-center gap-2 bg-white/15 text-white hover:bg-white/25 text-xs font-semibold px-6 py-3.5 rounded-full border border-white/20 backdrop-blur-md transition-all whitespace-nowrap shrink-0"
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/15 text-white hover:bg-white/25 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border border-white/20 backdrop-blur-md transition-all whitespace-nowrap shrink-0"
                     >
                       <UserPlus className="w-4 h-4" />
                       <span>Check-In Registration</span>
                     </button>
+                    {onOpenDisposableCamera && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenDisposableCamera(topMatchedEvent.id)}
+                        className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/15 text-white hover:bg-white/25 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border border-white/20 backdrop-blur-md transition-all whitespace-nowrap shrink-0"
+                      >
+                        <Camera className="w-4 h-4" />
+                        <span>Disposable Camera</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => (isSignedIn ? onNavigateStudio() : onNavigateSignUp())}
-                      className="inline-flex items-center gap-2 bg-transparent text-white/85 hover:text-white text-xs font-semibold px-4 py-3.5 rounded-full transition-colors whitespace-nowrap shrink-0"
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-transparent text-white/85 hover:text-white text-xs font-semibold px-4 py-3 sm:py-3.5 rounded-full transition-colors whitespace-nowrap shrink-0"
                     >
                       <span>Create Your Event</span>
                       <ArrowRight className="w-4 h-4" />
                     </button>
                   </div>
+                  {!isSignedIn && (
+                    <p className="mt-3 text-[11px] text-white/60">
+                      Creator Studio, QR Gate Scanner &amp; Disposable Camera require an organizer sign-in.
+                    </p>
+                  )}
                 </div>
 
                 {/* Right 5 Columns: Find or Host Events Interactive Card */}
-                <div className="lg:col-span-5">
-                  <div className="bg-white/90 backdrop-blur-md rounded-3xl p-6 sm:p-8 shadow-2xl text-[#0B0B0B] border border-white/60">
-                    <div className="flex items-center justify-between pb-4 border-b border-[#E5E5EA]">
+                <div className="lg:col-span-5 min-w-0">
+                  <div className="bg-white/92 backdrop-blur-md rounded-2xl sm:rounded-3xl p-5 sm:p-7 lg:p-8 shadow-2xl text-[#0B0B0B] border border-white/60">
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-[#E5E5EA]">
                       <div className="flex items-center gap-2.5">
                         <div className="w-9 h-9 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
                           <Calendar className="w-4 h-4" />
@@ -495,20 +508,20 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
           </section>
 
           {/* Secondary Light Canvas Container: Prominent Check-In Registration & QR Scanner Spotlight + Walkthrough */}
-          <section className="relative max-w-7xl mx-auto px-6 lg:px-12 pt-14 pb-20">
+          <section className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 xl:px-12 pt-10 sm:pt-14 pb-14 sm:pb-20">
             {/* PROMINENT CHECK-IN REGISTRATION & QR CODE SCANNER COMMAND SPOTLIGHT */}
-            <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-5 relative z-10">
-              <div className="bg-[#0B0B0B] text-white rounded-[28px] p-6 sm:p-7 flex flex-col justify-between gap-5 shadow-xl">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0">
-                    <QrCode className="w-6 h-6" />
+            <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5 lg:gap-6 relative z-10">
+              <div className="bg-[#0B0B0B] text-white rounded-2xl sm:rounded-[28px] p-5 sm:p-7 flex flex-col justify-between gap-5 shadow-xl min-w-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0">
+                    <QrCode className="w-5 h-5 sm:w-6 sm:h-6" />
                   </div>
-                  <span className="text-[11px] font-mono text-emerald-400 bg-white/10 px-3 py-1 rounded-full">
+                  <span className="text-[11px] font-mono text-emerald-400 bg-white/10 px-3 py-1 rounded-full whitespace-nowrap">
                     0.3s Camera Verify
                   </span>
                 </div>
                 <div>
-                  <h2 className="font-display text-xl sm:text-2xl font-bold tracking-tight">
+                  <h2 className="font-display text-lg sm:text-xl lg:text-2xl font-bold tracking-tight">
                     Live QR Code Gate Scanner
                   </h2>
                   <p className="text-xs sm:text-sm text-zinc-300 mt-1.5 leading-relaxed">
@@ -516,13 +529,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     duplicate scans automatically and syncs gate turnout in real time.
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-3 pt-1">
+                <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 pt-1">
                   <button
                     type="button"
                     onClick={() =>
                       onOpenQrScanner ? onOpenQrScanner(topMatchedEvent.id) : onNavigateStudio()
                     }
-                    className="px-5 py-2.5 rounded-full bg-white text-[#0B0B0B] text-xs font-bold hover:bg-zinc-200 transition-colors inline-flex items-center gap-2 whitespace-nowrap"
+                    className="w-full sm:w-auto justify-center px-5 py-2.5 rounded-full bg-white text-[#0B0B0B] text-xs font-bold hover:bg-zinc-200 transition-colors inline-flex items-center gap-2 whitespace-nowrap"
                   >
                     <QrCode className="w-4 h-4" />
                     <span>Launch QR Scanner Now</span>
@@ -531,17 +544,17 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                 </div>
               </div>
 
-              <div className="bg-white text-[#0B0B0B] rounded-[28px] p-6 sm:p-7 border border-[#E5E5EA] flex flex-col justify-between gap-5 shadow-sm">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center shrink-0">
-                    <UserPlus className="w-6 h-6" />
+              <div className="bg-white text-[#0B0B0B] rounded-2xl sm:rounded-[28px] p-5 sm:p-7 border border-[#E5E5EA] flex flex-col justify-between gap-5 shadow-sm min-w-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center shrink-0">
+                    <UserPlus className="w-5 h-5 sm:w-6 sm:h-6" />
                   </div>
-                  <span className="text-[11px] font-mono text-[#0B0B0B] bg-[#F5F5F7] px-3 py-1 rounded-full">
+                  <span className="text-[11px] font-mono text-[#0B0B0B] bg-[#F5F5F7] px-3 py-1 rounded-full whitespace-nowrap">
                     Walk-In &amp; RSVP Passes
                   </span>
                 </div>
                 <div>
-                  <h2 className="font-display text-xl sm:text-2xl font-bold tracking-tight">
+                  <h2 className="font-display text-lg sm:text-xl lg:text-2xl font-bold tracking-tight">
                     Instant Check-In Registration
                   </h2>
                   <p className="text-xs sm:text-sm text-[#71717A] mt-1.5 leading-relaxed">
@@ -549,11 +562,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     concerts, or summits—delivering a scannable QR gate pass via Arkesel SMS.
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-3 pt-1">
+                <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 pt-1">
                   <button
                     type="button"
                     onClick={() => onNavigateDemoEvent(topMatchedEvent.id)}
-                    className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-bold hover:bg-neutral-800 transition-colors inline-flex items-center gap-2 whitespace-nowrap"
+                    className="w-full sm:w-auto justify-center px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-bold hover:bg-neutral-800 transition-colors inline-flex items-center gap-2 whitespace-nowrap"
                   >
                     <UserPlus className="w-4 h-4" />
                     <span>Open Registration Form</span>
@@ -564,7 +577,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     onClick={() =>
                       onOpenQrScanner ? onOpenQrScanner(topMatchedEvent.id) : onNavigateStudio()
                     }
-                    className="px-4 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-[#0B0B0B] text-xs font-semibold transition-colors whitespace-nowrap"
+                    className="w-full sm:w-auto justify-center px-4 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-[#0B0B0B] text-xs font-semibold transition-colors whitespace-nowrap"
                   >
                     Walk-In Gate Desk
                   </button>
@@ -573,7 +586,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
             </div>
 
             {/* Interactive 3-Step Hero Product Walkthrough Slider */}
-            <div className="mt-14 relative max-w-6xl mx-auto" id="live-preview">
+            <div className="mt-10 sm:mt-14 relative max-w-6xl mx-auto scroll-mt-28 md:scroll-mt-24" id="live-preview">
               {/* Step Tabs + Prev/Next Controls */}
               <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 md:gap-4 mb-5">
                 <div
@@ -668,12 +681,12 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               <div
                 onMouseEnter={() => setSliderPaused(true)}
                 onMouseLeave={() => setSliderPaused(false)}
-                className="bg-[#EEEEF0] p-4 sm:p-8 rounded-[28px] shadow-sm border border-[#E5E5EA]/70"
+                className="bg-[#EEEEF0] p-3.5 sm:p-6 lg:p-8 rounded-2xl sm:rounded-[28px] shadow-sm border border-[#E5E5EA]/70"
               >
                 {/* SLIDE 1: Create & Publish */}
                 {activeSlide === 0 && (
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-                    <div className="lg:col-span-7 bg-white rounded-2xl p-6 shadow-sm flex flex-col justify-between">
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-stretch">
+                    <div className="lg:col-span-7 bg-white rounded-2xl p-4 sm:p-6 shadow-sm flex flex-col justify-between min-w-0">
                       <div>
                         <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-[#EEEEF0]">
                           <div className="flex items-center gap-2.5">
@@ -727,19 +740,19 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             </div>
                           </div>
 
-                          <div className="p-3 bg-[#F5F5F7] rounded-xl border border-dashed border-[#C4C7C7] flex items-center justify-between gap-3">
-                            <div>
+                          <div className="p-3 bg-[#F5F5F7] rounded-xl border border-dashed border-[#C4C7C7] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="min-w-0">
                               <span className="text-xs font-semibold text-[#0B0B0B] block">
                                 Hero Flyer Optimized (1920 × 1080 WebP)
                               </span>
-                              <span className="text-[11px] text-[#71717A]">
+                              <span className="text-[11px] text-[#71717A] block">
                                 {featuredEvent.venue} · Ready for instant edge deploy
                               </span>
                             </div>
                             <button
                               type="button"
                               onClick={onNavigateStudio}
-                              className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] shrink-0 transition-colors"
+                              className="self-start sm:self-auto px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] shrink-0 transition-colors"
                             >
                               Open Wizard
                             </button>
@@ -747,18 +760,20 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         </div>
                       </div>
 
-                      <div className="mt-5 p-3 bg-[#F5F5F7] rounded-xl flex items-center justify-between gap-2 text-[11px]">
-                        <span className="inline-flex items-center gap-1.5 text-[#0B0B0B]">
-                          <Bolt className="w-4 h-4 text-emerald-600 shrink-0" />
-                          Instant CDN deployment across Accra, Lagos, Nairobi &amp; Kigali in 0.8s.
+                      <div className="mt-5 p-3 bg-[#F5F5F7] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
+                        <span className="inline-flex items-start sm:items-center gap-1.5 text-[#0B0B0B]">
+                          <Bolt className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5 sm:mt-0" />
+                          <span>
+                            Instant CDN deployment across Accra, Lagos, Nairobi &amp; Kigali in 0.8s.
+                          </span>
                         </span>
-                        <span className="bg-white px-2 py-0.5 rounded font-mono text-[#0B0B0B] shrink-0">
+                        <span className="self-start sm:self-auto bg-white px-2 py-0.5 rounded font-mono text-[#0B0B0B] shrink-0">
                           Global Edge
                         </span>
                       </div>
                     </div>
 
-                    <div className="lg:col-span-5 bg-[#0B0B0B] text-white rounded-2xl p-6 shadow-xl flex flex-col justify-between relative overflow-hidden">
+                    <div className="lg:col-span-5 bg-[#0B0B0B] text-white rounded-2xl p-5 sm:p-6 shadow-xl flex flex-col justify-between relative overflow-hidden min-w-0">
                       <div className="absolute -right-12 -bottom-12 w-48 h-48 bg-white/5 rounded-full blur-2xl pointer-events-none" />
                       <div>
                         <div className="flex items-center justify-between gap-2">
@@ -806,7 +821,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         </div>
                       </div>
 
-                      <div className="mt-5 pt-3 border-t border-white/10 flex items-center justify-between text-[11px] text-zinc-400">
+                      <div className="mt-5 pt-3 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-400">
                         <span>60-second attendee checkout</span>
                         <span className="text-white font-mono">No passwords required</span>
                       </div>
@@ -816,8 +831,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
 
                 {/* SLIDE 2: Instant SMS & Email Delivery Engine */}
                 {activeSlide === 1 && (
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-                    <div className="lg:col-span-7 bg-white rounded-2xl p-6 shadow-sm flex flex-col justify-between">
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-stretch">
+                    <div className="lg:col-span-7 bg-white rounded-2xl p-4 sm:p-6 shadow-sm flex flex-col justify-between min-w-0">
                       <div>
                         <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-[#EEEEF0]">
                           <div className="flex items-center gap-2.5">
@@ -858,48 +873,58 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             </p>
                           </div>
 
-                          <div className="grid grid-cols-3 gap-2.5 text-center">
-                            <div className="p-3 bg-[#F5F5F7] rounded-xl">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-2.5 sm:text-center">
+                            <div className="p-3 bg-[#F5F5F7] rounded-xl flex sm:block items-center justify-between gap-2">
                               <span className="text-[11px] text-[#71717A] block">MTN Direct SS7</span>
-                              <span className="text-xs font-bold text-[#0B0B0B] mt-0.5 block tabular-nums">
-                                1.8s Latency
-                              </span>
-                              <span className="text-[10px] text-emerald-600 font-semibold tabular-nums">
-                                100% Success
-                              </span>
+                              <div className="text-right sm:text-center">
+                                <span className="text-xs font-bold text-[#0B0B0B] sm:mt-0.5 block tabular-nums">
+                                  1.8s Latency
+                                </span>
+                                <span className="text-[10px] text-emerald-600 font-semibold tabular-nums">
+                                  100% Success
+                                </span>
+                              </div>
                             </div>
-                            <div className="p-3 bg-[#F5F5F7] rounded-xl">
+                            <div className="p-3 bg-[#F5F5F7] rounded-xl flex sm:block items-center justify-between gap-2">
                               <span className="text-[11px] text-[#71717A] block">Telecel SMPP</span>
-                              <span className="text-xs font-bold text-[#0B0B0B] mt-0.5 block tabular-nums">
-                                2.2s Latency
-                              </span>
-                              <span className="text-[10px] text-emerald-600 font-semibold tabular-nums">
-                                99.8% Success
-                              </span>
+                              <div className="text-right sm:text-center">
+                                <span className="text-xs font-bold text-[#0B0B0B] sm:mt-0.5 block tabular-nums">
+                                  2.2s Latency
+                                </span>
+                                <span className="text-[10px] text-emerald-600 font-semibold tabular-nums">
+                                  99.8% Success
+                                </span>
+                              </div>
                             </div>
-                            <div className="p-3 bg-[#F5F5F7] rounded-xl">
+                            <div className="p-3 bg-[#F5F5F7] rounded-xl flex sm:block items-center justify-between gap-2">
                               <span className="text-[11px] text-[#71717A] block">AT Gateway</span>
-                              <span className="text-xs font-bold text-[#0B0B0B] mt-0.5 block tabular-nums">
-                                2.5s Latency
-                              </span>
-                              <span className="text-[10px] text-emerald-600 font-semibold tabular-nums">
-                                99.2% Success
-                              </span>
+                              <div className="text-right sm:text-center">
+                                <span className="text-xs font-bold text-[#0B0B0B] sm:mt-0.5 block tabular-nums">
+                                  2.5s Latency
+                                </span>
+                                <span className="text-[10px] text-emerald-600 font-semibold tabular-nums">
+                                  99.2% Success
+                                </span>
+                              </div>
                             </div>
                           </div>
                         </div>
                       </div>
 
-                      <div className="mt-5 p-3 bg-[#F5F5F7] rounded-xl flex items-center justify-between gap-2 text-[11px]">
-                        <span className="inline-flex items-center gap-2 text-[#0B0B0B]">
-                          <Mail className="w-4 h-4 shrink-0" />
-                          Simultaneous transactional email sent via Resend V2 API (1.1s latency).
+                      <div className="mt-5 p-3 bg-[#F5F5F7] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
+                        <span className="inline-flex items-start sm:items-center gap-2 text-[#0B0B0B]">
+                          <Mail className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />
+                          <span>
+                            Simultaneous transactional email sent via Resend V2 API (1.1s latency).
+                          </span>
                         </span>
-                        <span className="text-emerald-700 font-bold shrink-0">Dual-Route</span>
+                        <span className="self-start sm:self-auto text-emerald-700 font-bold shrink-0">
+                          Dual-Route
+                        </span>
                       </div>
                     </div>
 
-                    <div className="lg:col-span-5 bg-[#0B0B0B] text-white rounded-2xl p-6 shadow-xl flex flex-col justify-between relative overflow-hidden">
+                    <div className="lg:col-span-5 bg-[#0B0B0B] text-white rounded-2xl p-5 sm:p-6 shadow-xl flex flex-col justify-between relative overflow-hidden min-w-0">
                       <div className="absolute -right-12 -top-12 w-48 h-48 bg-white/5 rounded-full blur-2xl pointer-events-none" />
                       <div>
                         <div className="flex items-center justify-between gap-2">
@@ -927,12 +952,12 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             </strong>
                             .
                           </p>
-                          <div className="mt-3 p-2 bg-[#F5F5F7] rounded-xl flex items-center justify-between text-[11px] font-mono">
+                          <div className="mt-3 p-2.5 bg-[#F5F5F7] rounded-xl flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
                             <span className="text-[#71717A]">Pass Link:</span>
                             <button
                               type="button"
                               onClick={() => onNavigateDemoEvent(featuredEvent.id)}
-                              className="text-emerald-700 font-bold underline"
+                              className="text-emerald-700 font-bold underline truncate"
                             >
                               events.africa/t/8891
                             </button>
@@ -940,9 +965,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         </div>
                       </div>
 
-                      <div className="mt-5 pt-3 border-t border-white/10 flex items-center justify-between text-[11px] text-zinc-400">
+                      <div className="mt-5 pt-3 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-400">
                         <span className="inline-flex items-center gap-1.5">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                          <CheckCircle2 className="w-3.5 h-3.5 text-white shrink-0" />
                           No Internet Needed by Attendee
                         </span>
                         <span className="text-white font-semibold">Works on Feature Phones</span>
@@ -953,8 +978,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
 
                 {/* SLIDE 3: Sub-Second Gate Check-In & PWA Turnstile */}
                 {activeSlide === 2 && (
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-                    <div className="lg:col-span-7 bg-white rounded-2xl p-6 shadow-sm flex flex-col justify-between">
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-stretch">
+                    <div className="lg:col-span-7 bg-white rounded-2xl p-4 sm:p-6 shadow-sm flex flex-col justify-between min-w-0">
                       <div>
                         <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-[#EEEEF0]">
                           <div className="flex items-center gap-2.5">
@@ -975,34 +1000,41 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-3 gap-3 my-4">
-                          <div className="p-3 bg-[#F5F5F7] rounded-xl">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3 my-4">
+                          <div className="p-3 bg-[#F5F5F7] rounded-xl flex sm:block items-center justify-between gap-2">
                             <span className="text-[11px] text-[#71717A] block">Admitted</span>
-                            <span className="font-display text-2xl sm:text-[28px] font-bold text-[#0B0B0B] mt-0.5 block tabular-nums">
-                              {featuredEvent.checkedIn}/{featuredEvent.registered}
-                            </span>
-                            <span className="text-[11px] text-emerald-600 font-semibold tabular-nums">
-                              {Math.round(
-                                (featuredEvent.checkedIn / Math.max(1, featuredEvent.registered)) * 100
-                              )}
-                              % Turnout
-                            </span>
+                            <div className="text-right sm:text-left">
+                              <span className="font-display text-xl sm:text-2xl lg:text-[26px] font-bold text-[#0B0B0B] sm:mt-0.5 block tabular-nums">
+                                {featuredEvent.checkedIn}/{featuredEvent.registered}
+                              </span>
+                              <span className="text-[11px] text-emerald-600 font-semibold tabular-nums">
+                                {Math.round(
+                                  (featuredEvent.checkedIn / Math.max(1, featuredEvent.registered)) *
+                                    100
+                                )}
+                                % Turnout
+                              </span>
+                            </div>
                           </div>
-                          <div className="p-3 bg-[#F5F5F7] rounded-xl">
+                          <div className="p-3 bg-[#F5F5F7] rounded-xl flex sm:block items-center justify-between gap-2">
                             <span className="text-[11px] text-[#71717A] block">Scan Velocity</span>
-                            <span className="font-display text-2xl sm:text-[28px] font-bold text-[#0B0B0B] mt-0.5 block tabular-nums">
-                              0.3s
-                            </span>
-                            <span className="text-[11px] text-[#71717A]">Sub-second camera</span>
+                            <div className="text-right sm:text-left">
+                              <span className="font-display text-xl sm:text-2xl lg:text-[26px] font-bold text-[#0B0B0B] sm:mt-0.5 block tabular-nums">
+                                0.3s
+                              </span>
+                              <span className="text-[11px] text-[#71717A]">Sub-second camera</span>
+                            </div>
                           </div>
-                          <div className="p-3 bg-[#F5F5F7] rounded-xl">
+                          <div className="p-3 bg-[#F5F5F7] rounded-xl flex sm:block items-center justify-between gap-2">
                             <span className="text-[11px] text-[#71717A] block">Duplicates</span>
-                            <span className="font-display text-2xl sm:text-[28px] font-bold text-[#0B0B0B] mt-0.5 block tabular-nums">
-                              0
-                            </span>
-                            <span className="text-[11px] text-emerald-600 font-semibold">
-                              Zero Passback
-                            </span>
+                            <div className="text-right sm:text-left">
+                              <span className="font-display text-xl sm:text-2xl lg:text-[26px] font-bold text-[#0B0B0B] sm:mt-0.5 block tabular-nums">
+                                0
+                              </span>
+                              <span className="text-[11px] text-emerald-600 font-semibold">
+                                Zero Passback
+                              </span>
+                            </div>
                           </div>
                         </div>
 
@@ -1044,18 +1076,20 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         </div>
                       </div>
 
-                      <div className="mt-5 p-3 bg-[#F5F5F7] rounded-xl flex items-center justify-between gap-2 text-[11px]">
-                        <span className="inline-flex items-center gap-2 text-[#0B0B0B]">
-                          <WifiOff className="w-4 h-4 text-emerald-600 shrink-0" />
-                          IndexedDB offline cache holds 100% attendee manifest if venue WiFi drops.
+                      <div className="mt-5 p-3 bg-[#F5F5F7] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
+                        <span className="inline-flex items-start sm:items-center gap-2 text-[#0B0B0B]">
+                          <WifiOff className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5 sm:mt-0" />
+                          <span>
+                            IndexedDB offline cache holds 100% attendee manifest if venue WiFi drops.
+                          </span>
                         </span>
-                        <span className="bg-white px-2 py-0.5 rounded font-mono text-[#0B0B0B] shrink-0">
+                        <span className="self-start sm:self-auto bg-white px-2 py-0.5 rounded font-mono text-[#0B0B0B] shrink-0">
                           Offline Ready
                         </span>
                       </div>
                     </div>
 
-                    <div className="lg:col-span-5 bg-[#0B0B0B] text-white rounded-2xl p-6 shadow-xl flex flex-col justify-between relative overflow-hidden">
+                    <div className="lg:col-span-5 bg-[#0B0B0B] text-white rounded-2xl p-5 sm:p-6 shadow-xl flex flex-col justify-between relative overflow-hidden min-w-0">
                       <div className="absolute -right-12 -bottom-12 w-48 h-48 bg-white/5 rounded-full blur-2xl pointer-events-none" />
                       <div>
                         <div className="flex items-center justify-between gap-2">
@@ -1103,14 +1137,16 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         </div>
                       </div>
 
-                      <div className="mt-5 pt-3 border-t border-white/10 flex items-center justify-between text-[11px] text-zinc-400">
+                      <div className="mt-5 pt-3 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-400">
                         <span className="inline-flex items-center gap-1.5">
-                          <Smartphone className="w-4 h-4 text-white" />
+                          <Smartphone className="w-4 h-4 text-white shrink-0" />
                           Synced to Cloud DB
                         </span>
                         <button
                           type="button"
-                          onClick={onNavigateStudio}
+                          onClick={() =>
+                            onOpenQrScanner ? onOpenQrScanner(featuredEvent.id) : onNavigateStudio()
+                          }
                           className="text-white font-semibold hover:underline"
                         >
                           Launch Gate Scanner →
@@ -1123,7 +1159,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                 {/* Slider Interactive Bottom Progress Bar */}
                 <div className="mt-6 pt-4 border-t border-[#E5E5EA] flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-[#71717A]">
                   <div className="flex items-center gap-3 w-full sm:w-auto">
-                    <span className="font-mono text-[#0B0B0B] font-semibold tabular-nums">
+                    <span className="font-mono text-[#0B0B0B] font-semibold tabular-nums shrink-0">
                       0{activeSlide + 1} / 03
                     </span>
                     <div className="flex-1 sm:w-48 h-1.5 bg-white rounded-full overflow-hidden">
@@ -1133,11 +1169,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                       />
                     </div>
                   </div>
-                  <div className="flex items-center gap-4">
+                  <div className="flex flex-wrap items-center justify-center gap-x-3 sm:gap-x-4 gap-y-1">
                     <button
                       type="button"
                       onClick={() => setActiveSlide(0)}
-                      className={`transition-colors ${
+                      className={`transition-colors whitespace-nowrap ${
                         activeSlide === 0 ? 'text-[#0B0B0B] font-semibold' : 'hover:text-[#0B0B0B]'
                       }`}
                     >
@@ -1147,7 +1183,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => setActiveSlide(1)}
-                      className={`transition-colors ${
+                      className={`transition-colors whitespace-nowrap ${
                         activeSlide === 1 ? 'text-[#0B0B0B] font-semibold' : 'hover:text-[#0B0B0B]'
                       }`}
                     >
@@ -1157,7 +1193,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => setActiveSlide(2)}
-                      className={`transition-colors ${
+                      className={`transition-colors whitespace-nowrap ${
                         activeSlide === 2 ? 'text-[#0B0B0B] font-semibold' : 'hover:text-[#0B0B0B]'
                       }`}
                     >
@@ -1171,13 +1207,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
         </div>
 
         {/* SECTION 2: HOW IT WORKS */}
-        <section id="how-it-works" className="w-full bg-[#F3F3F5] py-20">
-          <div className="max-w-7xl mx-auto px-6 lg:px-12">
+        <section id="how-it-works" className="w-full bg-[#F3F3F5] py-14 sm:py-20 scroll-mt-28 md:scroll-mt-24">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 xl:px-12">
             <div className="text-center max-w-2xl mx-auto">
               <span className="text-[11px] font-medium uppercase tracking-wider text-[#71717A]">
                 Operational Architecture
               </span>
-              <h2 className="mt-2 font-display text-[32px] sm:text-[36px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.02em] text-balance">
+              <h2 className="mt-2 font-display text-[26px] sm:text-[32px] lg:text-[36px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.02em] text-balance">
                 Three steps to packed rooms and zero gate delays.
               </h2>
               <p className="mt-3 text-sm text-[#71717A]">
@@ -1186,9 +1222,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </p>
             </div>
 
-            <div className="mt-14 grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div className="mt-10 sm:mt-14 grid grid-cols-1 md:grid-cols-3 gap-5 sm:gap-6 lg:gap-8">
               {/* Step 1 */}
-              <div className="bg-white p-8 rounded-2xl shadow-sm flex flex-col justify-between hover:-translate-y-1 transition-all duration-150">
+              <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-sm flex flex-col justify-between hover:-translate-y-1 transition-all duration-150 min-w-0">
                 <div>
                   <div className="w-12 h-12 rounded-full bg-[#F5F5F7] flex items-center justify-center text-[#0B0B0B] mb-6">
                     <span className="font-display text-xl font-bold">1</span>
@@ -1225,7 +1261,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </div>
 
               {/* Step 2 */}
-              <div className="bg-white p-8 rounded-2xl shadow-sm flex flex-col justify-between hover:-translate-y-1 transition-all duration-150">
+              <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-sm flex flex-col justify-between hover:-translate-y-1 transition-all duration-150 min-w-0">
                 <div>
                   <div className="w-12 h-12 rounded-full bg-[#F5F5F7] flex items-center justify-center text-[#0B0B0B] mb-6">
                     <span className="font-display text-xl font-bold">2</span>
@@ -1247,11 +1283,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <Smartphone className="w-3.5 h-3.5" />
                     <span>Input Sanitization Engine</span>
                   </div>
-                  <div className="flex items-center justify-between bg-white p-2.5 rounded-xl">
+                  <div className="flex flex-wrap items-center justify-between gap-2 bg-white p-2.5 rounded-xl">
                     <span className="font-mono text-[11px] text-[#71717A] line-through">
                       024 412 3456
                     </span>
-                    <ArrowRight className="w-3.5 h-3.5 text-emerald-600" />
+                    <ArrowRight className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                     <span className="font-mono text-[11px] text-emerald-700 font-bold">
                       +233244123456
                     </span>
@@ -1260,7 +1296,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </div>
 
               {/* Step 3 */}
-              <div className="bg-white p-8 rounded-2xl shadow-sm flex flex-col justify-between hover:-translate-y-1 transition-all duration-150">
+              <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-sm flex flex-col justify-between hover:-translate-y-1 transition-all duration-150 min-w-0">
                 <div>
                   <div className="w-12 h-12 rounded-full bg-[#F5F5F7] flex items-center justify-center text-[#0B0B0B] mb-6">
                     <span className="font-display text-xl font-bold">3</span>
@@ -1279,7 +1315,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <MessageSquare className="w-3.5 h-3.5" />
                     <span>Dual Delivery Latency</span>
                   </div>
-                  <div className="flex items-center justify-between text-[#0B0B0B] text-xs font-semibold tabular-nums">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[#0B0B0B] text-xs font-semibold tabular-nums">
                     <span>Arkesel SMS: 2.8s</span>
                     <span className="text-emerald-600">· Resend: 1.1s</span>
                   </div>
@@ -1290,13 +1326,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
         </section>
 
         {/* SECTION 3: PLATFORM FEATURE MATRIX */}
-        <section id="features" className="max-w-7xl mx-auto px-6 lg:px-12 py-24">
-          <div className="flex flex-col md:flex-row md:items-end justify-between mb-16 gap-6">
+        <section id="features" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 xl:px-12 py-14 sm:py-20 lg:py-24 scroll-mt-28 md:scroll-mt-24">
+          <div className="flex flex-col md:flex-row md:items-end justify-between mb-10 sm:mb-14 lg:mb-16 gap-4 sm:gap-6">
             <div>
               <span className="text-[11px] font-medium uppercase tracking-wider text-[#71717A]">
                 Telecom &amp; Hardware Infrastructure
               </span>
-              <h2 className="mt-2 font-display text-[32px] sm:text-[36px] leading-tight font-bold text-[#0B0B0B] max-w-xl tracking-[-0.02em]">
+              <h2 className="mt-2 font-display text-[26px] sm:text-[32px] lg:text-[36px] leading-tight font-bold text-[#0B0B0B] max-w-xl tracking-[-0.02em]">
                 Engineered for African connectivity challenges.
               </h2>
             </div>
@@ -1306,9 +1342,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5 sm:gap-6 lg:gap-8">
             {/* Feature 1 */}
-            <div className="bg-[#F3F3F5] p-8 rounded-2xl flex flex-col justify-between">
+            <div className="bg-[#F3F3F5] p-6 sm:p-8 rounded-2xl flex flex-col justify-between min-w-0">
               <div>
                 <div className="w-12 h-12 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center mb-6">
                   <Signal className="w-5 h-5" />
@@ -1331,17 +1367,17 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   <span>GSM-7 Optimizing</span>
                 </div>
               </div>
-              <div className="mt-8 p-4 bg-white rounded-2xl flex items-center justify-between">
+              <div className="mt-8 p-4 bg-white rounded-2xl flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-[#0B0B0B]">Carrier Gateway Health</span>
                 <span className="text-[11px] text-emerald-600 flex items-center gap-1.5 font-semibold tabular-nums">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
                   99.98% Latency &lt; 3.0s
                 </span>
               </div>
             </div>
 
             {/* Feature 2 */}
-            <div className="bg-[#F3F3F5] p-8 rounded-2xl flex flex-col justify-between">
+            <div className="bg-[#F3F3F5] p-6 sm:p-8 rounded-2xl flex flex-col justify-between min-w-0">
               <div>
                 <div className="w-12 h-12 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center mb-6">
                   <Shield className="w-5 h-5" />
@@ -1362,7 +1398,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   <span>Spam Blocklist</span>
                 </div>
               </div>
-              <div className="mt-8 p-4 bg-white rounded-2xl flex items-center justify-between">
+              <div className="mt-8 p-4 bg-white rounded-2xl flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-[#0B0B0B]">Fraud Prevention Rate</span>
                 <span className="text-[11px] text-[#0B0B0B] font-semibold tabular-nums">
                   100% Unique RSVP Verification
@@ -1371,7 +1407,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
             </div>
 
             {/* Feature 3 */}
-            <div className="bg-[#F3F3F5] p-8 rounded-2xl flex flex-col justify-between">
+            <div className="bg-[#F3F3F5] p-6 sm:p-8 rounded-2xl flex flex-col justify-between min-w-0">
               <div>
                 <div className="w-12 h-12 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center mb-6">
                   <QrCode className="w-5 h-5" />
@@ -1392,7 +1428,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   <span>Volunteer PIN Login</span>
                 </div>
               </div>
-              <div className="mt-8 p-4 bg-white rounded-2xl flex items-center justify-between">
+              <div className="mt-8 p-4 bg-white rounded-2xl flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-[#0B0B0B]">Avg Scan Velocity</span>
                 <span className="text-[11px] text-[#0B0B0B] font-semibold tabular-nums">
                   45 Attendees / Min / Gate
@@ -1401,7 +1437,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
             </div>
 
             {/* Feature 4 */}
-            <div className="bg-[#F3F3F5] p-8 rounded-2xl flex flex-col justify-between">
+            <div className="bg-[#F3F3F5] p-6 sm:p-8 rounded-2xl flex flex-col justify-between min-w-0">
               <div>
                 <div className="w-12 h-12 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center mb-6">
                   <WifiOff className="w-5 h-5" />
@@ -1422,10 +1458,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   <span>iOS / Android PWA</span>
                 </div>
               </div>
-              <div className="mt-8 p-4 bg-white rounded-2xl flex items-center justify-between">
+              <div className="mt-8 p-4 bg-white rounded-2xl flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-[#0B0B0B]">Offline Tolerance</span>
                 <span className="text-[11px] text-emerald-600 font-semibold inline-flex items-center gap-1">
-                  <Check className="w-3.5 h-3.5" /> Zero Data Loss on Reconnect
+                  <Check className="w-3.5 h-3.5 shrink-0" /> Zero Data Loss on Reconnect
                 </span>
               </div>
             </div>
@@ -1433,13 +1469,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
         </section>
 
         {/* SECTION 4: TRANSPARENT PLANS & QUOTAS */}
-        <section id="pricing" className="w-full bg-[#F3F3F5] py-24">
-          <div className="max-w-6xl mx-auto px-6 lg:px-12">
+        <section id="pricing" className="w-full bg-[#F3F3F5] py-14 sm:py-20 lg:py-24 scroll-mt-28 md:scroll-mt-24">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-10 xl:px-12">
             <div className="text-center max-w-2xl mx-auto">
               <span className="text-[11px] font-medium uppercase tracking-wider text-[#71717A]">
                 Simple, Fair Pricing
               </span>
-              <h2 className="mt-2 font-display text-[32px] sm:text-[36px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.02em]">
+              <h2 className="mt-2 font-display text-[26px] sm:text-[32px] lg:text-[36px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.02em]">
                 Start free. Scale when your audience expands.
               </h2>
               <p className="mt-3 text-sm text-[#71717A]">
@@ -1447,11 +1483,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </p>
 
               {/* Interactive Monthly / Annual Switcher */}
-              <div className="mt-8 inline-flex items-center p-1 bg-[#E8E8EA] rounded-full border border-[#E5E5EA]">
+              <div className="mt-7 sm:mt-8 inline-flex max-w-full flex-wrap items-center justify-center p-1 bg-[#E8E8EA] rounded-full border border-[#E5E5EA]">
                 <button
                   type="button"
                   onClick={() => setBillingCycle('monthly')}
-                  className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                  className={`px-3.5 sm:px-4 py-1.5 rounded-full text-xs font-semibold transition-all whitespace-nowrap ${
                     billingCycle === 'monthly'
                       ? 'bg-white text-[#0B0B0B] shadow-sm'
                       : 'text-[#71717A] hover:text-[#0B0B0B]'
@@ -1474,11 +1510,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </div>
             </div>
 
-            <div className="mt-14 grid grid-cols-1 md:grid-cols-2 gap-8 items-stretch">
+            <div className="mt-10 sm:mt-14 grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8 items-stretch">
               {/* Free Starter Tier */}
-              <div className="bg-white p-8 sm:p-10 rounded-3xl shadow-sm flex flex-col justify-between">
+              <div className="bg-white p-6 sm:p-8 lg:p-10 rounded-2xl sm:rounded-3xl shadow-sm flex flex-col justify-between min-w-0">
                 <div>
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-[#0B0B0B] uppercase tracking-wider">
                       Free Starter Tier
                     </span>
@@ -1486,8 +1522,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                       Weddings &amp; Meetups
                     </span>
                   </div>
-                  <div className="mt-6 flex items-baseline gap-2">
-                    <span className="font-display text-[44px] leading-none font-bold text-[#0B0B0B] tabular-nums">
+                  <div className="mt-6 flex flex-wrap items-baseline gap-2">
+                    <span className="font-display text-[38px] sm:text-[44px] leading-none font-bold text-[#0B0B0B] tabular-nums">
                       $0
                     </span>
                     <span className="text-sm text-[#71717A]">/ forever</span>
@@ -1524,9 +1560,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </div>
 
               {/* Pro Organizer Tier */}
-              <div className="bg-[#0B0B0B] text-white p-8 sm:p-10 rounded-3xl shadow-xl flex flex-col justify-between relative overflow-hidden">
+              <div className="bg-[#0B0B0B] text-white p-6 sm:p-8 lg:p-10 rounded-2xl sm:rounded-3xl shadow-xl flex flex-col justify-between relative overflow-hidden min-w-0">
                 <div>
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">
                       Pro Organizer Tier
                     </span>
@@ -1534,11 +1570,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                       Concerts, Church &amp; Corporate
                     </span>
                   </div>
-                  <div className="mt-6 flex items-baseline gap-2">
-                    <span className="font-display text-[44px] leading-none font-bold text-white tabular-nums">
+                  <div className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                    <span className="font-display text-[38px] sm:text-[44px] leading-none font-bold text-white tabular-nums">
                       {billingCycle === 'annual' ? '$15' : '$19'}
                     </span>
-                    <span className="text-sm text-white/60 tabular-nums">
+                    <span className="text-xs sm:text-sm text-white/60 tabular-nums">
                       {billingCycle === 'annual'
                         ? '/ month (billed $180/yr) · approx. GHS 230/mo'
                         : '/ month · approx. GHS 290'}
@@ -1569,12 +1605,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      if (isSignedIn) {
-                        if (onUpgradePro) onUpgradePro();
-                        else onNavigateStudio();
-                      } else {
-                        onNavigateSignUp();
-                      }
+                      if (onUpgradePro) onUpgradePro();
+                      else if (isSignedIn) onNavigateStudio();
+                      else onNavigateSignUp();
                     }}
                     className="w-full inline-flex items-center justify-center bg-white text-[#0B0B0B] text-xs font-semibold py-3.5 rounded-full hover:bg-neutral-200 transition-colors shadow-lg"
                   >
@@ -1587,33 +1620,33 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
         </section>
 
         {/* SECTION 5: REAL-TIME COMMUNITY SHOWCASE */}
-        <section id="community-showcase" className="max-w-7xl mx-auto px-6 lg:px-12 py-20">
-          <div className="flex flex-col md:flex-row items-start md:items-end justify-between mb-10 gap-4">
+        <section id="community-showcase" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 xl:px-12 py-14 sm:py-20 scroll-mt-28 md:scroll-mt-24">
+          <div className="flex flex-col md:flex-row items-start md:items-end justify-between mb-8 sm:mb-10 gap-4">
             <div>
               <span className="text-[11px] font-medium uppercase tracking-wider text-[#71717A]">
                 Powered Events across the Continent
               </span>
-              <h2 className="mt-1 font-display text-[32px] sm:text-[36px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.02em]">
+              <h2 className="mt-1 font-display text-[26px] sm:text-[32px] lg:text-[36px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.02em]">
                 Built for memorable gatherings.
               </h2>
             </div>
             <button
               type="button"
               onClick={onNavigateStudio}
-              className="text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1 hover:underline"
+              className="text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1 hover:underline shrink-0"
             >
               <span>Explore past event case studies</span>
               <ArrowUpRight className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
             {SHOWCASE_CARDS.map((card, idx) => (
               <div
                 key={card.title}
-                className="bg-[#F3F3F5] rounded-2xl overflow-hidden flex flex-col shadow-sm group"
+                className="bg-[#F3F3F5] rounded-2xl overflow-hidden flex flex-col shadow-sm group min-w-0"
               >
-                <div className="relative w-full h-52 overflow-hidden bg-[#0B0B0B]">
+                <div className="relative w-full h-48 sm:h-52 overflow-hidden bg-[#0B0B0B]">
                   {!failedImages[idx] ? (
                     <img
                       src={card.img}
@@ -1634,12 +1667,12 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   </span>
                 </div>
 
-                <div className="p-6 flex flex-col justify-between flex-1">
+                <div className="p-5 sm:p-6 flex flex-col justify-between flex-1">
                   <div>
                     <h4 className="text-base font-semibold text-[#0B0B0B]">{card.title}</h4>
                     <p className="mt-2 text-[13px] text-[#71717A] leading-relaxed">{card.desc}</p>
                   </div>
-                  <div className="mt-4 pt-3 border-t border-[#E5E5EA] flex items-center justify-between text-[11px] text-[#71717A]">
+                  <div className="mt-4 pt-3 border-t border-[#E5E5EA] flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#71717A]">
                     <span>{card.metaLeft}</span>
                     <span className="text-[#0B0B0B] font-semibold tabular-nums">
                       {card.metaRight}
@@ -1652,25 +1685,25 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
         </section>
 
         {/* SECTION 6: INTERACTIVE QUICK-START CTA BANNER */}
-        <section className="max-w-7xl mx-auto px-6 lg:px-12 pb-24">
-          <div className="bg-white rounded-[32px] p-8 sm:p-14 shadow-sm relative overflow-hidden">
+        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 xl:px-12 pb-16 sm:pb-24">
+          <div className="bg-white rounded-3xl sm:rounded-[32px] p-6 sm:p-10 lg:p-14 shadow-sm relative overflow-hidden">
             <div className="absolute -right-20 -top-20 w-80 h-80 bg-[#EEEEF0] rounded-full blur-3xl pointer-events-none" />
             <div className="max-w-3xl mx-auto text-center relative z-10">
-              <div className="w-12 h-12 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center mx-auto mb-6">
+              <div className="w-12 h-12 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center mx-auto mb-5 sm:mb-6">
                 <Rocket className="w-5 h-5" />
               </div>
-              <h2 className="font-display text-[32px] sm:text-[36px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.02em] text-balance">
+              <h2 className="font-display text-[24px] sm:text-[32px] lg:text-[36px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.02em] text-balance">
                 Ready to host your wedding, church program, concert, corporate gala, or summit?
               </h2>
-              <p className="mt-4 text-sm text-[#71717A] max-w-xl mx-auto leading-relaxed">
+              <p className="mt-3 sm:mt-4 text-sm text-[#71717A] max-w-xl mx-auto leading-relaxed">
                 Join planners, churches, families, and event teams creating seamless guest
                 registration with guaranteed SMS passes and real-time gate check-in.
               </p>
 
-              <div className="mt-8 max-w-md mx-auto">
+              <div className="mt-7 sm:mt-8 max-w-md mx-auto">
                 <form
                   onSubmit={handleQuickStart}
-                  className="flex flex-col sm:flex-row items-center gap-2 p-1.5 bg-[#F5F5F7] rounded-full"
+                  className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 p-2 sm:p-1.5 bg-[#F5F5F7] rounded-2xl sm:rounded-full"
                 >
                   <input
                     type="email"
@@ -1679,20 +1712,20 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     onChange={(e) => setQuickEmail(e.target.value)}
                     placeholder="Enter your organizer email"
                     aria-label="Enter your organizer email"
-                    className="w-full bg-transparent px-5 py-3 text-sm text-[#0B0B0B] placeholder:text-[#71717A] focus:outline-none rounded-full"
+                    className="w-full bg-transparent px-4 sm:px-5 py-2.5 sm:py-3 text-sm text-[#0B0B0B] placeholder:text-[#71717A] focus:outline-none rounded-xl sm:rounded-full min-w-0"
                   />
                   <button
                     type="submit"
-                    className="w-full sm:w-auto shrink-0 bg-[#0B0B0B] text-white text-xs font-semibold px-6 py-3 rounded-full hover:bg-neutral-800 transition-colors whitespace-nowrap"
+                    className="w-full sm:w-auto shrink-0 bg-[#0B0B0B] text-white text-xs font-semibold px-6 py-3 rounded-xl sm:rounded-full hover:bg-neutral-800 transition-colors whitespace-nowrap"
                   >
                     {quickSent ? 'Opening Studio...' : 'Create Your Event Now'}
                   </button>
                 </form>
-                <div className="mt-3 flex items-center justify-center gap-4 text-[#71717A] text-[11px] font-medium">
+                <div className="mt-3 flex flex-wrap items-center justify-center gap-x-3 sm:gap-x-4 gap-y-1 text-[#71717A] text-[11px] font-medium">
                   <span>Free forever tier available</span>
-                  <span>·</span>
+                  <span aria-hidden="true">·</span>
                   <span>No credit card required</span>
-                  <span>·</span>
+                  <span aria-hidden="true">·</span>
                   <span>Live in 2 minutes</span>
                 </div>
               </div>

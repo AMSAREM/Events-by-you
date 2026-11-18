@@ -60,7 +60,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
     const initialReg = status === 'draft' ? 0 : Math.min(24, Math.max(10, Number(capacity) || 100));
 
     const newEvent: EventItem = {
-      id: `evt-${Date.now()}`,
+      id: `evt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       slug,
       title: title.trim(),
       subtitle: subtitle.trim() || 'Curated production and live stage gathering.',

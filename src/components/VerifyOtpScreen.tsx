@@ -14,24 +14,30 @@ import {
   User,
 } from 'lucide-react';
 
+import { api, saveStoredSession, type StoredAuthSession } from '../lib/api';
+import type { OrganizerProfile } from '../types/events';
+
 interface VerifyOtpScreenProps {
   email: string;
+  otpType?: 'signup' | 'email' | 'recovery';
   onBackHome: () => void;
   onBackSignIn: () => void;
-  onVerified: () => void;
+  onVerified: (session: StoredAuthSession, profile: OrganizerProfile) => void;
   onNavigateDemoEvent: () => void;
 }
 
 export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
   email,
+  otpType = 'signup',
   onBackHome,
   onBackSignIn,
   onVerified,
   onNavigateDemoEvent,
 }) => {
-  const [digits, setDigits] = useState<string[]>(['8', '4', '2', '9', '1', '']);
+  const [digits, setDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [secondsLeft, setSecondsLeft] = useState(42);
   const [trustDevice, setTrustDevice] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [fallbackNotice, setFallbackNotice] = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -72,29 +78,38 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
     inputRefs.current[focusIdx]?.focus();
   };
 
-  const handleFillDemoCode = () => {
-    setDigits(['8', '4', '2', '9', '1', '7']);
-    setErrorMsg(null);
-    inputRefs.current[5]?.focus();
-  };
-
-  const handleResend = () => {
+  const handleResend = async () => {
     if (secondsLeft > 0) return;
-    setSecondsLeft(42);
-    setFallbackNotice(false);
     setErrorMsg(null);
+    try {
+      await api.auth.resendOtp(email);
+      setSecondsLeft(42);
+      setFallbackNotice(true);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to resend code.');
+    }
   };
 
-  const handleVerify = (e: React.FormEvent) => {
+  const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     const code = digits.join('');
     if (code.length < 6) {
-      setErrorMsg('Please enter all 6 digits or click "Fill demo code (842917)".');
+      setErrorMsg('Please enter the 6-digit verification code sent to your email.');
       const firstEmpty = digits.findIndex((d) => !d);
       if (firstEmpty >= 0) inputRefs.current[firstEmpty]?.focus();
       return;
     }
-    onVerified();
+    setSubmitting(true);
+    setErrorMsg(null);
+    try {
+      const res = await api.auth.verifyOtp(email, code, otpType);
+      saveStoredSession(res.session);
+      onVerified(res.session, res.profile);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Invalid verification code.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const formattedTime = `00:${secondsLeft < 10 ? `0${secondsLeft}` : secondsLeft}`;
@@ -215,13 +230,9 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                     <label className="block text-xs font-semibold uppercase tracking-wider text-[#71717A]">
                       Authentication Code
                     </label>
-                    <button
-                      type="button"
-                      onClick={handleFillDemoCode}
-                      className="text-xs font-semibold text-[#0B0B0B] underline underline-offset-4 hover:opacity-75"
-                    >
-                      Fill demo code (842917)
-                    </button>
+                    <span className="text-[11px] font-medium text-[#71717A]">
+                      Check your Supabase inbox
+                    </span>
                   </div>
                   <div className="grid grid-cols-6 gap-2 sm:gap-3.5">
                     {digits.map((digit, idx) => (
@@ -307,9 +318,12 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
 
                 <button
                   type="submit"
-                  className="w-full bg-[#0B0B0B] hover:opacity-90 active:scale-[0.99] text-white py-4 px-8 rounded-full text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-md"
+                  disabled={submitting}
+                  className="w-full bg-[#0B0B0B] hover:opacity-90 active:scale-[0.99] text-white py-4 px-8 rounded-full text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-md disabled:opacity-60"
                 >
-                  <span>Verify and Access Creator Studio</span>
+                  <span>
+                    {submitting ? 'Verifying Code...' : 'Verify and Access Creator Studio'}
+                  </span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>

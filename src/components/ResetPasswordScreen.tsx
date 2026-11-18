@@ -15,6 +15,8 @@ import {
   User,
 } from 'lucide-react';
 
+import { api } from '../lib/api';
+
 interface ResetPasswordScreenProps {
   initialEmail?: string;
   onBackHome: () => void;
@@ -24,32 +26,40 @@ interface ResetPasswordScreenProps {
 }
 
 export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
-  initialEmail = 'josh@techleaders.africa',
+  initialEmail = '',
   onBackHome,
   onBackSignIn,
   onProceedToOtp,
   onNavigateDemoEvent,
 }) => {
   const [method, setMethod] = useState<'email' | 'sms'>('email');
-  const [contactValue, setContactValue] = useState(
-    initialEmail || 'josh@techleaders.africa'
-  );
+  const [contactValue, setContactValue] = useState(initialEmail || 'amoakoimml@gmail.com');
   const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const handleMethodChange = (next: 'email' | 'sms') => {
     setMethod(next);
     setSent(false);
-    if (next === 'sms' && contactValue.includes('@')) {
-      setContactValue('+233 24 559 8184');
-    } else if (next === 'email' && !contactValue.includes('@')) {
-      setContactValue(initialEmail || 'josh@techleaders.africa');
+    setErrorMsg(null);
+    if (next === 'email' && !contactValue.includes('@')) {
+      setContactValue(initialEmail || 'amoakoimml@gmail.com');
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!contactValue.trim()) return;
-    setSent(true);
+    setSending(true);
+    setErrorMsg(null);
+    try {
+      await api.auth.resetPassword(contactValue.trim(), window.location.origin);
+      setSent(true);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to send recovery email.');
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -193,7 +203,7 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
                       value={contactValue}
                       onChange={(e) => setContactValue(e.target.value)}
                       placeholder={
-                        method === 'email' ? 'name@organization.com' : '+233 24 000 0000'
+                        method === 'email' ? 'amoakoimml@gmail.com' : '+233 24 000 0000'
                       }
                       className="w-full bg-[#F5F5F7] hover:bg-[#EEEEF0]/70 focus:bg-white text-[#0B0B0B] text-sm pl-11 pr-4 py-3 rounded-full outline-none transition-all focus:ring-2 focus:ring-[#0B0B0B]"
                     />
@@ -221,14 +231,23 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
                   </span>
                 </div>
 
+                {errorMsg && (
+                  <div className="p-3.5 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 text-xs font-medium text-[#0B0B0B]">
+                    {errorMsg}
+                  </div>
+                )}
+
                 <button
                   type="submit"
-                  className="w-full mt-1 py-3.5 px-6 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-md"
+                  disabled={sending}
+                  className="w-full mt-1 py-3.5 px-6 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 disabled:opacity-60 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-md"
                 >
                   <span>
-                    {method === 'sms'
-                      ? 'Send 6-Digit SMS Code'
-                      : 'Send Recovery Instructions'}
+                    {sending
+                      ? 'Sending...'
+                      : method === 'sms'
+                        ? 'Send 6-Digit SMS Code'
+                        : 'Send Recovery Instructions'}
                   </span>
                   <ArrowRight className="w-4 h-4" />
                 </button>

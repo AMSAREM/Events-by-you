@@ -1,5 +1,7 @@
-import {
+import type {
   Attendee,
+  DisposableRollSettings,
+  DisposableShot,
   EventItem,
   OrganizerProfile,
   ScheduleBlock,
@@ -520,6 +522,57 @@ export const VELOCITY_SERIES: Record<TimeRange, VelocityPoint[]> = {
     { label: 'Nov', registrations: 1650, checkIns: 1528, revenue: 41250 },
   ],
 };
+
+export const INITIAL_ROLL_SETTINGS: Record<string, DisposableRollSettings> = {
+  'evt-tech-leaders-2026': { exposuresLimit: 24, darkroomMode: false },
+  'evt-wedding-mensah': { exposuresLimit: 24, darkroomMode: false },
+  'evt-musical-accra': { exposuresLimit: 24, darkroomMode: false },
+};
+
+export const INITIAL_DISPOSABLE_SHOTS: DisposableShot[] = [
+  {
+    id: 'shot-tls-1',
+    eventId: 'evt-tech-leaders-2026',
+    frameNumber: 1,
+    dataUrl: '/src/assets/images/dispo_summit_networking_1795017070315.jpg',
+    capturedBy: 'Kofi Annan',
+    caption: 'Founders & engineering leads catching up between morning sessions at AICC.',
+    filmStock: 'fuji-c200',
+    dateStamp: "'26 11 28",
+    capturedAt: '10:18 AM',
+    developed: true,
+    likes: 14,
+    liked: false,
+  },
+  {
+    id: 'shot-wed-1',
+    eventId: 'evt-wedding-mensah',
+    frameNumber: 1,
+    dataUrl: '/src/assets/images/dispo_wedding_toast_1795017069093.jpg',
+    capturedBy: 'Maame Efua Boateng',
+    caption: 'Golden hour toast under the garden string lights at Labadi Beach.',
+    filmStock: 'kodak-gold',
+    dateStamp: "'26 12 06",
+    capturedAt: '05:42 PM',
+    developed: true,
+    likes: 28,
+    liked: true,
+  },
+  {
+    id: 'shot-mus-1',
+    eventId: 'evt-musical-accra',
+    frameNumber: 1,
+    dataUrl: '/src/assets/images/dispo_concert_crowd_1795017069829.jpg',
+    capturedBy: 'Esi Mensah-Bonsu',
+    caption: 'Encore set under the stage beams — pure energy on 35mm black & white.',
+    filmStock: 'ilford-bw',
+    dateStamp: "'26 12 14",
+    capturedAt: '10:35 PM',
+    developed: true,
+    likes: 19,
+    liked: false,
+  },
+];
 
 /** Normalizes Ghanaian/African local phone inputs into strict E.164 format */
 export function normalizePhoneE164(raw: string): string {

@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Calendar,
+  Camera,
   Check,
   Clock,
   Copy,
@@ -65,6 +66,7 @@ interface EventWorkspaceScreenProps {
   onSelectAlertEvent: (event: EventItem) => void;
   onOpenCsvExport?: (eventId: string) => void;
   onOpenQrScanner?: (eventId: string) => void;
+  onOpenDisposableCamera?: (eventId: string) => void;
 }
 
 export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
@@ -88,6 +90,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   onSelectAlertEvent,
   onOpenCsvExport,
   onOpenQrScanner,
+  onOpenDisposableCamera,
 }) => {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('program');
   const [copiedToast, setCopiedToast] = useState(false);
@@ -348,6 +351,16 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {onOpenDisposableCamera && (
+              <button
+                type="button"
+                onClick={() => onOpenDisposableCamera(event.id)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-xs font-semibold shadow-sm whitespace-nowrap shrink-0"
+              >
+                <Camera className="w-4 h-4" />
+                Disposable Camera
+              </button>
+            )}
             {onOpenQrScanner && (
               <button
                 type="button"

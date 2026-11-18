@@ -1,21 +1,34 @@
-import { useEffect, useState } from 'react';
-import {
-  INITIAL_ALERTS,
-  INITIAL_ATTENDEES,
-  INITIAL_EVENTS,
-  INITIAL_PROFILE,
-  INITIAL_SCHEDULE,
-} from './data/initialData';
-import {
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Database, Loader2, Sparkles, X } from 'lucide-react';
+import { INITIAL_EVENTS, INITIAL_PROFILE } from './data/initialData';
+import type {
   AppRoute,
   Attendee,
+  CreatorApp,
+  CreatorAppEnvironment,
+  CreatorAppLog,
+  CreatorAppScope,
+  CreatorAppStatus,
+  CreatorAppType,
+  DisposableRollSettings,
+  DisposableShot,
   EventItem,
   NavScreen,
   OrganizerProfile,
   ScheduleBlock,
   StudioSubScreen,
   SystemAlert,
+  WebhookTriggerEvent,
 } from './types/events';
+import {
+  api,
+  extractSessionFromUrlHash,
+  getStoredCreatorToken,
+  getStoredSession,
+  saveStoredCreatorToken,
+  saveStoredSession,
+  type StoredAuthSession,
+} from './lib/api';
 import { LandingScreen } from './components/LandingScreen';
 import { SignInScreen } from './components/SignInScreen';
 import { SignUpScreen } from './components/SignUpScreen';
@@ -34,42 +47,58 @@ import { CsvExportScreen } from './components/CsvExportScreen';
 import { CreateEventWizardScreen } from './components/CreateEventWizardScreen';
 import { SettingsScreen } from './components/SettingsScreen';
 import { QrGateScannerScreen } from './components/QrGateScannerScreen';
+import { DisposableCameraScreen } from './components/DisposableCameraScreen';
+import { AppsCreatorConsoleScreen } from './components/AppsCreatorConsoleScreen';
 import { EventDetailModal } from './components/EventModals';
 
-function loadStored<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
+interface PendingModuleTarget {
+  route: 'studio' | 'camera';
+  screen?: NavScreen;
+  eventId?: string;
+  prefillCode?: string;
+  subScreen?: StudioSubScreen;
+  guestName?: string;
+  returnRoute?: 'home' | 'demo-event';
+  label: string;
 }
+
+const EMPTY_PROFILE: OrganizerProfile = {
+  ...INITIAL_PROFILE,
+  name: 'Organiser',
+  firstName: 'Organiser',
+  email: '',
+  studio: 'Events Studio',
+  smsCredits: 0,
+};
 
 export default function App() {
   const [route, setRoute] = useState<AppRoute>('home');
-  const [isSignedIn, setIsSignedIn] = useState<boolean>(() =>
-    loadStored('eventsapp_signedin_v4', false)
-  );
+  const [isSignedIn, setIsSignedIn] = useState<boolean>(() => Boolean(getStoredSession()));
+  const [authBootstrapping, setAuthBootstrapping] = useState<boolean>(() => Boolean(getStoredSession()));
+  const [studioLoading, setStudioLoading] = useState(false);
+  const [seedingStarter, setSeedingStarter] = useState(false);
+  const [supabaseConfigured, setSupabaseConfigured] = useState<boolean>(true);
+  const [creatorEmail, setCreatorEmail] = useState<string>('amoakoimml@gmail.com');
+  const [creatorPasswordConfigured, setCreatorPasswordConfigured] = useState<boolean>(false);
+  const [creatorUnlocked, setCreatorUnlocked] = useState<boolean>(() => Boolean(getStoredCreatorToken()));
+  const [apiBannerError, setApiBannerError] = useState<string | null>(null);
+
   const [prefillEmail, setPrefillEmail] = useState<string>('');
   const [authEmail, setAuthEmail] = useState<string>('');
+  const [otpType, setOtpType] = useState<'signup' | 'email' | 'recovery'>('signup');
+  const [pendingTarget, setPendingTarget] = useState<PendingModuleTarget | null>(null);
 
   const [activeScreen, setActiveScreen] = useState<NavScreen>('overview');
-  const [events, setEvents] = useState<EventItem[]>(() =>
-    loadStored('eventsapp_events_v4', INITIAL_EVENTS)
-  );
-  const [attendees, setAttendees] = useState<Attendee[]>(() =>
-    loadStored('eventsapp_attendees_v4', INITIAL_ATTENDEES)
-  );
-  const [scheduleBlocks, setScheduleBlocks] = useState<ScheduleBlock[]>(() =>
-    loadStored('eventsapp_schedule_v4', INITIAL_SCHEDULE)
-  );
-  const [alerts, setAlerts] = useState<SystemAlert[]>(() =>
-    loadStored('eventsapp_alerts_v4', INITIAL_ALERTS)
-  );
-  const [profile, setProfile] = useState<OrganizerProfile>(() =>
-    loadStored('eventsapp_profile_v4', INITIAL_PROFILE)
-  );
+  const [publicEvents, setPublicEvents] = useState<EventItem[]>([]);
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [attendees, setAttendees] = useState<Attendee[]>([]);
+  const [scheduleBlocks, setScheduleBlocks] = useState<ScheduleBlock[]>([]);
+  const [alerts, setAlerts] = useState<SystemAlert[]>([]);
+  const [profile, setProfile] = useState<OrganizerProfile>(EMPTY_PROFILE);
+  const [disposableShots, setDisposableShots] = useState<DisposableShot[]>([]);
+  const [rollSettings, setRollSettings] = useState<Record<string, DisposableRollSettings>>({});
+  const [creatorApps, setCreatorApps] = useState<CreatorApp[]>([]);
+  const [creatorAppLogs, setCreatorAppLogs] = useState<CreatorAppLog[]>([]);
 
   const [overviewSearch, setOverviewSearch] = useState('');
   const [eventsSearch, setEventsSearch] = useState('');
@@ -79,57 +108,303 @@ export default function App() {
   const [csvExportEventId, setCsvExportEventId] = useState<string | undefined>(undefined);
   const [checkinEventId, setCheckinEventId] = useState<string | undefined>(undefined);
   const [checkinPrefillCode, setCheckinPrefillCode] = useState<string | undefined>(undefined);
+  const [cameraEventId, setCameraEventId] = useState<string | undefined>(undefined);
+  const [cameraGuestName, setCameraGuestName] = useState<string | undefined>(undefined);
+  const [cameraReturnRoute, setCameraReturnRoute] = useState<'home' | 'demo-event'>('home');
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [workspaceEventId, setWorkspaceEventId] = useState<string | null>(null);
   const [publicPreviewEventId, setPublicPreviewEventId] = useState<string | undefined>(undefined);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('eventsapp_signedin_v4', JSON.stringify(isSignedIn));
-      localStorage.setItem('eventsapp_events_v4', JSON.stringify(events));
-      localStorage.setItem('eventsapp_attendees_v4', JSON.stringify(attendees));
-      localStorage.setItem('eventsapp_schedule_v4', JSON.stringify(scheduleBlocks));
-      localStorage.setItem('eventsapp_alerts_v4', JSON.stringify(alerts));
-      localStorage.setItem('eventsapp_profile_v4', JSON.stringify(profile));
-    } catch {
-      // Ignore storage quota errors
-    }
-  }, [isSignedIn, events, attendees, scheduleBlocks, alerts, profile]);
+  const notifyError = useCallback((err: unknown, fallback: string) => {
+    const msg = err instanceof Error ? err.message : fallback;
+    setApiBannerError(msg);
+  }, []);
 
+  const loadPublicEvents = useCallback(async () => {
+    try {
+      const res = await api.public.getEvents();
+      setPublicEvents(Array.isArray(res?.events) ? res.events : []);
+    } catch {
+      setPublicEvents([]);
+    }
+  }, []);
+
+  const hydrateStudioWorkspace = useCallback(async () => {
+    setStudioLoading(true);
+    try {
+      const data = await api.studio.bootstrap();
+      if (data?.profile) setProfile(data.profile);
+      setEvents(Array.isArray(data?.events) ? data.events : []);
+      setAttendees(Array.isArray(data?.attendees) ? data.attendees : []);
+      setScheduleBlocks(Array.isArray(data?.scheduleBlocks) ? data.scheduleBlocks : []);
+      setAlerts(Array.isArray(data?.alerts) ? data.alerts : []);
+      setDisposableShots(Array.isArray(data?.disposableShots) ? data.disposableShots : []);
+      setRollSettings(
+        data?.rollSettings && typeof data.rollSettings === 'object' ? data.rollSettings : {}
+      );
+      setCreatorApps(Array.isArray(data?.creatorApps) ? data.creatorApps : []);
+      setCreatorAppLogs(Array.isArray(data?.creatorAppLogs) ? data.creatorAppLogs : []);
+      setIsSignedIn(true);
+      setApiBannerError(null);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unable to load workspace from Supabase.';
+      if (msg.toLowerCase().includes('session') || msg.toLowerCase().includes('authentication')) {
+        saveStoredSession(null);
+        setIsSignedIn(false);
+      } else {
+        setApiBannerError(msg);
+      }
+      return false;
+    } finally {
+      setStudioLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const init = async () => {
+      const oauthSession = extractSessionFromUrlHash();
+      try {
+        const health = await api.health();
+        if (!cancelled) {
+          setSupabaseConfigured(health.supabaseConfigured);
+          if (health.creatorEmail) setCreatorEmail(health.creatorEmail);
+          setCreatorPasswordConfigured(Boolean(health.creatorPasswordConfigured));
+          if (!health.supabaseConfigured) {
+            setApiBannerError(
+              'Supabase environment variables (SUPABASE_URL, SUPABASE_ANON_KEY) are not configured on the server yet.'
+            );
+          }
+        }
+      } catch {
+        // Ignore transient health check failure
+      }
+
+      await loadPublicEvents();
+
+      const activeSession = oauthSession ?? getStoredSession();
+      if (activeSession) {
+        await hydrateStudioWorkspace();
+        if (oauthSession && !cancelled) {
+          setRoute('studio');
+        }
+      }
+      if (!cancelled) {
+        setAuthBootstrapping(false);
+      }
+    };
+
+    void init();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrateStudioWorkspace, loadPublicEvents]);
+
+  const safePublicEvents = Array.isArray(publicEvents) ? publicEvents : [];
+  const safeEvents = Array.isArray(events) ? events : [];
+  const safeAttendees = Array.isArray(attendees) ? attendees : [];
+  const safeScheduleBlocks = Array.isArray(scheduleBlocks) ? scheduleBlocks : [];
+  const safeAlerts = Array.isArray(alerts) ? alerts : [];
+  const safeDisposableShots = Array.isArray(disposableShots) ? disposableShots : [];
+  const safeRollSettings =
+    rollSettings && typeof rollSettings === 'object' ? rollSettings : {};
+  const safeCreatorApps = Array.isArray(creatorApps) ? creatorApps : [];
+  const safeCreatorAppLogs = Array.isArray(creatorAppLogs) ? creatorAppLogs : [];
+
+  const activeEvents = isSignedIn ? safeEvents : safePublicEvents;
   const selectedEvent = selectedEventId
-    ? events.find((e) => e.id === selectedEventId) ?? null
+    ? safeEvents.find((e) => e.id === selectedEventId) ?? null
     : null;
 
   const workspaceEvent = workspaceEventId
-    ? events.find((e) => e.id === workspaceEventId) ?? null
+    ? safeEvents.find((e) => e.id === workspaceEventId) ?? null
     : null;
 
-  const handleCreateEventWithBlocks = (newEvt: EventItem, newBlocks: ScheduleBlock[]) => {
-    setEvents((prev) => [newEvt, ...prev]);
-    if (newBlocks.length > 0) {
-      setScheduleBlocks((prev) => [...prev, ...newBlocks]);
+  const applyModuleTarget = (target: PendingModuleTarget) => {
+    setWorkspaceEventId(null);
+    setStudioSubScreen(target.subScreen ?? null);
+    if (target.route === 'camera') {
+      setCameraEventId(target.eventId);
+      setCameraGuestName(target.guestName);
+      setCameraReturnRoute(target.returnRoute ?? 'home');
+      setRoute('camera');
+    } else {
+      if (target.screen === 'checkin') {
+        setCheckinEventId(target.eventId);
+        setCheckinPrefillCode(target.prefillCode);
+      } else if (target.screen === 'camera') {
+        setCameraEventId(target.eventId);
+      }
+      setActiveScreen(target.screen ?? 'overview');
+      setRoute('studio');
     }
-    setStudioSubScreen(null);
-    setWorkspaceEventId(newEvt.id);
-    setActiveScreen('events');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const requireSignedIn = (target: PendingModuleTarget) => {
+    if (!isSignedIn) {
+      setPendingTarget(target);
+      setRoute('signin');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    applyModuleTarget(target);
+  };
+
+  const handleAuthenticated = async (
+    session: StoredAuthSession,
+    nextProfile: OrganizerProfile,
+    openCreatorConsole = false
+  ) => {
+    saveStoredSession(session);
+    if (nextProfile) setProfile(nextProfile);
+    setIsSignedIn(true);
+    setApiBannerError(null);
+    if (getStoredCreatorToken()) {
+      setCreatorUnlocked(true);
+    }
+    await hydrateStudioWorkspace();
+    await loadPublicEvents();
+
+    if (openCreatorConsole) {
+      setPendingTarget(null);
+      setWorkspaceEventId(null);
+      setStudioSubScreen(null);
+      setActiveScreen('console');
+      setRoute('studio');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (pendingTarget) {
+      const target = pendingTarget;
+      setPendingTarget(null);
+      applyModuleTarget(target);
+      return;
+    }
+    setRoute('studio');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await api.auth.signOut();
+    } catch {
+      // Clear local session regardless
+    }
+    saveStoredSession(null);
+    saveStoredCreatorToken(null);
+    setCreatorUnlocked(false);
+    setIsSignedIn(false);
+    setEvents([]);
+    setAttendees([]);
+    setScheduleBlocks([]);
+    setAlerts([]);
+    setDisposableShots([]);
+    setRollSettings({});
+    setCreatorApps([]);
+    setCreatorAppLogs([]);
+    setProfile(EMPTY_PROFILE);
+    setPendingTarget(null);
+    setStudioSubScreen(null);
+    setWorkspaceEventId(null);
+    setSelectedEventId(null);
+    setActiveScreen('overview');
+    setRoute('home');
+    void loadPublicEvents();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleSeedStarterData = async () => {
+    if (seedingStarter) return;
+    setSeedingStarter(true);
+    setApiBannerError(null);
+    try {
+      const data = await api.studio.seedStarter();
+      if (data?.profile) setProfile(data.profile);
+      setEvents(Array.isArray(data?.events) ? data.events : []);
+      setAttendees(Array.isArray(data?.attendees) ? data.attendees : []);
+      setScheduleBlocks(Array.isArray(data?.scheduleBlocks) ? data.scheduleBlocks : []);
+      setAlerts(Array.isArray(data?.alerts) ? data.alerts : []);
+      setDisposableShots(Array.isArray(data?.disposableShots) ? data.disposableShots : []);
+      setRollSettings(
+        data?.rollSettings && typeof data.rollSettings === 'object' ? data.rollSettings : {}
+      );
+      setCreatorApps(Array.isArray(data?.creatorApps) ? data.creatorApps : []);
+      setCreatorAppLogs(Array.isArray(data?.creatorAppLogs) ? data.creatorAppLogs : []);
+      setWorkspaceEventId(null);
+      setSelectedEventId(null);
+      void loadPublicEvents();
+    } catch (err) {
+      notifyError(err, 'Failed to seed starter data into Supabase.');
+    } finally {
+      setSeedingStarter(false);
+    }
+  };
+
+  const handleUpdateProfile = async (nextProfile: OrganizerProfile) => {
+    setProfile(nextProfile);
+    try {
+      const res = await api.studio.updateProfile(nextProfile);
+      setProfile(res.profile);
+    } catch (err) {
+      notifyError(err, 'Failed to save profile changes to Supabase.');
+    }
+  };
+
+  const creatingEventRef = useRef(false);
+
+  const handleCreateEventWithBlocks = async (newEvt: EventItem, newBlocks: ScheduleBlock[]) => {
+    if (creatingEventRef.current) return;
+    creatingEventRef.current = true;
+    try {
+      const res = await api.studio.createEvent(newEvt, newBlocks);
+      setEvents((prev) => [res.event, ...prev]);
+      setPublicEvents((prev) => [res.event, ...prev]);
+      if (res.blocks.length > 0) {
+        setScheduleBlocks((prev) => [...prev, ...res.blocks]);
+      }
+      setStudioSubScreen(null);
+      setWorkspaceEventId(res.event.id);
+      setActiveScreen('events');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err) {
+      notifyError(err, 'Failed to create event in Supabase.');
+    } finally {
+      creatingEventRef.current = false;
+    }
   };
 
   const openCreateWizard = () => {
-    setWorkspaceEventId(null);
-    setActiveScreen('events');
-    setStudioSubScreen('create-event');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    requireSignedIn({
+      route: 'studio',
+      screen: 'events',
+      subScreen: 'create-event',
+      label: 'Create Event Wizard',
+    });
   };
 
   const openBillingScreen = () => {
-    setWorkspaceEventId(null);
-    setStudioSubScreen(null);
-    setActiveScreen('billing');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    requireSignedIn({
+      route: 'studio',
+      screen: 'billing',
+      label: 'Plan & Billing',
+    });
   };
 
   const openCsvExportScreen = (eventId?: string) => {
+    if (!isSignedIn) {
+      requireSignedIn({
+        route: 'studio',
+        screen: 'attendees',
+        subScreen: 'csv-export',
+        label: 'CSV Attendee Export',
+      });
+      return;
+    }
     setWorkspaceEventId(null);
     setCsvExportEventId(eventId);
     setActiveScreen('attendees');
@@ -138,45 +413,161 @@ export default function App() {
   };
 
   const openQrScanner = (eventId?: string, code?: string) => {
-    setIsSignedIn(true);
-    setRoute('studio');
-    setWorkspaceEventId(null);
-    setStudioSubScreen(null);
-    setCheckinEventId(eventId);
-    setCheckinPrefillCode(code);
-    setActiveScreen('checkin');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    requireSignedIn({
+      route: 'studio',
+      screen: 'checkin',
+      eventId,
+      prefillCode: code,
+      label: 'QR Gate Scanner',
+    });
   };
 
-  const handleUpdateEvent = (updated: EventItem) => {
+  const openPublicCamera = (
+    eventId?: string,
+    guestName?: string,
+    returnTo: 'home' | 'demo-event' = 'home'
+  ) => {
+    requireSignedIn({
+      route: 'camera',
+      eventId,
+      guestName,
+      returnRoute: returnTo,
+      label: 'Event Disposable Camera',
+    });
+  };
+
+  const openStudioCamera = (eventId?: string) => {
+    requireSignedIn({
+      route: 'studio',
+      screen: 'camera',
+      eventId,
+      label: 'Event Disposable Camera',
+    });
+  };
+
+  const handleAddShot = async (shot: DisposableShot) => {
+    setDisposableShots((prev) => [shot, ...prev]);
+    try {
+      const res = await api.studio.addShot(shot);
+      setDisposableShots((prev) => prev.map((s) => (s.id === shot.id ? res.shot : s)));
+    } catch (err) {
+      setDisposableShots((prev) => prev.filter((s) => s.id !== shot.id));
+      notifyError(err, 'Failed to save camera shot to Supabase.');
+    }
+  };
+
+  const handleToggleLikeShot = async (shotId: string) => {
+    setDisposableShots((prev) =>
+      prev.map((s) =>
+        s.id === shotId
+          ? {
+              ...s,
+              liked: !s.liked,
+              likes: s.liked ? Math.max(0, s.likes - 1) : s.likes + 1,
+            }
+          : s
+      )
+    );
+    try {
+      const res = await api.studio.toggleLikeShot(shotId);
+      setDisposableShots((prev) => prev.map((s) => (s.id === shotId ? res.shot : s)));
+    } catch (err) {
+      notifyError(err, 'Failed to update shot favorite in Supabase.');
+    }
+  };
+
+  const handleDeleteShot = async (shotId: string) => {
+    const previous = disposableShots;
+    setDisposableShots((prev) => prev.filter((s) => s.id !== shotId));
+    try {
+      await api.studio.deleteShot(shotId);
+    } catch (err) {
+      setDisposableShots(previous);
+      notifyError(err, 'Failed to delete shot from Supabase.');
+    }
+  };
+
+  const handleDevelopRoll = async (eventId: string) => {
+    setDisposableShots((prev) =>
+      prev.map((s) => (s.eventId === eventId ? { ...s, developed: true } : s))
+    );
+    try {
+      await api.studio.developRoll(eventId);
+    } catch (err) {
+      notifyError(err, 'Failed to develop roll in Supabase.');
+    }
+  };
+
+  const handleUpdateRollSettings = async (eventId: string, next: DisposableRollSettings) => {
+    setRollSettings((prev) => ({ ...prev, [eventId]: next }));
+    try {
+      const res = await api.studio.updateRollSettings(eventId, next);
+      setRollSettings((prev) => ({ ...prev, [eventId]: res.settings }));
+    } catch (err) {
+      notifyError(err, 'Failed to save camera roll settings to Supabase.');
+    }
+  };
+
+  const handleUpdateEvent = async (updated: EventItem) => {
     setEvents((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
+    setPublicEvents((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
+    try {
+      const res = await api.studio.updateEvent(updated);
+      setEvents((prev) => prev.map((e) => (e.id === updated.id ? res.event : e)));
+      setPublicEvents((prev) => prev.map((e) => (e.id === updated.id ? res.event : e)));
+    } catch (err) {
+      notifyError(err, 'Failed to update event in Supabase.');
+    }
   };
 
-  const handleDeleteEvent = (id: string) => {
+  const handleDeleteEvent = async (id: string) => {
     setEvents((prev) => prev.filter((e) => e.id !== id));
+    setPublicEvents((prev) => prev.filter((e) => e.id !== id));
     setScheduleBlocks((prev) => prev.filter((b) => b.eventId !== id));
     if (workspaceEventId === id) {
       setWorkspaceEventId(null);
     }
+    try {
+      await api.studio.deleteEvent(id);
+    } catch (err) {
+      notifyError(err, 'Failed to delete event from Supabase.');
+      void hydrateStudioWorkspace();
+    }
   };
 
-  const handleRegisterAttendee = (eventId: string, attendee: Attendee) => {
-    setAttendees((prev) => [attendee, ...prev]);
-    setEvents((prev) =>
-      prev.map((evt) =>
-        evt.id === eventId
-          ? {
-              ...evt,
-              registered: evt.registered + 1,
-              smsDispatched: evt.smsDispatched + 1,
-              revenue: evt.revenue + evt.ticketPrice,
-            }
-          : evt
-      )
-    );
+  const handlePublicRegisterAttendee = async (
+    eventId: string,
+    attendee: Attendee
+  ): Promise<Attendee> => {
+    const res = await api.public.registerAttendee(eventId, {
+      name: attendee.name,
+      email: attendee.email,
+      phone: attendee.phone,
+      organization: attendee.organization,
+      tier: attendee.tier,
+      ticketCode: attendee.ticketCode,
+    });
+    setPublicEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
+    if (isSignedIn) {
+      setEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
+      setAttendees((prev) => [res.attendee, ...prev]);
+    }
+    return res.attendee;
   };
 
-  const handleToggleCheckIn = (attendeeId: string) => {
+  const handleStudioRegisterAttendee = async (eventId: string, attendee: Attendee) => {
+    try {
+      const res = await api.studio.registerAttendee(eventId, attendee);
+      setAttendees((prev) => [res.attendee, ...prev]);
+      setEvents((prev) => prev.map((evt) => (evt.id === eventId ? res.event : evt)));
+      setPublicEvents((prev) => prev.map((evt) => (evt.id === eventId ? res.event : evt)));
+    } catch (err) {
+      notifyError(err, 'Failed to register attendee in Supabase.');
+    }
+  };
+
+  const handleToggleCheckIn = async (attendeeId: string) => {
+    const target = attendees.find((a) => a.id === attendeeId);
     const nowTime = new Date().toLocaleTimeString('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
@@ -192,29 +583,70 @@ export default function App() {
           : a
       )
     );
+    if (target) {
+      const delta = target.checkedIn ? -1 : 1;
+      setEvents((prev) =>
+        prev.map((e) =>
+          e.id === target.eventId ? { ...e, checkedIn: Math.max(0, e.checkedIn + delta) } : e
+        )
+      );
+    }
+    try {
+      const res = await api.studio.toggleCheckIn(attendeeId);
+      setAttendees((prev) => prev.map((a) => (a.id === attendeeId ? res.attendee : a)));
+    } catch (err) {
+      notifyError(err, 'Failed to update check-in status in Supabase.');
+      void hydrateStudioWorkspace();
+    }
   };
 
-  const handleRetryPayment = (attendeeId: string) => {
+  const handleRetryPayment = async (attendeeId: string) => {
     setAttendees((prev) =>
       prev.map((a) => (a.id === attendeeId ? { ...a, paymentStatus: 'paid' } : a))
     );
     setAlerts((prev) =>
       prev.map((al) => (al.category === 'payment' ? { ...al, resolved: true } : al))
     );
+    try {
+      const res = await api.studio.retryPayment(attendeeId);
+      setAttendees((prev) => prev.map((a) => (a.id === attendeeId ? res.attendee : a)));
+    } catch (err) {
+      notifyError(err, 'Failed to update payment status in Supabase.');
+    }
   };
 
-  const handleToggleScheduleBlock = (blockId: string) => {
+  const handleToggleScheduleBlock = async (blockId: string) => {
     setScheduleBlocks((prev) =>
       prev.map((b) => (b.id === blockId ? { ...b, completed: !b.completed } : b))
     );
+    try {
+      const res = await api.studio.toggleScheduleBlock(blockId);
+      setScheduleBlocks((prev) => prev.map((b) => (b.id === blockId ? res.block : b)));
+    } catch (err) {
+      notifyError(err, 'Failed to update schedule block in Supabase.');
+    }
   };
 
-  const handleAddScheduleBlock = (block: ScheduleBlock) => {
+  const handleAddScheduleBlock = async (block: ScheduleBlock) => {
     setScheduleBlocks((prev) => [...prev, block]);
+    try {
+      const res = await api.studio.addScheduleBlock(block);
+      setScheduleBlocks((prev) => prev.map((b) => (b.id === block.id ? res.block : b)));
+    } catch (err) {
+      setScheduleBlocks((prev) => prev.filter((b) => b.id !== block.id));
+      notifyError(err, 'Failed to add schedule block to Supabase.');
+    }
   };
 
-  const handleDeleteScheduleBlock = (blockId: string) => {
+  const handleDeleteScheduleBlock = async (blockId: string) => {
+    const previous = scheduleBlocks;
     setScheduleBlocks((prev) => prev.filter((b) => b.id !== blockId));
+    try {
+      await api.studio.deleteScheduleBlock(blockId);
+    } catch (err) {
+      setScheduleBlocks(previous);
+      notifyError(err, 'Failed to delete schedule block from Supabase.');
+    }
   };
 
   const handleOpenWorkspace = (evt: EventItem) => {
@@ -224,8 +656,13 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleResolveAlert = (id: string) => {
+  const handleResolveAlert = async (id: string) => {
     setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, resolved: true } : a)));
+    try {
+      await api.studio.resolveAlert(id);
+    } catch (err) {
+      notifyError(err, 'Failed to resolve alert in Supabase.');
+    }
   };
 
   const handleNavigateAttendees = (eventId?: string) => {
@@ -235,52 +672,155 @@ export default function App() {
     setActiveScreen('attendees');
   };
 
-  const handleAuthenticated = (email: string, name?: string) => {
-    setIsSignedIn(true);
-    setProfile((prev) => ({
-      ...prev,
-      email,
-      name: name ?? prev.name,
-      firstName: name ? name.split(' ')[0] : prev.firstName,
-    }));
-    setRoute('studio');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  const handleCreateCreatorApp = async (payload: {
+    name: string;
+    description: string;
+    appType: CreatorAppType;
+    environment: CreatorAppEnvironment;
+    eventId?: string;
+    scopes: CreatorAppScope[];
+    webhookUrl?: string;
+    webhookEvents?: WebhookTriggerEvent[];
+    allowedOrigins?: string[];
+  }) => {
+    try {
+      const res = await api.studio.apps.create(payload);
+      setCreatorApps((prev) => [res.app, ...prev]);
+      if (res.log) {
+        setCreatorAppLogs((prev) => [res.log!, ...prev]);
+      }
+      setApiBannerError(null);
+      return {
+        app: res.app,
+        rawSecret: res.rawSecret,
+        webhookSecret: res.webhookSecret,
+      };
+    } catch (err) {
+      notifyError(err, 'Failed to create app in Supabase.');
+      return null;
+    }
   };
 
-  const handleSignOut = () => {
-    setIsSignedIn(false);
-    setWorkspaceEventId(null);
-    setSelectedEventId(null);
-    setRoute('home');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  const handleUpdateCreatorApp = async (
+    appId: string,
+    patch: {
+      name?: string;
+      description?: string;
+      appType?: CreatorAppType;
+      environment?: CreatorAppEnvironment;
+      status?: CreatorAppStatus;
+      eventId?: string | null;
+      scopes?: CreatorAppScope[];
+      webhookUrl?: string | null;
+      webhookEvents?: WebhookTriggerEvent[];
+      allowedOrigins?: string[];
+    }
+  ) => {
+    try {
+      const res = await api.studio.apps.update(appId, patch);
+      setCreatorApps((prev) => prev.map((a) => (a.id === appId ? res.app : a)));
+      setApiBannerError(null);
+    } catch (err) {
+      notifyError(err, 'Failed to update creator app.');
+    }
   };
 
-  const handleResetDemoData = () => {
-    setEvents(INITIAL_EVENTS);
-    setAttendees(INITIAL_ATTENDEES);
-    setScheduleBlocks(INITIAL_SCHEDULE);
-    setAlerts(INITIAL_ALERTS);
-    setProfile(INITIAL_PROFILE);
-    setWorkspaceEventId(null);
-    setSelectedEventId(null);
+  const handleRotateCreatorAppSecret = async (appId: string) => {
+    try {
+      const res = await api.studio.apps.rotateSecret(appId);
+      setCreatorApps((prev) => prev.map((a) => (a.id === appId ? res.app : a)));
+      if (res.log) {
+        setCreatorAppLogs((prev) => [res.log!, ...prev]);
+      }
+      setApiBannerError(null);
+      return {
+        app: res.app,
+        rawSecret: res.rawSecret,
+        webhookSecret: res.webhookSecret,
+      };
+    } catch (err) {
+      notifyError(err, 'Failed to rotate client secret.');
+      return null;
+    }
   };
 
-  const unresolvedCount = alerts.filter((a) => !a.resolved).length;
-  const featuredEvent = events[0] ?? INITIAL_EVENTS[0];
+  const handleTestCreatorWebhook = async (appId: string, eventType: WebhookTriggerEvent) => {
+    try {
+      const res = await api.studio.apps.testWebhook(appId, eventType);
+      setCreatorApps((prev) => prev.map((a) => (a.id === appId ? res.app : a)));
+      setCreatorAppLogs((prev) => [res.log, ...prev]);
+      setApiBannerError(null);
+      return res.log;
+    } catch (err) {
+      notifyError(err, 'Failed to dispatch test webhook.');
+      return null;
+    }
+  };
+
+  const handleSimulateEndpointCall = async (
+    appId: string,
+    endpoint: string,
+    method: 'GET' | 'POST'
+  ) => {
+    try {
+      const res = await api.studio.apps.simulateEndpointCall(appId, endpoint, method);
+      setCreatorApps((prev) => prev.map((a) => (a.id === appId ? res.app : a)));
+      setCreatorAppLogs((prev) => [res.log, ...prev]);
+      setApiBannerError(null);
+      return { log: res.log, result: res.result };
+    } catch (err) {
+      notifyError(err, 'Endpoint invocation failed.');
+      return null;
+    }
+  };
+
+  const handleDeleteCreatorApp = async (appId: string) => {
+    const prevApps = creatorApps;
+    const prevLogs = creatorAppLogs;
+    setCreatorApps((prev) => prev.filter((a) => a.id !== appId));
+    setCreatorAppLogs((prev) => prev.filter((l) => l.appId !== appId));
+    try {
+      await api.studio.apps.delete(appId);
+    } catch (err) {
+      setCreatorApps(prevApps);
+      setCreatorAppLogs(prevLogs);
+      notifyError(err, 'Failed to delete creator app.');
+    }
+  };
+
+  const handleUnlockCreatorConsole = async (password: string): Promise<string | null> => {
+    try {
+      const res = await api.studio.unlockCreatorConsole(password);
+      if (res.creatorToken) {
+        saveStoredCreatorToken(res.creatorToken);
+      }
+      setCreatorUnlocked(true);
+      setApiBannerError(null);
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : 'Invalid CREATOR_PASSWORD.';
+    }
+  };
+
+  const unresolvedCount = safeAlerts.filter((a) => !a.resolved).length;
+  const landingEvents = safePublicEvents.length > 0 ? safePublicEvents : safeEvents;
+  const featuredEvent = landingEvents[0] ?? INITIAL_EVENTS[0];
 
   if (route === 'home') {
     return (
       <LandingScreen
         featuredEvent={featuredEvent}
-        allEvents={events}
-        recentAttendees={attendees}
+        allEvents={landingEvents.length > 0 ? landingEvents : [featuredEvent]}
+        recentAttendees={safeAttendees}
         isSignedIn={isSignedIn}
         onNavigateSignIn={(email) => {
+          setPendingTarget(null);
           setPrefillEmail(email ?? '');
           setRoute('signin');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onNavigateSignUp={(email) => {
+          setPendingTarget(null);
           setPrefillEmail(email ?? '');
           setRoute('signup');
           window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -290,21 +830,27 @@ export default function App() {
           setRoute('demo-event');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
-        onNavigateStudio={() => {
-          setIsSignedIn(true);
-          setRoute('studio');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
+        onNavigateStudio={() =>
+          requireSignedIn({
+            route: 'studio',
+            screen: 'overview',
+            label: 'Creator Studio',
+          })
+        }
+        onSignOut={handleSignOut}
         onOpenQrScanner={(eventId) => openQrScanner(eventId || featuredEvent.id)}
-        onUpgradePro={() => {
-          setIsSignedIn(true);
-          setRoute('studio');
-          setWorkspaceEventId(null);
-          setStudioSubScreen(null);
-          setActiveScreen('billing');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
+        onOpenDisposableCamera={(eventId) =>
+          openPublicCamera(eventId || featuredEvent.id, undefined, 'home')
+        }
+        onUpgradePro={() =>
+          requireSignedIn({
+            route: 'studio',
+            screen: 'billing',
+            label: 'Plan & Billing',
+          })
+        }
         onQuickStartEmail={(email) => {
+          setPendingTarget(null);
           setPrefillEmail(email);
           setRoute('signup');
           window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -313,15 +859,146 @@ export default function App() {
     );
   }
 
-  if (route === 'signin') {
+  if (route === 'signup') {
     return (
-      <SignInScreen
+      <SignUpScreen
         initialEmail={prefillEmail}
+        redirectNotice={pendingTarget?.label}
+        onBackHome={() => {
+          setPendingTarget(null);
+          setRoute('home');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onGoSignIn={() => {
+          setRoute('signin');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onNavigateDemoEvent={() => {
+          setPendingTarget(null);
+          setRoute('demo-event');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onRequireOtp={(email, nextOtpType) => {
+          setAuthEmail(email);
+          setOtpType(nextOtpType);
+          setRoute('verify-otp');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onAuthenticated={handleAuthenticated}
+      />
+    );
+  }
+
+  if (route === 'reset-password') {
+    return (
+      <ResetPasswordScreen
+        initialEmail={authEmail || prefillEmail || profile.email}
+        onBackHome={() => {
+          setPendingTarget(null);
+          setRoute('home');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onBackSignIn={() => {
+          setRoute('signin');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onProceedToOtp={(email) => {
+          setAuthEmail(email);
+          setOtpType('recovery');
+          setRoute('verify-otp');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onNavigateDemoEvent={() => {
+          setPendingTarget(null);
+          setRoute('demo-event');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+      />
+    );
+  }
+
+  if (route === 'verify-otp') {
+    return (
+      <VerifyOtpScreen
+        email={authEmail || prefillEmail || profile.email}
+        otpType={otpType}
+        onBackHome={() => {
+          setPendingTarget(null);
+          setRoute('home');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onBackSignIn={() => {
+          setRoute('signin');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onVerified={handleAuthenticated}
+        onNavigateDemoEvent={() => {
+          setPendingTarget(null);
+          setRoute('demo-event');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+      />
+    );
+  }
+
+  if (route === 'demo-event') {
+    return (
+      <PublicEventScreen
+        events={safePublicEvents.length > 0 ? safePublicEvents : safeEvents}
+        attendees={safeAttendees}
+        initialEventId={publicPreviewEventId}
+        isSignedIn={isSignedIn}
         onBackHome={() => {
           setRoute('home');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
+        onOpenStudio={() =>
+          requireSignedIn({
+            route: 'studio',
+            screen: 'overview',
+            label: 'Creator Studio',
+          })
+        }
+        onRegisterAttendee={handlePublicRegisterAttendee}
+        onOpenDisposableCamera={(eventId, guestName) =>
+          openPublicCamera(eventId, guestName, 'demo-event')
+        }
+      />
+    );
+  }
+
+  if (authBootstrapping) {
+    return (
+      <div className="min-h-screen bg-[#F5F5F7] text-[#0B0B0B] flex flex-col items-center justify-center gap-3">
+        <Loader2 className="w-6 h-6 animate-spin text-[#0B0B0B]" />
+        <p className="text-xs font-medium text-[#71717A]">
+          Syncing your Supabase workspace...
+        </p>
+      </div>
+    );
+  }
+
+  // Strict Auth Gate: Sign-in is required for Creator Studio, Disposable Camera, and all event modules
+  if (route === 'signin' || !isSignedIn) {
+    return (
+      <SignInScreen
+        initialEmail={prefillEmail}
+        creatorEmail={creatorEmail}
+        redirectNotice={
+          pendingTarget?.label ??
+          (route === 'camera'
+            ? 'Event Disposable Camera'
+            : route === 'studio'
+              ? 'Creator Studio'
+              : undefined)
+        }
+        onBackHome={() => {
+          setPendingTarget(null);
+          setRoute('home');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
         onNavigateDemoEvent={() => {
+          setPendingTarget(null);
           setRoute('demo-event');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
@@ -335,8 +1012,9 @@ export default function App() {
           setRoute('signup');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
-        onSubmitCredentials={(email) => {
+        onRequireOtp={(email, nextOtpType) => {
           setAuthEmail(email);
+          setOtpType(nextOtpType);
           setRoute('verify-otp');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
@@ -345,100 +1023,29 @@ export default function App() {
     );
   }
 
-  if (route === 'signup') {
+  if (route === 'camera') {
     return (
-      <SignUpScreen
-        initialEmail={prefillEmail}
-        onBackHome={() => {
-          setRoute('home');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onGoSignIn={() => {
-          setRoute('signin');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onNavigateDemoEvent={() => {
-          setRoute('demo-event');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onAccountCreated={(email, name, org) => {
-          setAuthEmail(email);
-          setProfile((prev) => ({
-            ...prev,
-            email,
-            name,
-            firstName: name.split(' ')[0] || prev.firstName,
-            studio: org,
-          }));
-          setRoute('verify-otp');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-      />
-    );
-  }
-
-  if (route === 'reset-password') {
-    return (
-      <ResetPasswordScreen
-        initialEmail={authEmail || prefillEmail || profile.email}
-        onBackHome={() => {
-          setRoute('home');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onBackSignIn={() => {
-          setRoute('signin');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onProceedToOtp={(email) => {
-          setAuthEmail(email);
-          setRoute('verify-otp');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onNavigateDemoEvent={() => {
-          setRoute('demo-event');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-      />
-    );
-  }
-
-  if (route === 'verify-otp') {
-    return (
-      <VerifyOtpScreen
-        email={authEmail || prefillEmail || profile.email}
-        onBackHome={() => {
-          setRoute('home');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onBackSignIn={() => {
-          setRoute('signin');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onVerified={() => handleAuthenticated(authEmail || prefillEmail || profile.email)}
-        onNavigateDemoEvent={() => {
-          setRoute('demo-event');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-      />
-    );
-  }
-
-  if (route === 'demo-event') {
-    return (
-      <PublicEventScreen
-        events={events}
-        attendees={attendees}
-        initialEventId={publicPreviewEventId}
-        onBackHome={() => {
-          setRoute('home');
+      <DisposableCameraScreen
+        mode="public"
+        events={activeEvents}
+        shots={safeDisposableShots}
+        rollSettings={safeRollSettings}
+        alerts={safeAlerts}
+        profile={profile}
+        initialEventId={cameraEventId || activeEvents[0]?.id}
+        initialGuestName={cameraGuestName}
+        onAddShot={handleAddShot}
+        onToggleLikeShot={handleToggleLikeShot}
+        onDeleteShot={handleDeleteShot}
+        onDevelopRoll={handleDevelopRoll}
+        onUpdateRollSettings={handleUpdateRollSettings}
+        onBack={() => {
+          setRoute(cameraReturnRoute);
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onOpenStudio={() => {
-          setIsSignedIn(true);
-          setRoute('studio');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
+          openStudioCamera(cameraEventId || activeEvents[0]?.id);
         }}
-        onRegisterAttendee={handleRegisterAttendee}
       />
     );
   }
@@ -461,15 +1068,73 @@ export default function App() {
             setRoute('home');
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
+          onSignOut={handleSignOut}
           unresolvedAlertCount={unresolvedCount}
         />
 
         {/* Main Viewport */}
-        <main className="flex-1 min-w-0">
+        <main className="flex-1 min-w-0 space-y-4">
+          {apiBannerError && (
+            <div className="rounded-2xl bg-[#0B0B0B] text-white px-4 py-3 flex items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <Database className="w-4 h-4 shrink-0 text-zinc-300" />
+                <span className="truncate">{apiBannerError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setApiBannerError(null)}
+                aria-label="Dismiss alert"
+                className="p-1 rounded-full hover:bg-white/10 shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {supabaseConfigured &&
+            !studioLoading &&
+            safeEvents.length === 0 &&
+            studioSubScreen !== 'create-event' && (
+              <div className="rounded-[24px] bg-[#F5F5F7] border border-[#E5E5EA] p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
+                    <Database className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-[#0B0B0B]">
+                      Your Supabase workspace is ready
+                    </h2>
+                    <p className="text-xs text-[#71717A] mt-0.5 leading-relaxed">
+                      Create your first event from scratch or populate your database with starter
+                      events, attendees, and 35mm disposable camera frames.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={seedingStarter}
+                    onClick={handleSeedStarterData}
+                    className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] disabled:opacity-60 text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>{seedingStarter ? 'Seeding Supabase...' : 'Load Starter Data'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openCreateWizard}
+                    className="px-4 py-2 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-xs font-semibold text-white transition-colors"
+                  >
+                    + Create Event
+                  </button>
+                </div>
+              </div>
+            )}
+
           {studioSubScreen === 'create-event' ? (
             <CreateEventWizardScreen
               profile={profile}
-              events={events}
+              events={safeEvents}
               onCancel={() => {
                 setStudioSubScreen(null);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -479,8 +1144,8 @@ export default function App() {
             />
           ) : studioSubScreen === 'csv-export' ? (
             <CsvExportScreen
-              events={events}
-              attendees={attendees}
+              events={safeEvents}
+              attendees={safeAttendees}
               profile={profile}
               initialEventId={csvExportEventId}
               onBackToAttendees={() => {
@@ -496,10 +1161,10 @@ export default function App() {
           ) : workspaceEvent ? (
             <EventWorkspaceScreen
               event={workspaceEvent}
-              events={events}
-              attendees={attendees}
-              scheduleBlocks={scheduleBlocks}
-              alerts={alerts}
+              events={safeEvents}
+              attendees={safeAttendees}
+              scheduleBlocks={safeScheduleBlocks}
+              alerts={safeAlerts}
               profile={profile}
               onBackToEvents={() => {
                 setWorkspaceEventId(null);
@@ -513,7 +1178,7 @@ export default function App() {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
               onToggleCheckIn={handleToggleCheckIn}
-              onRegisterAttendee={handleRegisterAttendee}
+              onRegisterAttendee={handleStudioRegisterAttendee}
               onToggleScheduleBlock={handleToggleScheduleBlock}
               onAddScheduleBlock={handleAddScheduleBlock}
               onDeleteScheduleBlock={handleDeleteScheduleBlock}
@@ -525,14 +1190,15 @@ export default function App() {
               onSelectAlertEvent={(evt) => setWorkspaceEventId(evt.id)}
               onOpenCsvExport={(evtId) => openCsvExportScreen(evtId)}
               onOpenQrScanner={(evtId) => openQrScanner(evtId)}
+              onOpenDisposableCamera={(evtId) => openStudioCamera(evtId)}
             />
           ) : (
             <>
               {activeScreen === 'overview' && (
                 <OverviewScreen
-                  events={events}
-                  attendees={attendees}
-                  alerts={alerts}
+                  events={safeEvents}
+                  attendees={safeAttendees}
+                  alerts={safeAlerts}
                   profile={profile}
                   searchQuery={overviewSearch}
                   onSearchChange={setOverviewSearch}
@@ -549,14 +1215,34 @@ export default function App() {
 
               {activeScreen === 'checkin' && (
                 <QrGateScannerScreen
-                  events={events}
-                  attendees={attendees}
-                  alerts={alerts}
+                  events={safeEvents}
+                  attendees={safeAttendees}
+                  alerts={safeAlerts}
                   profile={profile}
                   initialEventId={checkinEventId}
                   initialCode={checkinPrefillCode}
                   onToggleCheckIn={handleToggleCheckIn}
-                  onRegisterAttendee={handleRegisterAttendee}
+                  onRegisterAttendee={handleStudioRegisterAttendee}
+                  onManageEvent={handleOpenWorkspace}
+                  onNavigateSettings={() => setActiveScreen('settings')}
+                  onResolveAlert={handleResolveAlert}
+                />
+              )}
+
+              {activeScreen === 'camera' && (
+                <DisposableCameraScreen
+                  mode="studio"
+                  events={safeEvents}
+                  shots={safeDisposableShots}
+                  rollSettings={safeRollSettings}
+                  alerts={safeAlerts}
+                  profile={profile}
+                  initialEventId={cameraEventId || safeEvents[0]?.id}
+                  onAddShot={handleAddShot}
+                  onToggleLikeShot={handleToggleLikeShot}
+                  onDeleteShot={handleDeleteShot}
+                  onDevelopRoll={handleDevelopRoll}
+                  onUpdateRollSettings={handleUpdateRollSettings}
                   onManageEvent={handleOpenWorkspace}
                   onNavigateSettings={() => setActiveScreen('settings')}
                   onResolveAlert={handleResolveAlert}
@@ -565,8 +1251,8 @@ export default function App() {
 
               {activeScreen === 'events' && (
                 <EventsScreen
-                  events={events}
-                  alerts={alerts}
+                  events={safeEvents}
+                  alerts={safeAlerts}
                   profile={profile}
                   searchQuery={eventsSearch}
                   onSearchChange={setEventsSearch}
@@ -581,9 +1267,9 @@ export default function App() {
 
               {activeScreen === 'schedule' && (
                 <ScheduleScreen
-                  events={events}
-                  blocks={scheduleBlocks}
-                  alerts={alerts}
+                  events={safeEvents}
+                  blocks={safeScheduleBlocks}
+                  alerts={safeAlerts}
                   profile={profile}
                   onToggleBlock={handleToggleScheduleBlock}
                   onAddBlock={handleAddScheduleBlock}
@@ -596,14 +1282,14 @@ export default function App() {
 
               {activeScreen === 'attendees' && (
                 <AttendeesScreen
-                  attendees={attendees}
-                  events={events}
-                  alerts={alerts}
+                  attendees={safeAttendees}
+                  events={safeEvents}
+                  alerts={safeAlerts}
                   profile={profile}
                   initialEventFilter={attendeeEventFilter}
                   onToggleCheckIn={handleToggleCheckIn}
                   onRetryPayment={handleRetryPayment}
-                  onRegisterAttendee={handleRegisterAttendee}
+                  onRegisterAttendee={handleStudioRegisterAttendee}
                   onManageEvent={handleOpenWorkspace}
                   onOpenQrScanner={(evtId, code) => openQrScanner(evtId, code)}
                   onNavigateSettings={() => setActiveScreen('settings')}
@@ -614,9 +1300,9 @@ export default function App() {
 
               {activeScreen === 'analytics' && (
                 <AnalyticsScreen
-                  events={events}
-                  attendees={attendees}
-                  alerts={alerts}
+                  events={safeEvents}
+                  attendees={safeAttendees}
+                  alerts={safeAlerts}
                   profile={profile}
                   onManageEvent={handleOpenWorkspace}
                   onNavigateSettings={() => setActiveScreen('settings')}
@@ -624,24 +1310,48 @@ export default function App() {
                 />
               )}
 
+              {activeScreen === 'console' && (
+                <AppsCreatorConsoleScreen
+                  apps={safeCreatorApps}
+                  logs={safeCreatorAppLogs}
+                  events={safeEvents}
+                  alerts={safeAlerts}
+                  profile={profile}
+                  creatorEmail={creatorEmail}
+                  creatorPasswordConfigured={creatorPasswordConfigured}
+                  creatorUnlocked={creatorUnlocked}
+                  onUnlockCreator={handleUnlockCreatorConsole}
+                  onCreateApp={handleCreateCreatorApp}
+                  onUpdateApp={handleUpdateCreatorApp}
+                  onRotateSecret={handleRotateCreatorAppSecret}
+                  onTestWebhook={handleTestCreatorWebhook}
+                  onSimulateEndpointCall={handleSimulateEndpointCall}
+                  onDeleteApp={handleDeleteCreatorApp}
+                  onManageEvent={handleOpenWorkspace}
+                  onNavigateSettings={() => setActiveScreen('settings')}
+                  onSignOut={handleSignOut}
+                  onResolveAlert={handleResolveAlert}
+                />
+              )}
+
               {activeScreen === 'billing' && (
                 <BillingScreen
                   profile={profile}
-                  events={events}
-                  onUpdateProfile={setProfile}
+                  events={safeEvents}
+                  onUpdateProfile={handleUpdateProfile}
                 />
               )}
 
               {activeScreen === 'settings' && (
                 <SettingsScreen
                   profile={profile}
-                  events={events}
-                  alerts={alerts}
-                  onUpdateProfile={setProfile}
+                  events={safeEvents}
+                  alerts={safeAlerts}
+                  onUpdateProfile={handleUpdateProfile}
                   onResolveAlert={handleResolveAlert}
                   onOpenPlans={openBillingScreen}
                   onSignOut={handleSignOut}
-                  onResetDemoData={handleResetDemoData}
+                  onResetDemoData={handleSeedStarterData}
                 />
               )}
             </>
@@ -653,7 +1363,7 @@ export default function App() {
       {selectedEvent && (
         <EventDetailModal
           event={selectedEvent}
-          scheduleBlocks={scheduleBlocks}
+          scheduleBlocks={safeScheduleBlocks}
           capacityThreshold={profile.capacityAlertThreshold}
           onClose={() => setSelectedEventId(null)}
           onUpdateEvent={handleUpdateEvent}

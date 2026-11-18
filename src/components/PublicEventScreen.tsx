@@ -6,6 +6,7 @@ import {
   Bolt,
   Calendar,
   CalendarDays,
+  Camera,
   Check,
   ChevronDown,
   ExternalLink,
@@ -28,9 +29,11 @@ interface PublicEventScreenProps {
   events: EventItem[];
   attendees: Attendee[];
   initialEventId?: string;
+  isSignedIn?: boolean;
   onBackHome: () => void;
   onOpenStudio: () => void;
-  onRegisterAttendee: (eventId: string, attendee: Attendee) => void;
+  onRegisterAttendee: (eventId: string, attendee: Attendee) => Promise<Attendee | void> | void;
+  onOpenDisposableCamera?: (eventId: string, guestName?: string) => void;
 }
 
 const FLYER_HERO_IMG =
@@ -83,9 +86,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   events,
   attendees,
   initialEventId,
+  isSignedIn = false,
   onBackHome,
   onOpenStudio,
   onRegisterAttendee,
+  onOpenDisposableCamera,
 }) => {
   const activeEvents = useMemo(
     () => events.filter((e) => e.status === 'live' || e.status === 'upcoming'),
@@ -104,6 +109,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const [email, setEmail] = useState('');
   const [issuedPass, setIssuedPass] = useState<Attendee | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [shareToast, setShareToast] = useState(false);
   const [walletSaved, setWalletSaved] = useState(false);
 
@@ -162,9 +168,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     setTimeout(() => setWalletSaved(false), 3000);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedEvent || !name.trim() || !normalizedPhone || !email.trim()) return;
+    if (!selectedEvent || !name.trim() || !normalizedPhone || !email.trim() || submitting) return;
 
     const cleanTarget = normalizedPhone.replace(/\s+/g, '');
     const alreadyExists = attendees.some(
@@ -180,6 +186,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     }
 
     setDuplicateError(null);
+    setSubmitting(true);
     const codePrefix = selectedEvent.title
       .split(' ')
       .map((w) => w[0])
@@ -202,12 +209,53 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       paymentStatus: 'paid',
     };
 
-    onRegisterAttendee(selectedEvent.id, newAttendee);
-    setIssuedPass(newAttendee);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    try {
+      const persisted = await onRegisterAttendee(selectedEvent.id, newAttendee);
+      setIssuedPass(persisted ?? newAttendee);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err) {
+      setDuplicateError(
+        err instanceof Error ? err.message : 'Unable to complete registration. Please try again.'
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  if (!selectedEvent) return null;
+  if (!selectedEvent) {
+    return (
+      <div className="min-h-screen bg-[#F5F5F7] text-[#1A1C1D] flex flex-col items-center justify-center px-4 text-center">
+        <div className="max-w-md w-full bg-white rounded-[28px] p-8 shadow-sm space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-[#F5F5F7] flex items-center justify-center mx-auto">
+            <CalendarDays className="w-6 h-6 text-[#0B0B0B]" />
+          </div>
+          <h1 className="font-display text-xl font-bold text-[#0B0B0B]">
+            No published events in Supabase yet
+          </h1>
+          <p className="text-sm text-[#71717A] leading-relaxed">
+            Sign in to Creator Studio to publish an event or load starter events into your Supabase
+            database.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-2 pt-2 justify-center">
+            <button
+              type="button"
+              onClick={onBackHome}
+              className="px-5 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] transition-colors"
+            >
+              Back to Home
+            </button>
+            <button
+              type="button"
+              onClick={onOpenStudio}
+              className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-xs font-semibold text-white transition-colors"
+            >
+              {isSignedIn ? 'Open Creator Studio' : 'Sign In to Publish'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const spotsRemaining = Math.max(0, selectedEvent.capacity - selectedEvent.registered);
   const occupancyPct = Math.min(
@@ -279,8 +327,8 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             <button
               type="button"
               onClick={onOpenStudio}
-              title="Open Creator Studio"
-              aria-label="Open Creator Studio"
+              title={isSignedIn ? 'Open Creator Studio' : 'Sign In for Creator Studio'}
+              aria-label={isSignedIn ? 'Open Creator Studio' : 'Sign In for Creator Studio'}
               className="w-8 h-8 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center hover:opacity-85 transition-opacity"
             >
               <User className="w-4 h-4" />
@@ -433,6 +481,33 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   ))}
                 </div>
               </section>
+
+              {/* Event Disposable Camera Launch Card */}
+              {onOpenDisposableCamera && (
+                <section className="bg-[#0B0B0B] text-white rounded-[28px] p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-start gap-3.5 min-w-0">
+                    <div className="w-11 h-11 rounded-2xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0">
+                      <Camera className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-bold text-white">
+                        Shared Event Disposable Camera
+                      </h3>
+                      <p className="text-xs text-zinc-300 mt-0.5 leading-relaxed">
+                        Snap candid 35mm film photos with guests on the shared event camera roll.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onOpenDisposableCamera(selectedEvent.id, name.trim() || undefined)}
+                    className="w-full sm:w-auto px-4 py-2.5 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>{isSignedIn ? 'Open Camera' : 'Sign In for Camera'}</span>
+                  </button>
+                </section>
+              )}
 
               {/* Featured Program / Hosts */}
               <section className="space-y-2.5">
@@ -683,12 +758,15 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
                   <button
                     type="submit"
-                    className="w-full h-14 bg-[#0B0B0B] hover:opacity-90 active:scale-[0.99] text-white text-base font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
+                    disabled={submitting}
+                    className="w-full h-14 bg-[#0B0B0B] hover:opacity-90 active:scale-[0.99] disabled:opacity-60 text-white text-base font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
                   >
                     <span>
-                      {selectedEvent.ticketPrice === 0
-                        ? 'Register Free Pass'
-                        : `Claim Pass ($${selectedEvent.ticketPrice})`}
+                      {submitting
+                        ? 'Registering...'
+                        : selectedEvent.ticketPrice === 0
+                          ? 'Register Free Pass'
+                          : `Claim Pass ($${selectedEvent.ticketPrice})`}
                     </span>
                     <ArrowRight className="w-5 h-5" />
                   </button>
@@ -919,10 +997,28 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
               {/* Action CTAs */}
               <div className="space-y-2.5 mb-6">
+                {onOpenDisposableCamera && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenDisposableCamera(selectedEvent.id, issuedPass.name)}
+                    className="w-full h-12 bg-[#0B0B0B] text-white rounded-full flex items-center justify-center gap-2 hover:bg-neutral-800 transition-colors shadow-sm text-sm font-semibold"
+                  >
+                    <Camera className="w-4.5 h-4.5" />
+                    <span>
+                      {isSignedIn
+                        ? 'Snap Photos on Disposable Camera'
+                        : 'Sign In to Use Disposable Camera'}
+                    </span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleSaveWallet}
-                  className="w-full h-12 bg-[#0B0B0B] text-white rounded-full flex items-center justify-center gap-2 hover:bg-neutral-800 transition-colors shadow-sm text-sm font-semibold"
+                  className={`w-full h-12 rounded-full flex items-center justify-center gap-2 transition-colors shadow-sm text-sm font-semibold ${
+                    onOpenDisposableCamera
+                      ? 'bg-white text-[#0B0B0B] hover:bg-[#EEEEF0]'
+                      : 'bg-[#0B0B0B] text-white hover:bg-neutral-800'
+                  }`}
                 >
                   <Wallet className="w-4.5 h-4.5" />
                   <span>
@@ -1065,7 +1161,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   onClick={onOpenStudio}
                   className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800"
                 >
-                  View Guest in Creator Studio
+                  {isSignedIn ? 'View Guest in Creator Studio' : 'Sign In for Creator Studio'}
                 </button>
               </div>
             </div>
