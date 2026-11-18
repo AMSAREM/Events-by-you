@@ -1,23 +1,42 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
+  AlertTriangle,
+  Ban,
   Check,
+  CheckCircle2,
   Code2,
   Copy,
+  Database,
+  DollarSign,
+  Eye,
   KeyRound,
   Lock,
   LogOut,
   Pause,
   Play,
   Plus,
+  Power,
   RefreshCw,
+  RotateCcw,
   Send,
+  Server,
   Shield,
+  ShieldAlert,
+  Smartphone,
   Terminal,
   Trash2,
+  TrendingUp,
+  UserCheck,
+  Users,
   Webhook,
   X,
+  Zap,
 } from 'lucide-react';
 import type {
+  AppRole,
+  BuilderConsoleOverview,
+  BuilderTenantInspection,
   CreatorApp,
   CreatorAppEnvironment,
   CreatorAppLog,
@@ -29,6 +48,7 @@ import type {
   SystemAlert,
   WebhookTriggerEvent,
 } from '../types/events';
+import { api } from '../lib/api';
 import { TopUtilityBar } from './TopUtilityBar';
 
 interface AppsCreatorConsoleScreenProps {
@@ -114,6 +134,7 @@ const API_ENDPOINTS: { endpoint: string; method: 'GET' | 'POST'; scope: CreatorA
   { endpoint: '/v1/camera/shots', method: 'GET', scope: 'camera:read', label: 'Read 35mm Film Roll' },
 ];
 
+type ConsoleSection = 'pulse' | 'tenants' | 'diagnostics' | 'switches' | 'economics' | 'apps';
 type ConsoleTab = 'credentials' | 'webhooks' | 'sdk' | 'logs';
 type EnvFilter = 'all' | 'production' | 'sandbox' | 'paused';
 type SnippetLang = 'typescript' | 'curl' | 'embed';
@@ -180,6 +201,17 @@ export const AppsCreatorConsoleScreen: React.FC<AppsCreatorConsoleScreenProps> =
   const [rotatingSecret, setRotatingSecret] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // Builder Console sections & telemetry state
+  const [consoleSection, setConsoleSection] = useState<ConsoleSection>('pulse');
+  const [builderOverview, setBuilderOverview] = useState<BuilderConsoleOverview | null>(null);
+  const [builderLoading, setBuilderLoading] = useState(false);
+  const [builderError, setBuilderError] = useState<string | null>(null);
+  const [builderFeedback, setBuilderFeedback] = useState<string | null>(null);
+  const [actionBusyId, setActionBusyId] = useState<string | null>(null);
+  const [tenantSearch, setTenantSearch] = useState('');
+  const [tenantInspection, setTenantInspection] = useState<BuilderTenantInspection | null>(null);
+  const [inspectLoading, setInspectLoading] = useState(false);
+
   // Tester & Logs state
   const [selectedWebhookTrigger, setSelectedWebhookTrigger] = useState<WebhookTriggerEvent>('attendee.registered');
   const [testingWebhook, setTestingWebhook] = useState(false);
@@ -188,6 +220,214 @@ export const AppsCreatorConsoleScreen: React.FC<AppsCreatorConsoleScreenProps> =
   const [playgroundOutput, setPlaygroundOutput] = useState<string | null>(null);
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const isConsoleReady = !creatorPasswordConfigured || creatorUnlocked;
+
+  const refreshBuilderOverview = useCallback(async () => {
+    if (!isConsoleReady) return;
+    setBuilderLoading(true);
+    setBuilderError(null);
+    try {
+      const overview = await api.builder.overview();
+      setBuilderOverview(overview);
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Unable to load builder telemetry');
+    } finally {
+      setBuilderLoading(false);
+    }
+  }, [isConsoleReady]);
+
+  useEffect(() => {
+    if (isConsoleReady) {
+      refreshBuilderOverview();
+    }
+  }, [isConsoleReady, refreshBuilderOverview]);
+
+  const showToast = (msg: string) => {
+    setBuilderFeedback(msg);
+    setTimeout(() => {
+      setBuilderFeedback((prev) => (prev === msg ? null : prev));
+    }, 3500);
+  };
+
+  const filteredTenants = useMemo(() => {
+    if (!builderOverview) return [];
+    const q = (tenantSearch || searchQuery).trim().toLowerCase();
+    if (!q) return builderOverview.tenants;
+    return builderOverview.tenants.filter(
+      (t) =>
+        t.name.toLowerCase().includes(q) ||
+        t.email.toLowerCase().includes(q) ||
+        t.studio.toLowerCase().includes(q) ||
+        t.plan.toLowerCase().includes(q) ||
+        t.appRole.toLowerCase().includes(q)
+    );
+  }, [builderOverview, tenantSearch, searchQuery]);
+
+  const handleRetrySms = async (attendeeId?: string) => {
+    setActionBusyId(attendeeId ? `sms-${attendeeId}` : 'sms-all');
+    setBuilderError(null);
+    try {
+      const res = await api.builder.retrySms(attendeeId);
+      showToast(`Retried ${res.retried} SMS dispatch${res.retried === 1 ? '' : 'es'}.`);
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'SMS retry failed');
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleClearErrors = async () => {
+    setActionBusyId('clear-errors');
+    setBuilderError(null);
+    try {
+      await api.builder.clearErrors();
+      showToast('Cleared server error trace buffer.');
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Failed to clear errors');
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleTopUp = async (userId: string, amount: number) => {
+    setActionBusyId(`topup-${userId}`);
+    setBuilderError(null);
+    try {
+      await api.builder.topUpTenantCredits(userId, amount);
+      showToast(`Added +${amount} SMS credits.`);
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Credit top-up failed');
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleUpdatePlan = async (userId: string, plan: OrganizerProfile['plan']) => {
+    setActionBusyId(`plan-${userId}`);
+    setBuilderError(null);
+    try {
+      await api.builder.updateTenantPlan(userId, plan);
+      showToast(`Updated plan to ${plan}.`);
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Plan update failed');
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleUpdateRole = async (userId: string, appRole: AppRole) => {
+    setActionBusyId(`role-${userId}`);
+    setBuilderError(null);
+    try {
+      await api.builder.updateTenantRole(userId, appRole);
+      showToast(`Updated RBAC role to ${appRole}.`);
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Role update failed');
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleSuspendTenant = async (userId: string) => {
+    setActionBusyId(`suspend-${userId}`);
+    setBuilderError(null);
+    try {
+      await api.builder.suspendTenant(userId);
+      showToast('Updated tenant suspension status.');
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Failed to update suspension');
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleRevokeSessions = async (userId: string) => {
+    setActionBusyId(`revoke-${userId}`);
+    setBuilderError(null);
+    try {
+      const res = await api.builder.revokeTenantSessions(userId);
+      showToast(`Revoked ${res.revoked} active session(s).`);
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Session revocation failed');
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleInspectTenant = async (userId: string) => {
+    setInspectLoading(true);
+    setBuilderError(null);
+    try {
+      const detail = await api.builder.inspectTenant(userId);
+      setTenantInspection(detail);
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Unable to inspect tenant');
+    } finally {
+      setInspectLoading(false);
+    }
+  };
+
+  const handleReplayDiagnostic = async (diagId: string) => {
+    setActionBusyId(`diag-${diagId}`);
+    setBuilderError(null);
+    try {
+      await api.builder.replayDiagnostic(diagId);
+      showToast('Replayed failed diagnostic payload.');
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Diagnostic replay failed');
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleToggleEventPause = async (eventId: string, currentlyPaused: boolean) => {
+    if (!builderOverview) return;
+    setActionBusyId(`evt-pause-${eventId}`);
+    setBuilderError(null);
+    try {
+      const nextPaused = currentlyPaused
+        ? builderOverview.flags.pausedEventIds.filter((id) => id !== eventId)
+        : [...builderOverview.flags.pausedEventIds, eventId];
+      await api.builder.updateFlags({ pausedEventIds: nextPaused });
+      showToast(currentlyPaused ? 'Resumed event registrations.' : 'Paused event registrations.');
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Failed to toggle event switch');
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleUpdateFlag = async (
+    patch: Partial<{
+      publicRegistrationsPaused: boolean;
+      smsMode: 'live' | 'sandbox';
+      signupsEnabled: boolean;
+      starterSeedingEnabled: boolean;
+    }>,
+    label: string
+  ) => {
+    setActionBusyId(`flag-${label}`);
+    setBuilderError(null);
+    try {
+      await api.builder.updateFlags(patch);
+      showToast(`Updated ${label}.`);
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Flag update failed');
+    } finally {
+      setActionBusyId(null);
+    }
+  };
 
   const filteredApps = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -546,18 +786,42 @@ const { attendee, event } = await response.json();`;
           {/* Console Header */}
       <header className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-5 border-b border-[#E5E5EA]">
         <div>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-[-0.03em] text-[#0B0B0B] text-balance">
-            Apps Creator Console
-          </h1>
+          <div className="flex items-center gap-2.5">
+            <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-[-0.03em] text-[#0B0B0B] text-balance">
+              Apps Builder Console
+            </h1>
+            {builderOverview && (
+              <span className="px-2.5 py-0.5 rounded-md bg-[#F5F5F7] border border-[#E5E5EA] font-mono text-[11px] font-semibold text-[#0B0B0B] uppercase">
+                {builderOverview.storageMode}
+              </span>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-[#71717A] mt-1.5 tabular-nums">
             <span>{apps.length} {apps.length === 1 ? 'registered app' : 'registered apps'}</span>
             <span aria-hidden="true">·</span>
             <span>{totalRequests.toLocaleString()} logged requests</span>
-            <span aria-hidden="true">·</span>
-            <span>Supabase-backed credentials &amp; HMAC webhooks</span>
+            {builderOverview && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>{builderOverview.tenants.length} organisers</span>
+                <span aria-hidden="true">·</span>
+                <span>DB {builderOverview.dbLatencyMs} ms</span>
+                <span aria-hidden="true">·</span>
+                <span>SMS {builderOverview.smsTelemetry.mode.toUpperCase()}</span>
+              </>
+            )}
           </div>
         </div>
-        <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto shrink-0">
+          <button
+            type="button"
+            disabled={builderLoading}
+            onClick={refreshBuilderOverview}
+            className="px-3.5 py-2 rounded-full border border-[#E5E5EA] bg-white hover:border-[#0B0B0B] disabled:opacity-50 text-[#0B0B0B] text-xs font-semibold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${builderLoading ? 'animate-spin' : ''}`} />
+            <span>Refresh Telemetry</span>
+          </button>
           <button
             type="button"
             onClick={onSignOut}
@@ -576,6 +840,87 @@ const { attendee, event } = await response.json();`;
           </button>
         </div>
       </header>
+
+      {/* Builder Section Switcher */}
+      <nav aria-label="Builder Console Sections" className="flex items-center gap-1 p-1 bg-[#F5F5F7] rounded-xl overflow-x-auto">
+        {(
+          [
+            { id: 'pulse', label: 'Platform Pulse', icon: Activity },
+            {
+              id: 'tenants',
+              label: `Organisers & Tenants${builderOverview ? ` (${builderOverview.tenants.length})` : ''}`,
+              icon: Users,
+            },
+            {
+              id: 'diagnostics',
+              label: `Live Diagnostics${
+                builderOverview && builderOverview.diagnosticFailures.filter((d) => !d.replayed).length > 0
+                  ? ` (${builderOverview.diagnosticFailures.filter((d) => !d.replayed).length})`
+                  : ''
+              }`,
+              icon: Zap,
+            },
+            { id: 'switches', label: 'Kill Switches & Env', icon: Power },
+            { id: 'economics', label: 'Unit Economics', icon: DollarSign },
+            { id: 'apps', label: `App Clients & Webhooks (${apps.length})`, icon: Terminal },
+          ] as {
+            id: ConsoleSection;
+            label: string;
+            icon: React.ComponentType<{ className?: string }>;
+          }[]
+        ).map((sec) => {
+          const Icon = sec.icon;
+          const active = consoleSection === sec.id;
+          return (
+            <button
+              key={sec.id}
+              type="button"
+              onClick={() => setConsoleSection(sec.id)}
+              className={`px-3.5 py-2 text-xs font-medium rounded-lg transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                active ? 'bg-white text-[#0B0B0B] shadow-xs' : 'text-[#71717A] hover:text-[#0B0B0B]'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              <span>{sec.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* Builder Feedback & Error Banners */}
+      {builderFeedback && (
+        <div className="rounded-2xl bg-[#0B0B0B] text-white px-4 py-3 text-xs font-medium flex items-center justify-between gap-3">
+          <span className="inline-flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            {builderFeedback}
+          </span>
+          <button
+            type="button"
+            onClick={() => setBuilderFeedback(null)}
+            className="text-zinc-300 hover:text-white"
+            aria-label="Dismiss notification"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {builderError && (
+        <div className="rounded-2xl bg-[#F5F5F7] border border-[#DC2626] text-[#DC2626] px-4 py-3 text-xs font-medium flex items-center justify-between gap-3">
+          <span className="inline-flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            {builderError}
+          </span>
+          <button
+            type="button"
+            onClick={() => setBuilderError(null)}
+            className="text-[#DC2626] hover:opacity-75"
+            aria-label="Dismiss error"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* One-Time Client Secret Reveal */}
       {revealedSecret && (
@@ -641,6 +986,835 @@ const { attendee, event } = await response.json();`;
         </section>
       )}
 
+      {/* SECTION A: PLATFORM & GATEWAY HEALTH */}
+      {consoleSection === 'pulse' && (
+        <div className="space-y-6">
+          {!builderOverview ? (
+            <section className="rounded-3xl border border-[#E5E5EA] bg-[#F5F5F7] p-8 text-center text-xs text-[#71717A]">
+              {builderLoading ? 'Loading platform telemetry...' : 'Telemetry unavailable.'}
+            </section>
+          ) : (
+            <>
+              {/* Database & Schema Health */}
+              <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-center justify-center text-[#0B0B0B] shrink-0">
+                      <Database className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h2 className="font-display text-base font-bold text-[#0B0B0B]">
+                        Database &amp; RLS Schema Health
+                      </h2>
+                      <p className="text-xs text-[#71717A]">
+                        Live row counts, RLS check, and connection latency across core tables
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums">
+                    <span className="px-2.5 py-1 rounded-md bg-[#F5F5F7] border border-[#E5E5EA] text-[#0B0B0B]">
+                      {builderOverview.storageMode === 'supabase' ? 'Supabase Postgres' : 'In-Memory Store'}
+                    </span>
+                    <span className="px-2.5 py-1 rounded-md bg-[#F5F5F7] border border-[#E5E5EA] text-[#0B0B0B]">
+                      Latency {builderOverview.dbLatencyMs} ms
+                    </span>
+                    <span
+                      className={`px-2.5 py-1 rounded-md border font-semibold ${
+                        builderOverview.rlsVerified
+                          ? 'bg-[#F5F5F7] border-[#E5E5EA] text-[#16A34A]'
+                          : 'bg-[#F5F5F7] border-[#D97706] text-[#D97706]'
+                      }`}
+                    >
+                      {builderOverview.rlsVerified ? 'RLS Enforced' : 'RLS Unverified'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                  {(
+                    [
+                      { key: 'profiles', label: 'profiles' },
+                      { key: 'events', label: 'events' },
+                      { key: 'attendees', label: 'attendees' },
+                      { key: 'disposable_shots', label: 'disposable_shots' },
+                      { key: 'creator_apps', label: 'creator_apps' },
+                    ] as const
+                  ).map((tbl) => (
+                    <div
+                      key={tbl.key}
+                      className="rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] p-4"
+                    >
+                      <p className="font-mono text-[11px] text-[#71717A]">{tbl.label}</p>
+                      <p className="font-display text-2xl font-bold text-[#0B0B0B] mt-1 tabular-nums">
+                        {builderOverview.tableCounts[tbl.key].toLocaleString()}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {/* SMS & Email Delivery Telemetry */}
+              <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-center justify-center text-[#0B0B0B] shrink-0">
+                      <Smartphone className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h2 className="font-display text-base font-bold text-[#0B0B0B]">
+                        Arkesel SMS &amp; Gateway Telemetry
+                      </h2>
+                      <p className="text-xs text-[#71717A]">
+                        Carrier delivery rate, organizer credit liabilities, and failed SMS retry queue
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-1 rounded-md bg-[#F5F5F7] border border-[#E5E5EA] font-mono text-xs font-semibold text-[#0B0B0B] uppercase">
+                      Mode: {builderOverview.smsTelemetry.mode}
+                    </span>
+                    {builderOverview.smsTelemetry.failedQueue.length > 0 && (
+                      <button
+                        type="button"
+                        disabled={actionBusyId === 'sms-all'}
+                        onClick={() => handleRetrySms()}
+                        className="px-3.5 py-1.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 disabled:opacity-50 inline-flex items-center gap-1.5"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>
+                          {actionBusyId === 'sms-all'
+                            ? 'Retrying...'
+                            : `Retry All (${builderOverview.smsTelemetry.failedQueue.length})`}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="rounded-2xl bg-[#F5F5F7] p-4">
+                    <p className="text-xs text-[#71717A]">Delivery Success</p>
+                    <p className="font-display text-2xl font-bold text-[#0B0B0B] mt-1 tabular-nums">
+                      {builderOverview.smsTelemetry.successRatePct}%
+                    </p>
+                    <p className="text-[11px] text-[#71717A] mt-0.5 tabular-nums">
+                      {builderOverview.smsTelemetry.deliveredCount} / {builderOverview.smsTelemetry.totalDispatched} passes
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-[#F5F5F7] p-4">
+                    <p className="text-xs text-[#71717A]">Pending / Failed</p>
+                    <p className="font-display text-2xl font-bold text-[#0B0B0B] mt-1 tabular-nums">
+                      {builderOverview.smsTelemetry.pendingOrFailedCount}
+                    </p>
+                    <p className="text-[11px] text-[#71717A] mt-0.5">Queued for retry</p>
+                  </div>
+                  <div className="rounded-2xl bg-[#F5F5F7] p-4">
+                    <p className="text-xs text-[#71717A]">Gateway Balance</p>
+                    <p className="font-display text-2xl font-bold text-[#0B0B0B] mt-1 tabular-nums">
+                      {builderOverview.smsTelemetry.gatewayBalanceCredits.toLocaleString()}
+                    </p>
+                    <p className="text-[11px] text-[#71717A] mt-0.5">Arkesel pool credits</p>
+                  </div>
+                  <div className="rounded-2xl bg-[#F5F5F7] p-4">
+                    <p className="text-xs text-[#71717A]">Tenant Liabilities</p>
+                    <p className="font-display text-2xl font-bold text-[#0B0B0B] mt-1 tabular-nums">
+                      {builderOverview.smsTelemetry.organizerCreditLiabilities.toLocaleString()}
+                    </p>
+                    <p className="text-[11px] text-[#71717A] mt-0.5">Allocated to organisers</p>
+                  </div>
+                </div>
+
+                {builderOverview.smsTelemetry.failedQueue.length === 0 ? (
+                  <p className="text-xs text-[#71717A] bg-[#F5F5F7] rounded-2xl px-4 py-3">
+                    SMS queue is clear — no failed or unconfirmed carrier receipts.
+                  </p>
+                ) : (
+                  <div className="rounded-2xl border border-[#E5E5EA] overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-[#E5E5EA] bg-[#F5F5F7] text-[#71717A] font-semibold">
+                          <th className="py-2.5 px-4">Guest</th>
+                          <th className="py-2.5 px-4">Phone</th>
+                          <th className="py-2.5 px-4">Event</th>
+                          <th className="py-2.5 px-4">Status</th>
+                          <th className="py-2.5 px-4 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#E5E5EA]">
+                        {builderOverview.smsTelemetry.failedQueue.map((item) => (
+                          <tr key={item.attendeeId} className="hover:bg-[#F5F5F7]/60">
+                            <td className="py-2.5 px-4 font-semibold text-[#0B0B0B]">
+                              {item.attendeeName}
+                            </td>
+                            <td className="py-2.5 px-4 font-mono text-[#71717A]">
+                              {item.phone}
+                            </td>
+                            <td className="py-2.5 px-4 text-[#0B0B0B] max-w-[220px] truncate">
+                              {item.eventTitle}
+                            </td>
+                            <td className="py-2.5 px-4 font-mono text-[#D97706] font-semibold">
+                              {item.smsStatus}
+                            </td>
+                            <td className="py-2.5 px-4 text-right">
+                              <button
+                                type="button"
+                                disabled={actionBusyId === `sms-${item.attendeeId}`}
+                                onClick={() => handleRetrySms(item.attendeeId)}
+                                className="px-3 py-1 rounded-full border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] disabled:opacity-50"
+                              >
+                                {actionBusyId === `sms-${item.attendeeId}` ? 'Retrying...' : 'Retry'}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              {/* Recent Server & Constraint Error Stack Traces */}
+              <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-display text-base font-bold text-[#0B0B0B]">
+                      Error &amp; Constraint Trace Buffer
+                    </h2>
+                    <p className="text-xs text-[#71717A]">
+                      Database constraint errors, RLS denials, and carrier exceptions captured by API middleware
+                    </p>
+                  </div>
+                  {builderOverview.recentErrors.length > 0 && (
+                    <button
+                      type="button"
+                      disabled={actionBusyId === 'clear-errors'}
+                      onClick={handleClearErrors}
+                      className="px-3.5 py-1.5 rounded-full border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B]"
+                    >
+                      Clear Buffer
+                    </button>
+                  )}
+                </div>
+
+                {builderOverview.recentErrors.length === 0 ? (
+                  <p className="text-xs text-[#71717A] bg-[#F5F5F7] rounded-2xl px-4 py-3">
+                    No unhandled constraint or runtime errors recorded in this session.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {builderOverview.recentErrors.map((err) => (
+                      <div
+                        key={err.id}
+                        className="rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] p-4 space-y-2"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <span className="font-mono font-semibold text-[#DC2626]">{err.source}</span>
+                          <span className="font-mono text-[#71717A]">
+                            {new Date(err.timestamp).toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="text-xs font-semibold text-[#0B0B0B]">{err.message}</p>
+                        {err.stack && (
+                          <pre className="rounded-xl bg-[#0B0B0B] text-zinc-200 p-3 font-mono text-[11px] overflow-x-auto">
+                            {err.stack}
+                          </pre>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* SECTION B: ORGANISER & TENANT DIRECTORY */}
+      {consoleSection === 'tenants' && (
+        <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#0B0B0B]">
+                Organiser &amp; Tenant Directory
+              </h2>
+              <p className="text-xs text-[#71717A]">
+                Search accounts, adjust RBAC roles, top up SMS credits, grant promo plans, suspend accounts, or inspect tenant data read-only
+              </p>
+            </div>
+            <input
+              type="search"
+              value={tenantSearch}
+              onChange={(e) => setTenantSearch(e.target.value)}
+              placeholder="Filter name, email, studio, plan, role..."
+              className="w-full sm:w-72 h-10 px-3.5 rounded-xl border border-[#E5E5EA] focus:border-[#0B0B0B] focus:outline-none text-xs"
+            />
+          </div>
+
+          {!builderOverview ? (
+            <p className="text-xs text-[#71717A]">Loading directory...</p>
+          ) : filteredTenants.length === 0 ? (
+            <p className="text-xs text-[#71717A] bg-[#F5F5F7] rounded-2xl px-4 py-3">
+              No organiser accounts match your search filter.
+            </p>
+          ) : (
+            <div className="rounded-2xl border border-[#E5E5EA] overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-[#E5E5EA] bg-[#F5F5F7] text-[#71717A] font-semibold">
+                    <th className="py-3 px-4">Organiser / Studio</th>
+                    <th className="py-3 px-4">RBAC Role</th>
+                    <th className="py-3 px-4">Plan</th>
+                    <th className="py-3 px-4">Activity &amp; Storage</th>
+                    <th className="py-3 px-4">SMS Credits</th>
+                    <th className="py-3 px-4 text-right">Builder Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E5E5EA]">
+                  {filteredTenants.map((tenant) => (
+                    <tr
+                      key={tenant.id}
+                      className={tenant.suspended ? 'bg-[#F5F5F7]/80' : 'hover:bg-[#F5F5F7]/40'}
+                    >
+                      <td className="py-3.5 px-4 align-top">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-[#0B0B0B]">{tenant.name}</span>
+                          {tenant.suspended && (
+                            <span className="px-2 py-0.5 rounded-md bg-[#0B0B0B] text-white font-mono text-[10px]">
+                              SUSPENDED
+                            </span>
+                          )}
+                        </div>
+                        <p className="font-mono text-[11px] text-[#71717A] mt-0.5">{tenant.email}</p>
+                        <p className="text-[11px] text-[#71717A] mt-0.5">{tenant.studio}</p>
+                        <p className="text-[10px] text-[#71717A] mt-1 font-mono tabular-nums">
+                          Joined {new Date(tenant.createdAt).toLocaleDateString()} · Last login{' '}
+                          {new Date(tenant.lastLoginAt).toLocaleDateString()}
+                        </p>
+                      </td>
+                      <td className="py-3.5 px-4 align-top">
+                        <select
+                          aria-label={`RBAC role for ${tenant.email}`}
+                          value={tenant.appRole}
+                          disabled={actionBusyId === `role-${tenant.id}`}
+                          onChange={(e) => handleUpdateRole(tenant.id, e.target.value as AppRole)}
+                          className="h-8 px-2.5 rounded-lg border border-[#E5E5EA] bg-white font-mono text-xs text-[#0B0B0B]"
+                        >
+                          <option value="organizer">organizer</option>
+                          <option value="gate_staff">gate_staff</option>
+                          <option value="creator">creator</option>
+                        </select>
+                      </td>
+                      <td className="py-3.5 px-4 align-top">
+                        <select
+                          aria-label={`Plan for ${tenant.email}`}
+                          value={tenant.plan}
+                          disabled={actionBusyId === `plan-${tenant.id}`}
+                          onChange={(e) =>
+                            handleUpdatePlan(tenant.id, e.target.value as OrganizerProfile['plan'])
+                          }
+                          className="h-8 px-2.5 rounded-lg border border-[#E5E5EA] bg-white text-xs text-[#0B0B0B]"
+                        >
+                          <option value="Starter">Starter</option>
+                          <option value="Pro Organizer">Pro Organizer</option>
+                          <option value="Enterprise">Enterprise</option>
+                        </select>
+                      </td>
+                      <td className="py-3.5 px-4 align-top font-mono tabular-nums text-[11px] text-[#0B0B0B]">
+                        <div>{tenant.eventsCount} events · {tenant.attendeesCount} guests</div>
+                        <div className="text-[#71717A] mt-0.5">
+                          {tenant.shotsCount} shots · {tenant.storageMb} MB
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4 align-top">
+                        <div className="font-mono font-semibold text-[#0B0B0B] tabular-nums">
+                          {tenant.smsCredits.toLocaleString()}
+                        </div>
+                        <div className="flex items-center gap-1 mt-1.5">
+                          <button
+                            type="button"
+                            disabled={actionBusyId === `topup-${tenant.id}`}
+                            onClick={() => handleTopUp(tenant.id, 100)}
+                            className="px-2 py-0.5 rounded-md border border-[#E5E5EA] hover:border-[#0B0B0B] font-mono text-[10px] font-semibold text-[#0B0B0B]"
+                          >
+                            +100
+                          </button>
+                          <button
+                            type="button"
+                            disabled={actionBusyId === `topup-${tenant.id}`}
+                            onClick={() => handleTopUp(tenant.id, 500)}
+                            className="px-2 py-0.5 rounded-md border border-[#E5E5EA] hover:border-[#0B0B0B] font-mono text-[10px] font-semibold text-[#0B0B0B]"
+                          >
+                            +500
+                          </button>
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4 align-top text-right">
+                        <div className="flex flex-wrap justify-end gap-1.5">
+                          <button
+                            type="button"
+                            disabled={inspectLoading}
+                            onClick={() => handleInspectTenant(tenant.id)}
+                            className="px-2.5 py-1.5 rounded-lg border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
+                          >
+                            <Eye className="w-3 h-3" />
+                            Inspect
+                          </button>
+                          <button
+                            type="button"
+                            disabled={actionBusyId === `revoke-${tenant.id}`}
+                            onClick={() => handleRevokeSessions(tenant.id)}
+                            className="px-2.5 py-1.5 rounded-lg border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
+                          >
+                            <UserCheck className="w-3 h-3" />
+                            Revoke Sessions
+                          </button>
+                          <button
+                            type="button"
+                            disabled={actionBusyId === `suspend-${tenant.id}`}
+                            onClick={() => handleSuspendTenant(tenant.id)}
+                            className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold inline-flex items-center gap-1 ${
+                              tenant.suspended
+                                ? 'border-[#0B0B0B] bg-[#0B0B0B] text-white'
+                                : 'border-[#E5E5EA] hover:border-[#DC2626] hover:text-[#DC2626] text-[#0B0B0B]'
+                            }`}
+                          >
+                            <Ban className="w-3 h-3" />
+                            {tenant.suspended ? 'Restore' : 'Suspend'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* SECTION C: LIVE EVENT & CHECK-IN DIAGNOSTICS */}
+      {consoleSection === 'diagnostics' && builderOverview && (
+        <div className="space-y-6">
+          <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display text-lg font-bold text-[#0B0B0B]">
+                  Cross-Event Traffic &amp; 35mm Camera Roll Telemetry
+                </h2>
+                <p className="text-xs text-[#71717A]">
+                  Real-time capacity fill, duplicate-phone blocks ({builderOverview.totalDuplicateBlocks} blocked), and camera roll storage
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-[#E5E5EA] overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-[#E5E5EA] bg-[#F5F5F7] text-[#71717A] font-semibold">
+                    <th className="py-3 px-4">Event</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Registered / Cap</th>
+                    <th className="py-3 px-4">Checked In</th>
+                    <th className="py-3 px-4">Duplicate Blocks</th>
+                    <th className="py-3 px-4">35mm Roll</th>
+                    <th className="py-3 px-4 text-right">Public Reg Switch</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E5E5EA]">
+                  {builderOverview.eventTraffic.map((row) => (
+                    <tr key={row.eventId} className="hover:bg-[#F5F5F7]/50">
+                      <td className="py-3 px-4">
+                        <p className="font-semibold text-[#0B0B0B]">{row.title}</p>
+                        <p className="font-mono text-[11px] text-[#71717A]">/{row.slug}</p>
+                      </td>
+                      <td className="py-3 px-4 font-mono">{row.status}</td>
+                      <td className="py-3 px-4 font-mono tabular-nums">
+                        {row.registered} / {row.capacity}
+                      </td>
+                      <td className="py-3 px-4 font-mono tabular-nums">{row.checkedIn}</td>
+                      <td className="py-3 px-4 font-mono tabular-nums">{row.duplicateBlocks}</td>
+                      <td className="py-3 px-4 font-mono tabular-nums">
+                        {row.cameraShots} frames · {row.cameraStorageMb} MB
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <button
+                          type="button"
+                          disabled={actionBusyId === `evt-pause-${row.eventId}`}
+                          onClick={() =>
+                            handleToggleEventPause(row.eventId, row.registrationPaused)
+                          }
+                          className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                            row.registrationPaused
+                              ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                              : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                          }`}
+                        >
+                          {row.registrationPaused ? 'Paused (Resume)' : 'Accepting (Pause)'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-4">
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#0B0B0B]">
+                QR, Client Auth &amp; Webhook Failure Inspector
+              </h2>
+              <p className="text-xs text-[#71717A]">
+                Inspect rejected QR scans, invalid client IDs, and failed webhook payloads with 1-click replay
+              </p>
+            </div>
+
+            {builderOverview.diagnosticFailures.length === 0 ? (
+              <p className="text-xs text-[#71717A] bg-[#F5F5F7] rounded-2xl px-4 py-3">
+                No diagnostic failures captured.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {builderOverview.diagnosticFailures.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-2xl border border-[#E5E5EA] bg-[#F5F5F7] p-4 space-y-2.5"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="px-2 py-0.5 rounded-md bg-white border border-[#E5E5EA] font-mono uppercase text-[10px] font-semibold text-[#0B0B0B]">
+                          {item.kind}
+                        </span>
+                        <span className="font-mono font-semibold text-[#0B0B0B]">{item.target}</span>
+                        <span className="font-mono text-[#DC2626] font-semibold">
+                          HTTP {item.statusCode}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[11px] text-[#71717A]">
+                          {new Date(item.timestamp).toLocaleString()}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={item.replayed || actionBusyId === `diag-${item.id}`}
+                          onClick={() => handleReplayDiagnostic(item.id)}
+                          className="px-3 py-1 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 disabled:opacity-45"
+                        >
+                          {item.replayed
+                            ? 'Replayed'
+                            : actionBusyId === `diag-${item.id}`
+                            ? 'Replaying...'
+                            : 'Replay'}
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-[#0B0B0B]">{item.reason}</p>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                      <pre className="rounded-xl bg-[#0B0B0B] text-zinc-200 p-3 font-mono text-[11px] overflow-x-auto">
+                        {item.payloadPreview}
+                      </pre>
+                      {item.expectedDiff && (
+                        <pre className="rounded-xl bg-white border border-[#E5E5EA] text-[#0B0B0B] p-3 font-mono text-[11px] overflow-x-auto">
+                          {item.expectedDiff}
+                        </pre>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      {/* SECTION D: FEATURE KILL SWITCHES & ENV CONTROLS */}
+      {consoleSection === 'switches' && builderOverview && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-center justify-center text-[#0B0B0B]">
+                <ShieldAlert className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="font-display text-base font-bold text-[#0B0B0B]">
+                  Runtime Feature Kill Switches
+                </h2>
+                <p className="text-xs text-[#71717A]">
+                  Applied immediately across public &amp; studio APIs without redeploy
+                </p>
+              </div>
+            </div>
+
+            <div className="divide-y divide-[#E5E5EA] rounded-2xl border border-[#E5E5EA]">
+              <div className="p-4 flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-[#0B0B0B]">
+                    Global Public Registrations
+                  </p>
+                  <p className="text-xs text-[#71717A]">
+                    Emergency freeze for all public RSVP checkout endpoints
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={actionBusyId === 'flag-Global Registrations'}
+                  onClick={() =>
+                    handleUpdateFlag(
+                      { publicRegistrationsPaused: !builderOverview.flags.publicRegistrationsPaused },
+                      'Global Registrations'
+                    )
+                  }
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
+                    builderOverview.flags.publicRegistrationsPaused
+                      ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                      : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                  }`}
+                >
+                  {builderOverview.flags.publicRegistrationsPaused ? 'Paused (Resume)' : 'Live (Pause All)'}
+                </button>
+              </div>
+
+              <div className="p-4 flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-[#0B0B0B]">Arkesel SMS Dispatch Mode</p>
+                  <p className="text-xs text-[#71717A]">
+                    Switch between live telecom carrier delivery and dry-run sandbox
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={actionBusyId === 'flag-SMS Mode'}
+                  onClick={() =>
+                    handleUpdateFlag(
+                      { smsMode: builderOverview.flags.smsMode === 'live' ? 'sandbox' : 'live' },
+                      'SMS Mode'
+                    )
+                  }
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 font-mono uppercase ${
+                    builderOverview.flags.smsMode === 'live'
+                      ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                      : 'bg-[#F5F5F7] text-[#0B0B0B] border-[#E5E5EA]'
+                  }`}
+                >
+                  {builderOverview.flags.smsMode === 'live' ? 'LIVE ARKESEL' : 'SANDBOX DRY-RUN'}
+                </button>
+              </div>
+
+              <div className="p-4 flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-[#0B0B0B]">New Organiser Signups</p>
+                  <p className="text-xs text-[#71717A]">
+                    Allow or temporarily pause public account creation
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={actionBusyId === 'flag-Organiser Signups'}
+                  onClick={() =>
+                    handleUpdateFlag(
+                      { signupsEnabled: !builderOverview.flags.signupsEnabled },
+                      'Organiser Signups'
+                    )
+                  }
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
+                    builderOverview.flags.signupsEnabled
+                      ? 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                      : 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                  }`}
+                >
+                  {builderOverview.flags.signupsEnabled ? 'Enabled (Disable)' : 'Disabled (Enable)'}
+                </button>
+              </div>
+
+              <div className="p-4 flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-[#0B0B0B]">Starter Data Seeding</p>
+                  <p className="text-xs text-[#71717A]">
+                    Control whether new workspaces can seed sample Ghana/Lagos starter events
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={actionBusyId === 'flag-Starter Seeding'}
+                  onClick={() =>
+                    handleUpdateFlag(
+                      { starterSeedingEnabled: !builderOverview.flags.starterSeedingEnabled },
+                      'Starter Seeding'
+                    )
+                  }
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
+                    builderOverview.flags.starterSeedingEnabled
+                      ? 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                      : 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                  }`}
+                >
+                  {builderOverview.flags.starterSeedingEnabled ? 'Enabled (Disable)' : 'Disabled (Enable)'}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-center justify-center text-[#0B0B0B]">
+                <Server className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="font-display text-base font-bold text-[#0B0B0B]">
+                  Server Environment Readiness
+                </h2>
+                <p className="text-xs text-[#71717A]">
+                  Presence verification only — secret tokens never leave server memory
+                </p>
+              </div>
+            </div>
+
+            <div className="divide-y divide-[#E5E5EA] rounded-2xl border border-[#E5E5EA]">
+              {(
+                [
+                  { key: 'SUPABASE_URL', configured: builderOverview.envStatus.SUPABASE_URL },
+                  { key: 'SUPABASE_ANON_KEY', configured: builderOverview.envStatus.SUPABASE_ANON_KEY },
+                  {
+                    key: 'SUPABASE_SERVICE_ROLE_KEY',
+                    configured: builderOverview.envStatus.SUPABASE_SERVICE_ROLE_KEY,
+                  },
+                  { key: 'ARKESEL_API_KEY', configured: builderOverview.envStatus.ARKESEL_API_KEY },
+                  { key: 'CREATOR_PASSWORD', configured: builderOverview.envStatus.CREATOR_PASSWORD },
+                ] as const
+              ).map((envItem) => (
+                <div key={envItem.key} className="px-4 py-3 flex items-center justify-between text-xs">
+                  <span className="font-mono text-[#0B0B0B] font-medium">{envItem.key}</span>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-md font-mono font-semibold ${
+                      envItem.configured
+                        ? 'bg-[#F5F5F7] text-[#16A34A]'
+                        : 'bg-[#F5F5F7] text-[#71717A]'
+                    }`}
+                  >
+                    {envItem.configured ? 'Configured' : 'Not Set'}
+                  </span>
+                </div>
+              ))}
+              <div className="px-4 py-3 flex items-center justify-between text-xs">
+                <span className="font-mono text-[#0B0B0B] font-medium">CREATOR_EMAIL</span>
+                <span className="font-mono text-[#0B0B0B]">
+                  {builderOverview.envStatus.CREATOR_EMAIL}
+                </span>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* SECTION E: REVENUE & UNIT ECONOMICS */}
+      {consoleSection === 'economics' && builderOverview && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="rounded-3xl border border-[#E5E5EA] bg-white p-5">
+              <div className="flex items-center justify-between text-xs text-[#71717A]">
+                <span>Active Plan MRR</span>
+                <TrendingUp className="w-4 h-4 text-[#0B0B0B]" />
+              </div>
+              <p className="font-display text-2xl font-bold text-[#0B0B0B] mt-2 tabular-nums">
+                ${builderOverview.unitEconomics.totalMrrUsd.toFixed(2)}
+              </p>
+              <p className="text-[11px] text-[#71717A] mt-1 tabular-nums">
+                {builderOverview.unitEconomics.enterpriseCount} Enterprise ·{' '}
+                {builderOverview.unitEconomics.proCount} Pro ·{' '}
+                {builderOverview.unitEconomics.starterCount} Starter
+              </p>
+            </div>
+
+            <div className="rounded-3xl border border-[#E5E5EA] bg-white p-5">
+              <p className="text-xs text-[#71717A]">Arkesel SMS Spend</p>
+              <p className="font-display text-2xl font-bold text-[#0B0B0B] mt-2 tabular-nums">
+                ${builderOverview.unitEconomics.totalSmsCostUsd.toFixed(2)}
+              </p>
+              <p className="text-[11px] text-[#71717A] mt-1">Carrier pass delivery cost</p>
+            </div>
+
+            <div className="rounded-3xl border border-[#E5E5EA] bg-white p-5">
+              <p className="text-xs text-[#71717A]">35mm Film Storage Cost</p>
+              <p className="font-display text-2xl font-bold text-[#0B0B0B] mt-2 tabular-nums">
+                ${builderOverview.unitEconomics.totalStorageCostUsd.toFixed(2)}
+              </p>
+              <p className="text-[11px] text-[#71717A] mt-1 tabular-nums">
+                {builderOverview.unitEconomics.totalStorageMb} MB stored across rolls
+              </p>
+            </div>
+
+            <div className="rounded-3xl border border-[#E5E5EA] bg-[#0B0B0B] text-white p-5">
+              <p className="text-xs text-zinc-400">Net Gross Margin</p>
+              <p className="font-display text-2xl font-bold mt-2 tabular-nums">
+                ${builderOverview.unitEconomics.grossMarginUsd.toFixed(2)}
+              </p>
+              <p className="text-[11px] text-zinc-400 mt-1">MRR less SMS &amp; storage COGS</p>
+            </div>
+          </div>
+
+          <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-4">
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#0B0B0B]">
+                Per-Tenant Unit Economics
+              </h2>
+              <p className="text-xs text-[#71717A]">
+                Identifies heavy SMS &amp; 35mm film storage users whose COGS exceed their plan MRR
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-[#E5E5EA] overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-[#E5E5EA] bg-[#F5F5F7] text-[#71717A] font-semibold">
+                    <th className="py-3 px-4">Tenant</th>
+                    <th className="py-3 px-4">Plan</th>
+                    <th className="py-3 px-4">MRR</th>
+                    <th className="py-3 px-4">SMS COGS</th>
+                    <th className="py-3 px-4">Storage COGS</th>
+                    <th className="py-3 px-4 text-right">Net Margin</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E5E5EA]">
+                  {builderOverview.unitEconomics.perTenant.map((row) => (
+                    <tr key={row.userId} className="hover:bg-[#F5F5F7]/50">
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-[#0B0B0B]">{row.name}</span>
+                          {row.unprofitableFlag && (
+                            <span className="px-2 py-0.5 rounded-md bg-[#F5F5F7] border border-[#DC2626] text-[#DC2626] font-mono text-[10px] font-semibold">
+                              COGS ALERT
+                            </span>
+                          )}
+                        </div>
+                        <p className="font-mono text-[11px] text-[#71717A]">{row.email}</p>
+                      </td>
+                      <td className="py-3 px-4">{row.plan}</td>
+                      <td className="py-3 px-4 font-mono tabular-nums">${row.mrrUsd.toFixed(2)}</td>
+                      <td className="py-3 px-4 font-mono tabular-nums text-[#71717A]">
+                        ${row.smsCostUsd.toFixed(2)} ({row.smsSentCount} SMS)
+                      </td>
+                      <td className="py-3 px-4 font-mono tabular-nums text-[#71717A]">
+                        ${row.storageCostUsd.toFixed(2)} ({row.storageMb} MB)
+                      </td>
+                      <td
+                        className={`py-3 px-4 text-right font-mono tabular-nums font-semibold ${
+                          row.netMarginUsd < 0 ? 'text-[#DC2626]' : 'text-[#16A34A]'
+                        }`}
+                      >
+                        ${row.netMarginUsd.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* SECTION F: EXISTING APP CLIENTS & WEBHOOKS WORKBENCH */}
+      {consoleSection === 'apps' && (
+        <>
       {/* Filter Bar */}
       {apps.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1296,6 +2470,116 @@ const { attendee, event } = await response.json();`;
               )}
             </section>
           )}
+        </div>
+      )}
+        </>
+      )}
+
+      {/* Read-Only Support Tenant Inspection Modal */}
+      {tenantInspection && (
+        <div
+          className="fixed inset-0 z-50 bg-black/45 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="inspect-tenant-title"
+        >
+          <div className="bg-white rounded-3xl border border-[#E5E5EA] w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6 space-y-5">
+            <div className="flex items-start justify-between gap-4 pb-3 border-b border-[#E5E5EA]">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 id="inspect-tenant-title" className="font-display text-lg font-bold text-[#0B0B0B]">
+                    Read-Only Tenant Support Inspection
+                  </h2>
+                  <span className="px-2 py-0.5 rounded-md bg-[#F5F5F7] border border-[#E5E5EA] font-mono text-[10px] font-semibold uppercase text-[#0B0B0B]">
+                    {tenantInspection.tenant.appRole}
+                  </span>
+                </div>
+                <p className="text-xs text-[#71717A] mt-1 font-mono">
+                  {tenantInspection.tenant.name} · {tenantInspection.tenant.email} ·{' '}
+                  {tenantInspection.tenant.studio}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTenantInspection(null)}
+                aria-label="Close inspection modal"
+                className="w-8 h-8 rounded-full hover:bg-[#F5F5F7] flex items-center justify-center text-[#71717A]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <h3 className="text-xs font-semibold text-[#0B0B0B] uppercase tracking-wider">
+                Tenant Events ({tenantInspection.events.length})
+              </h3>
+              {tenantInspection.events.length === 0 ? (
+                <p className="text-xs text-[#71717A] bg-[#F5F5F7] rounded-2xl px-4 py-3">
+                  No events created by this organiser.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {tenantInspection.events.map((evt) => (
+                    <div
+                      key={evt.id}
+                      className="rounded-2xl border border-[#E5E5EA] bg-[#F5F5F7] p-3.5 text-xs space-y-1"
+                    >
+                      <p className="font-semibold text-[#0B0B0B]">{evt.title}</p>
+                      <p className="text-[#71717A]">
+                        {evt.date} · {evt.venue}, {evt.city}
+                      </p>
+                      <p className="font-mono text-[#0B0B0B] tabular-nums">
+                        {evt.registered} / {evt.capacity} registered · {evt.checkedIn} checked in
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              <h3 className="text-xs font-semibold text-[#0B0B0B] uppercase tracking-wider">
+                Tenant Guest Roster ({tenantInspection.attendees.length})
+              </h3>
+              {tenantInspection.attendees.length === 0 ? (
+                <p className="text-xs text-[#71717A] bg-[#F5F5F7] rounded-2xl px-4 py-3">
+                  No attendees recorded for this organiser.
+                </p>
+              ) : (
+                <div className="rounded-2xl border border-[#E5E5EA] overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-[#E5E5EA] bg-[#F5F5F7] text-[#71717A] font-semibold">
+                        <th className="py-2 px-3">Guest</th>
+                        <th className="py-2 px-3">Ticket Code</th>
+                        <th className="py-2 px-3">SMS</th>
+                        <th className="py-2 px-3">Payment</th>
+                        <th className="py-2 px-3">Check-In</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E5E5EA]">
+                      {tenantInspection.attendees.slice(0, 25).map((att) => (
+                        <tr key={att.id}>
+                          <td className="py-2 px-3">
+                            <span className="font-semibold text-[#0B0B0B]">{att.name}</span>
+                            <span className="block font-mono text-[10px] text-[#71717A]">
+                              {att.phone}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 font-mono">{att.ticketCode}</td>
+                          <td className="py-2 px-3 font-mono">{att.smsStatus}</td>
+                          <td className="py-2 px-3 font-mono">{att.paymentStatus}</td>
+                          <td className="py-2 px-3 font-mono">
+                            {att.checkedIn ? 'Checked In' : 'Pending'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

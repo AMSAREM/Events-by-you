@@ -1,5 +1,11 @@
 import type {
+  AppRole,
   Attendee,
+  BuilderConsoleOverview,
+  BuilderDiagnosticFailure,
+  BuilderFeatureFlags,
+  BuilderTenantInspection,
+  BuilderTenantSummary,
   CreatorApp,
   CreatorAppEnvironment,
   CreatorAppLog,
@@ -185,6 +191,7 @@ export const api = {
       ok: boolean;
       database: string;
       supabaseConfigured: boolean;
+      inMemoryFallback?: boolean;
       creatorEmail?: string;
       creatorPasswordConfigured?: boolean;
     }>('/api/health'),
@@ -221,6 +228,7 @@ export const api = {
       name: string;
       studio: string;
       countryGateway: string;
+      appRole?: AppRole;
     }) =>
       request<{
         requiresOtp: boolean;
@@ -490,5 +498,75 @@ export const api = {
           true
         ),
     },
+  },
+
+  builder: {
+    overview: () => request<BuilderConsoleOverview>('/api/builder/overview', {}, true),
+
+    clearErrors: () =>
+      request<{ ok: boolean }>('/api/builder/errors/clear', { method: 'POST' }, true),
+
+    retrySms: (attendeeId?: string) =>
+      request<{ retried: number }>(
+        '/api/builder/sms/retry',
+        { method: 'POST', body: JSON.stringify(attendeeId ? { attendeeId } : {}) },
+        true
+      ),
+
+    topUpTenantCredits: (userId: string, amount: number) =>
+      request<{ tenant?: BuilderTenantSummary; ok?: boolean; smsCredits?: number }>(
+        `/api/builder/tenants/${encodeURIComponent(userId)}/credits`,
+        { method: 'POST', body: JSON.stringify({ amount }) },
+        true
+      ),
+
+    updateTenantPlan: (userId: string, plan: OrganizerProfile['plan']) =>
+      request<{ tenant?: BuilderTenantSummary; ok?: boolean; plan?: OrganizerProfile['plan'] }>(
+        `/api/builder/tenants/${encodeURIComponent(userId)}/plan`,
+        { method: 'POST', body: JSON.stringify({ plan }) },
+        true
+      ),
+
+    updateTenantRole: (userId: string, appRole: AppRole) =>
+      request<{ tenant?: BuilderTenantSummary; ok?: boolean; appRole?: AppRole }>(
+        `/api/builder/tenants/${encodeURIComponent(userId)}/role`,
+        { method: 'POST', body: JSON.stringify({ appRole }) },
+        true
+      ),
+
+    suspendTenant: (userId: string) =>
+      request<{ tenant?: BuilderTenantSummary; ok?: boolean }>(
+        `/api/builder/tenants/${encodeURIComponent(userId)}/suspend`,
+        { method: 'POST' },
+        true
+      ),
+
+    revokeTenantSessions: (userId: string) =>
+      request<{ revoked: number }>(
+        `/api/builder/tenants/${encodeURIComponent(userId)}/revoke-sessions`,
+        { method: 'POST' },
+        true
+      ),
+
+    inspectTenant: (userId: string) =>
+      request<BuilderTenantInspection>(
+        `/api/builder/tenants/${encodeURIComponent(userId)}/inspect`,
+        {},
+        true
+      ),
+
+    replayDiagnostic: (diagId: string) =>
+      request<{ item: BuilderDiagnosticFailure }>(
+        `/api/builder/diagnostics/${encodeURIComponent(diagId)}/replay`,
+        { method: 'POST' },
+        true
+      ),
+
+    updateFlags: (patch: Partial<BuilderFeatureFlags>) =>
+      request<{ flags: BuilderFeatureFlags }>(
+        '/api/builder/flags',
+        { method: 'PATCH', body: JSON.stringify(patch) },
+        true
+      ),
   },
 };

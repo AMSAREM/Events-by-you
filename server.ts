@@ -30,6 +30,7 @@ import {
   normalizePhoneE164,
 } from './src/data/initialData.ts';
 import type {
+  AppRole,
   Attendee,
   CreatorApp,
   CreatorAppLog,
@@ -39,6 +40,19 @@ import type {
   OrganizerProfile,
   ScheduleBlock,
 } from './src/types/events.ts';
+import {
+  dispatchOptionalArkeselSms,
+  getBearerToken,
+  getCreatorCredentials,
+  requireCreatorVerification,
+  requireRole,
+  safeTimingEqual,
+  signCreatorSessionToken,
+  type AuthedRequest,
+} from './server/helpers.ts';
+import { createMemoryRouter } from './server/memoryRoutes.ts';
+import { createBuilderRouter } from './server/builderRoutes.ts';
+import { platformRuntime } from './server/memoryStore.ts';
 
 function sha256Hex(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -75,99 +89,8 @@ function isMissingTableError(err: { code?: string; message?: string } | null | u
   );
 }
 
-function getCreatorCredentials() {
-  const email = (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase();
-  const password = (process.env.CREATOR_PASSWORD || '').trim();
-  return {
-    email,
-    password,
-    configured: Boolean(email && password),
-  };
-}
-
-function safeTimingEqual(a: string, b: string): boolean {
-  const hashA = crypto.createHash('sha256').update(a).digest();
-  const hashB = crypto.createHash('sha256').update(b).digest();
-  return crypto.timingSafeEqual(hashA, hashB);
-}
-
-function signCreatorSessionToken(email: string, secret: string): string {
-  const payload = Buffer.from(
-    JSON.stringify({
-      email: email.toLowerCase(),
-      exp: Date.now() + 24 * 60 * 60 * 1000,
-    })
-  ).toString('base64url');
-  const sig = crypto
-    .createHmac('sha256', `eventsapp-creator:${secret}`)
-    .update(payload)
-    .digest('base64url');
-  return `${payload}.${sig}`;
-}
-
-function verifyCreatorSessionToken(
-  token: string,
-  secret: string,
-  expectedEmail: string
-): boolean {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 2) return false;
-    const [payloadB64, sigB64] = parts;
-    const expectedSig = crypto
-      .createHmac('sha256', `eventsapp-creator:${secret}`)
-      .update(payloadB64)
-      .digest('base64url');
-    if (!safeTimingEqual(sigB64, expectedSig)) return false;
-    const parsed = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')) as {
-      email?: string;
-      exp?: number;
-    };
-    if (!parsed.exp || parsed.exp < Date.now()) return false;
-    return parsed.email?.toLowerCase() === expectedEmail.toLowerCase();
-  } catch {
-    return false;
-  }
-}
-
-function requireCreatorVerification(req: AuthedRequest, res: Response, next: NextFunction) {
-  const creator = getCreatorCredentials();
-  if (!creator.configured) {
-    return next();
-  }
-  const userEmail = (req.user?.email || '').trim().toLowerCase();
-  if (userEmail !== creator.email) {
-    return res.status(403).json({
-      error: `Apps Creator Console is restricted to the app creator (${creator.email}).`,
-      code: 'CREATOR_EMAIL_MISMATCH',
-    });
-  }
-  const tokenHeader = req.headers['x-creator-token'];
-  const creatorToken = typeof tokenHeader === 'string' ? tokenHeader.trim() : '';
-  if (!creatorToken || !verifyCreatorSessionToken(creatorToken, creator.password, creator.email)) {
-    return res.status(403).json({
-      error: 'Enter CREATOR_PASSWORD to unlock Apps Creator Console.',
-      code: 'CREATOR_UNLOCK_REQUIRED',
-    });
-  }
-  return next();
-}
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-interface AuthedRequest extends Request {
-  accessToken?: string;
-  user?: User;
-  supabase?: SupabaseClient;
-}
-
-function getBearerToken(req: Request): string | null {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) return null;
-  const token = header.slice('Bearer '.length).trim();
-  return token || null;
-}
 
 function requireSupabaseConfiguredMiddleware(_req: Request, res: Response, next: NextFunction) {
   if (!isSupabaseConfigured()) {
@@ -203,40 +126,19 @@ async function requireSupabaseAuth(req: AuthedRequest, res: Response, next: Next
     req.accessToken = token;
     req.user = data.user;
     req.supabase = createUserSupabaseClient(token);
+    const { data: prof } = await req.supabase
+      .from('profiles')
+      .select('app_role')
+      .eq('id', data.user.id)
+      .maybeSingle();
+    const dbRole = (prof as Record<string, unknown> | null)?.app_role;
+    if (dbRole === 'creator' || dbRole === 'organizer' || dbRole === 'gate_staff') {
+      req.appRole = dbRole;
+    }
     return next();
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unable to verify session';
     return res.status(401).json({ error: message });
-  }
-}
-
-async function dispatchOptionalArkeselSms(
-  phone: string,
-  eventTitle: string,
-  ticketCode: string,
-  senderId?: string
-): Promise<'Arkesel Sent' | 'Pending'> {
-  const apiKey = (process.env.ARKESEL_API_KEY || '').trim();
-  if (!apiKey) {
-    return 'Arkesel Sent';
-  }
-  try {
-    const cleanPhone = phone.replace(/^\+/, '').replace(/\s+/g, '');
-    const resp = await fetch('https://sms.arkesel.com/api/v2/sms/send', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'api-key': apiKey,
-      },
-      body: JSON.stringify({
-        sender: (senderId || 'EVENTSAPP').slice(0, 11),
-        message: `${eventTitle}: Pass confirmed! Code: ${ticketCode}. Show this QR token at check-in.`,
-        recipients: [cleanPhone],
-      }),
-    });
-    return resp.ok ? 'Arkesel Sent' : 'Pending';
-  } catch {
-    return 'Pending';
   }
 }
 
@@ -345,15 +247,25 @@ async function createAppServer() {
 
   app.get('/api/health', (_req, res) => {
     const creator = getCreatorCredentials();
+    const configured = isSupabaseConfigured();
     res.json({
       ok: true,
-      database: 'supabase',
-      supabaseConfigured: isSupabaseConfigured(),
+      database: configured ? 'supabase' : 'in-memory',
+      supabaseConfigured: configured,
+      inMemoryFallback: !configured,
       creatorEmail: creator.email,
       creatorPasswordConfigured: creator.configured,
       timestamp: new Date().toISOString(),
     });
   });
+
+  // Builder Console Admin & Telemetry Routes (Creator RBAC enforced)
+  app.use('/api/builder', createBuilderRouter());
+
+  // Seamless In-Memory Persistence Router when Supabase credentials are not configured
+  if (!isSupabaseConfigured()) {
+    app.use('/api', createMemoryRouter());
+  }
 
   // =========================================================================
   // AUTH ROUTES (Backed by Supabase Auth)
@@ -538,12 +450,18 @@ async function createAppServer() {
   });
 
   app.post('/api/auth/signup', requireSupabaseConfiguredMiddleware, async (req, res) => {
-    const { email, password, name, studio, countryGateway } = req.body as {
+    if (!platformRuntime.flags.signupsEnabled) {
+      return res.status(403).json({
+        error: 'New organiser signups are temporarily paused by platform administrator.',
+      });
+    }
+    const { email, password, name, studio, countryGateway, appRole } = req.body as {
       email?: string;
       password?: string;
       name?: string;
       studio?: string;
       countryGateway?: string;
+      appRole?: AppRole;
     };
     if (!email || !password || !name) {
       return res.status(400).json({ error: 'Name, email, and password are required.' });
@@ -559,6 +477,7 @@ async function createAppServer() {
             first_name: name.trim().split(' ')[0] || 'Organiser',
             studio: (studio || 'Events Studio').trim(),
             country_gateway: countryGateway || 'GH',
+            app_role: appRole === 'gate_staff' ? 'gate_staff' : 'organizer',
           },
         },
       });
@@ -836,6 +755,14 @@ async function createAppServer() {
     requireSupabaseConfiguredMiddleware,
     async (req, res) => {
       const { eventId } = req.params;
+      if (
+        platformRuntime.flags.publicRegistrationsPaused ||
+        platformRuntime.flags.pausedEventIds.includes(eventId)
+      ) {
+        return res.status(403).json({
+          error: 'Public registration for this event is temporarily paused by the organizer.',
+        });
+      }
       const { name, email, phone, organization, tier, ticketCode } = req.body as {
         name?: string;
         email?: string;
@@ -869,10 +796,12 @@ async function createAppServer() {
 
         if (rpcErr) {
           if (rpcErr.message.includes('DUPLICATE_PHONE:')) {
+            platformRuntime.recordDuplicateBlock(eventId);
             return res.status(409).json({
               error: `Duplicate shield: ${rpcErr.message.split('DUPLICATE_PHONE:')[1]}`,
             });
           }
+          platformRuntime.recordError('public/register', rpcErr.message);
           return res.status(400).json({ error: rpcErr.message });
         }
 
@@ -917,7 +846,12 @@ async function createAppServer() {
 
   const seedInFlightByUser = new Map<string, Promise<unknown>>();
 
-  app.post('/api/studio/seed-starter', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.post('/api/studio/seed-starter', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    if (!platformRuntime.flags.starterSeedingEnabled) {
+      return res.status(403).json({
+        error: 'Starter data seeding is currently disabled by platform administrator.',
+      });
+    }
     const client = req.supabase!;
     const user = req.user!;
 
@@ -1095,7 +1029,7 @@ async function createAppServer() {
     }
   });
 
-  app.patch('/api/studio/profile', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.patch('/api/studio/profile', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const next = req.body as Partial<OrganizerProfile>;
     try {
       const updatePayload: Record<string, unknown> = {
@@ -1134,7 +1068,7 @@ async function createAppServer() {
     }
   });
 
-  app.post('/api/studio/events', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.post('/api/studio/events', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const { event, blocks } = req.body as { event: EventItem; blocks?: ScheduleBlock[] };
     if (!event?.title) {
       return res.status(400).json({ error: 'Invalid event payload.' });
@@ -1227,7 +1161,7 @@ async function createAppServer() {
     }
   });
 
-  app.patch('/api/studio/events/:id', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.patch('/api/studio/events/:id', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const updated = req.body as EventItem;
     try {
       const { data, error } = await req
@@ -1264,7 +1198,7 @@ async function createAppServer() {
     }
   });
 
-  app.delete('/api/studio/events/:id', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.delete('/api/studio/events/:id', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const { error } = await req
         .supabase!.from('events')
@@ -1279,7 +1213,7 @@ async function createAppServer() {
     }
   });
 
-  app.post('/api/studio/events/:eventId/attendees', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.post('/api/studio/events/:eventId/attendees', requireSupabaseAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
     const attendee = req.body as Attendee;
     const { eventId } = req.params;
     try {
@@ -1350,7 +1284,7 @@ async function createAppServer() {
     }
   });
 
-  app.patch('/api/studio/attendees/:id/checkin', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.patch('/api/studio/attendees/:id/checkin', requireSupabaseAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
     try {
       const client = req.supabase!;
       const { data: existing, error: fetchErr } = await client
@@ -1398,6 +1332,7 @@ async function createAppServer() {
   app.patch(
     '/api/studio/attendees/:id/retry-payment',
     requireSupabaseAuth,
+    requireRole('creator', 'organizer'),
     async (req: AuthedRequest, res) => {
       try {
         const client = req.supabase!;
@@ -1423,7 +1358,7 @@ async function createAppServer() {
     }
   );
 
-  app.post('/api/studio/schedule', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.post('/api/studio/schedule', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const block = req.body as ScheduleBlock;
     try {
       const { data, error } = await req
@@ -1449,7 +1384,7 @@ async function createAppServer() {
     }
   });
 
-  app.patch('/api/studio/schedule/:id/toggle', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.patch('/api/studio/schedule/:id/toggle', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const client = req.supabase!;
       const { data: existing, error: fetchErr } = await client
@@ -1474,7 +1409,7 @@ async function createAppServer() {
     }
   });
 
-  app.delete('/api/studio/schedule/:id', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.delete('/api/studio/schedule/:id', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const { error } = await req
         .supabase!.from('schedule_blocks')
@@ -1488,7 +1423,7 @@ async function createAppServer() {
     }
   });
 
-  app.patch('/api/studio/alerts/:id/resolve', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.patch('/api/studio/alerts/:id/resolve', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const { data, error } = await req
         .supabase!.from('system_alerts')
@@ -1506,7 +1441,7 @@ async function createAppServer() {
   });
 
   // Disposable Camera Routes
-  app.post('/api/studio/camera/shots', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.post('/api/studio/camera/shots', requireSupabaseAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
     const shot = req.body as DisposableShot;
     try {
       const { data, error } = await req
@@ -1535,7 +1470,7 @@ async function createAppServer() {
     }
   });
 
-  app.patch('/api/studio/camera/shots/:id/like', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.patch('/api/studio/camera/shots/:id/like', requireSupabaseAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
     try {
       const client = req.supabase!;
       const { data: existing, error: fetchErr } = await client
@@ -1565,7 +1500,7 @@ async function createAppServer() {
     }
   });
 
-  app.delete('/api/studio/camera/shots/:id', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.delete('/api/studio/camera/shots/:id', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const { error } = await req
         .supabase!.from('disposable_shots')
@@ -1579,7 +1514,7 @@ async function createAppServer() {
     }
   });
 
-  app.post('/api/studio/camera/:eventId/develop', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.post('/api/studio/camera/:eventId/develop', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const { error } = await req
         .supabase!.from('disposable_shots')
@@ -1593,7 +1528,7 @@ async function createAppServer() {
     }
   });
 
-  app.put('/api/studio/camera/:eventId/settings', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.put('/api/studio/camera/:eventId/settings', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const next = req.body as DisposableRollSettings;
     try {
       const { data, error } = await req
@@ -2084,6 +2019,14 @@ async function createAppServer() {
     }
   });
 
+  // JSON Error Handler for /api routes
+  app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+    if (!req.path.startsWith('/api/')) return next(err);
+    platformRuntime.recordError(req.path, err);
+    const message = err instanceof Error ? err.message : 'Internal server error.';
+    return res.status(500).json({ error: message });
+  });
+
   // =========================================================================
   // VITE DEV MIDDLEWARE / PRODUCTION STATIC ASSETS
   // =========================================================================
@@ -2105,8 +2048,11 @@ async function createAppServer() {
   }
 
   const PORT = Number(process.env.PORT) || 3000;
+  const modeLabel = isSupabaseConfigured()
+    ? 'Supabase single source of truth'
+    : 'In-memory store (Supabase env vars not set)';
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Events App server listening on http://0.0.0.0:${PORT} (Supabase single source of truth)`);
+    console.log(`Events App server listening on http://0.0.0.0:${PORT} (${modeLabel})`);
   });
 }
 

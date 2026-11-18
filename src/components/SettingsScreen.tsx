@@ -311,9 +311,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                   Organiser Profile
                 </h2>
               </div>
-              <span className="text-xs font-mono font-semibold px-3 py-1 bg-[#EEEEF0] rounded-full text-[#0B0B0B]">
-                ID: ORG-GH-7841
-              </span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-mono font-semibold px-3 py-1 bg-[#0B0B0B] text-white rounded-full uppercase">
+                  RBAC: {profile.appRole ?? 'organizer'}
+                </span>
+                <span className="text-xs font-mono font-semibold px-3 py-1 bg-[#EEEEF0] rounded-full text-[#0B0B0B]">
+                  ID: ORG-GH-7841
+                </span>
+              </div>
             </div>
 
             {/* Avatar Block */}

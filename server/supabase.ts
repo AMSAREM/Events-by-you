@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
 import type {
+  AppRole,
   Attendee,
   CreatorApp,
   CreatorAppLog,
@@ -78,11 +79,22 @@ export function createServiceSupabaseClient(): SupabaseClient | null {
 
 export function mapProfileRow(row: Record<string, unknown>, fallbackEmail = ''): OrganizerProfile {
   const name = String(row.name ?? 'Organiser');
+  const email = String(row.email ?? fallbackEmail);
+  const creatorEmail = (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase();
+  const isCreatorEmail = email.trim().toLowerCase() === creatorEmail;
+  const rawAppRole = row.app_role != null ? String(row.app_role) : undefined;
+  const appRole: AppRole =
+    rawAppRole === 'creator' || rawAppRole === 'organizer' || rawAppRole === 'gate_staff'
+      ? rawAppRole
+      : isCreatorEmail
+        ? 'creator'
+        : 'organizer';
   return {
     name,
     firstName: String(row.first_name ?? (name.split(' ')[0] || 'Organiser')),
-    role: String(row.role ?? 'Lead Organiser'),
-    email: String(row.email ?? fallbackEmail),
+    role: String(row.role ?? (appRole === 'creator' ? 'Apps Creator' : appRole === 'gate_staff' ? 'Gate Check-In Staff' : 'Lead Organiser')),
+    appRole,
+    email,
     studio: String(row.studio ?? 'Events Studio'),
     plan: (row.plan as OrganizerProfile['plan']) || 'Starter',
     smsCredits: Number(row.sms_credits ?? 20),
@@ -264,23 +276,47 @@ export async function ensureProfileRow(
     (typeof user.user_metadata?.studio === 'string' && user.user_metadata.studio.trim()) ||
     (isPrimaryCreator ? 'Apps Creator Console' : 'Events Studio');
 
+  const requestedAppRole =
+    !isPrimaryCreator && user.user_metadata?.app_role === 'gate_staff'
+      ? 'gate_staff'
+      : isPrimaryCreator
+        ? 'creator'
+        : 'organizer';
+
   const insertPayload = {
     id: user.id,
     email: user.email ?? '',
     name: metaName,
     first_name: metaName.split(' ')[0] || 'Creator',
-    role: isPrimaryCreator ? 'Apps Creator' : 'Lead Organiser',
+    role:
+      requestedAppRole === 'creator'
+        ? 'Apps Creator'
+        : requestedAppRole === 'gate_staff'
+          ? 'Gate Check-In Staff'
+          : 'Lead Organiser',
+    app_role: requestedAppRole,
     studio: metaStudio,
     plan: isPrimaryCreator ? 'Pro Organizer' : 'Starter',
     sms_credits: isPrimaryCreator ? 1840 : 20,
     capacity_alert_threshold: 90,
   };
 
-  const { data: created, error: insertErr } = await client
+  let { data: created, error: insertErr } = await client
     .from('profiles')
     .upsert(insertPayload, { onConflict: 'id' })
     .select('*')
     .single();
+
+  if (insertErr && insertErr.message?.toLowerCase().includes('app_role')) {
+    const { app_role: _dropRole, ...legacyPayload } = insertPayload;
+    const retry = await client
+      .from('profiles')
+      .upsert(legacyPayload, { onConflict: 'id' })
+      .select('*')
+      .single();
+    created = retry.data;
+    insertErr = retry.error;
+  }
 
   if (insertErr) {
     throw new Error(insertErr.message);

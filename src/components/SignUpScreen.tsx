@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 
 import { api, saveStoredSession, type StoredAuthSession } from '../lib/api';
-import type { OrganizerProfile } from '../types/events';
+import type { AppRole, OrganizerProfile } from '../types/events';
 
 interface SignUpScreenProps {
   initialEmail?: string;
@@ -47,6 +47,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
   const [orgEmail, setOrgEmail] = useState(initialEmail);
   const [orgName, setOrgName] = useState('');
   const [countryGateway, setCountryGateway] = useState('GH');
+  const [accountRole, setAccountRole] = useState<'organizer' | 'gate_staff'>('organizer');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [agreed, setAgreed] = useState(true);
@@ -127,6 +128,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
         name: fullName.trim(),
         studio: orgName.trim() || 'Events Studio',
         countryGateway,
+        appRole: accountRole satisfies AppRole,
       });
       if (res.session && res.profile) {
         saveStoredSession(res.session);
@@ -334,6 +336,42 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                         </select>
                         <ChevronDown className="w-4 h-4 text-[#71717A] absolute right-3.5 top-3.5 pointer-events-none" />
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Workspace RBAC Role */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between">
+                      <span>Workspace Access Role (RBAC)</span>
+                      <span className="text-[11px] text-[#71717A]">Row Level Security</span>
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(
+                        [
+                          { id: 'organizer', label: 'Lead Organiser', sub: 'Create events & manage passes' },
+                          { id: 'gate_staff', label: 'Gate Check-In Staff', sub: 'QR scanner & door check-in only' },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setAccountRole(opt.id)}
+                          className={`rounded-2xl px-4 py-2.5 text-left border transition-colors ${
+                            accountRole === opt.id
+                              ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                              : 'bg-[#F5F5F7] text-[#0B0B0B] border-transparent hover:border-[#E5E5EA]'
+                          }`}
+                        >
+                          <span className="text-xs font-semibold block">{opt.label}</span>
+                          <span
+                            className={`text-[10px] block mt-0.5 ${
+                              accountRole === opt.id ? 'text-zinc-300' : 'text-[#71717A]'
+                            }`}
+                          >
+                            {opt.sub}
+                          </span>
+                        </button>
+                      ))}
                     </div>
                   </div>
 

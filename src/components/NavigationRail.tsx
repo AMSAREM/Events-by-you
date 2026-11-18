@@ -12,10 +12,11 @@ import {
   Terminal,
   Users,
 } from 'lucide-react';
-import { NavScreen } from '../types/events';
+import { AppRole, NavScreen } from '../types/events';
 
 interface NavigationRailProps {
   activeScreen: NavScreen;
+  userRole?: AppRole;
   onNavigate: (screen: NavScreen) => void;
   onBackToPublicHome: () => void;
   onSignOut: () => void;
@@ -36,11 +37,17 @@ const NAV_ITEMS: { id: NavScreen; label: string; icon: React.ComponentType<{ cla
 
 export const NavigationRail: React.FC<NavigationRailProps> = ({
   activeScreen,
+  userRole = 'organizer',
   onNavigate,
   onBackToPublicHome,
   onSignOut,
   unresolvedAlertCount,
 }) => {
+  const visibleItems = NAV_ITEMS.filter((item) => {
+    if (item.id === 'console' && userRole !== 'creator') return false;
+    if (item.id === 'billing' && userRole === 'gate_staff') return false;
+    return true;
+  });
   return (
     <>
       {/* Desktop & Tablet Left Floating Dark Pill Capsule */}
@@ -61,7 +68,7 @@ export const NavigationRail: React.FC<NavigationRailProps> = ({
 
         {/* Main Screen Icons */}
         <nav className="flex flex-col items-center gap-1.5 lg:gap-2.5 my-2">
-          {NAV_ITEMS.map((item) => {
+          {visibleItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeScreen === item.id;
             return (
@@ -123,7 +130,7 @@ export const NavigationRail: React.FC<NavigationRailProps> = ({
         aria-label="Mobile Navigation"
         className="md:hidden fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-2 right-2 sm:left-4 sm:right-4 z-40 h-14 bg-[#0B0B0B] text-white rounded-full px-2 sm:px-3 flex items-center justify-between gap-1 overflow-x-auto capsule-shadow"
       >
-        {NAV_ITEMS.map((item) => {
+        {visibleItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeScreen === item.id;
           return (

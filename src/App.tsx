@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Database, Loader2, Sparkles, X } from 'lucide-react';
 import { INITIAL_EVENTS, INITIAL_PROFILE } from './data/initialData';
 import type {
+  AppRole,
   AppRoute,
   Attendee,
   CreatorApp,
@@ -78,6 +79,7 @@ export default function App() {
   const [studioLoading, setStudioLoading] = useState(false);
   const [seedingStarter, setSeedingStarter] = useState(false);
   const [supabaseConfigured, setSupabaseConfigured] = useState<boolean>(true);
+  const [inMemoryMode, setInMemoryMode] = useState<boolean>(false);
   const [creatorEmail, setCreatorEmail] = useState<string>('amoakoimml@gmail.com');
   const [creatorPasswordConfigured, setCreatorPasswordConfigured] = useState<boolean>(false);
   const [creatorUnlocked, setCreatorUnlocked] = useState<boolean>(() => Boolean(getStoredCreatorToken()));
@@ -170,9 +172,10 @@ export default function App() {
         const health = await api.health();
         if (!cancelled) {
           setSupabaseConfigured(health.supabaseConfigured);
+          setInMemoryMode(Boolean(health.inMemoryFallback));
           if (health.creatorEmail) setCreatorEmail(health.creatorEmail);
           setCreatorPasswordConfigured(Boolean(health.creatorPasswordConfigured));
-          if (!health.supabaseConfigured) {
+          if (!health.supabaseConfigured && !health.inMemoryFallback) {
             setApiBannerError(
               'Supabase environment variables (SUPABASE_URL, SUPABASE_ANON_KEY) are not configured on the server yet.'
             );
@@ -270,10 +273,13 @@ export default function App() {
     await loadPublicEvents();
 
     if (openCreatorConsole) {
+      const canAccessConsole =
+        nextProfile?.appRole === 'creator' ||
+        nextProfile?.email?.toLowerCase() === creatorEmail.toLowerCase();
       setPendingTarget(null);
       setWorkspaceEventId(null);
       setStudioSubScreen(null);
-      setActiveScreen('console');
+      setActiveScreen(canAccessConsole ? 'console' : 'overview');
       setRoute('studio');
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
@@ -802,6 +808,9 @@ export default function App() {
     }
   };
 
+  const effectiveRole: AppRole =
+    profile.appRole ??
+    (profile.email?.toLowerCase() === creatorEmail.toLowerCase() ? 'creator' : 'organizer');
   const unresolvedCount = safeAlerts.filter((a) => !a.resolved).length;
   const landingEvents = safePublicEvents.length > 0 ? safePublicEvents : safeEvents;
   const featuredEvent = landingEvents[0] ?? INITIAL_EVENTS[0];
@@ -972,7 +981,7 @@ export default function App() {
       <div className="min-h-screen bg-[#F5F5F7] text-[#0B0B0B] flex flex-col items-center justify-center gap-3">
         <Loader2 className="w-6 h-6 animate-spin text-[#0B0B0B]" />
         <p className="text-xs font-medium text-[#71717A]">
-          Syncing your Supabase workspace...
+          Syncing your workspace...
         </p>
       </div>
     );
@@ -1056,7 +1065,16 @@ export default function App() {
         {/* Left Floating Dark Pill Capsule Navigation */}
         <NavigationRail
           activeScreen={activeScreen}
+          userRole={effectiveRole}
           onNavigate={(screen) => {
+            if (screen === 'console' && effectiveRole !== 'creator') {
+              setApiBannerError('Access denied: Apps Creator Console requires the creator role.');
+              return;
+            }
+            if (screen === 'billing' && effectiveRole === 'gate_staff') {
+              setApiBannerError('Access denied: Billing & Plans are restricted to organizers.');
+              return;
+            }
             setWorkspaceEventId(null);
             setStudioSubScreen(null);
             if (screen === 'attendees') {
@@ -1091,7 +1109,8 @@ export default function App() {
             </div>
           )}
 
-          {supabaseConfigured &&
+          {(supabaseConfigured || inMemoryMode) &&
+            effectiveRole !== 'gate_staff' &&
             !studioLoading &&
             safeEvents.length === 0 &&
             studioSubScreen !== 'create-event' && (
@@ -1102,10 +1121,10 @@ export default function App() {
                   </div>
                   <div>
                     <h2 className="text-sm font-bold text-[#0B0B0B]">
-                      Your Supabase workspace is ready
+                      {inMemoryMode ? 'Your workspace is ready' : 'Your Supabase workspace is ready'}
                     </h2>
                     <p className="text-xs text-[#71717A] mt-0.5 leading-relaxed">
-                      Create your first event from scratch or populate your database with starter
+                      Create your first event from scratch or populate your workspace with starter
                       events, attendees, and 35mm disposable camera frames.
                     </p>
                   </div>
@@ -1118,7 +1137,7 @@ export default function App() {
                     className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] disabled:opacity-60 text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
-                    <span>{seedingStarter ? 'Seeding Supabase...' : 'Load Starter Data'}</span>
+                    <span>{seedingStarter ? 'Loading Starter...' : 'Load Starter Data'}</span>
                   </button>
                   <button
                     type="button"
@@ -1310,7 +1329,7 @@ export default function App() {
                 />
               )}
 
-              {activeScreen === 'console' && (
+              {activeScreen === 'console' && effectiveRole === 'creator' && (
                 <AppsCreatorConsoleScreen
                   apps={safeCreatorApps}
                   logs={safeCreatorAppLogs}
@@ -1334,7 +1353,7 @@ export default function App() {
                 />
               )}
 
-              {activeScreen === 'billing' && (
+              {activeScreen === 'billing' && effectiveRole !== 'gate_staff' && (
                 <BillingScreen
                   profile={profile}
                   events={safeEvents}

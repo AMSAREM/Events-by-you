@@ -128,10 +128,13 @@ export interface VelocityPoint {
   revenue: number;
 }
 
+export type AppRole = 'creator' | 'organizer' | 'gate_staff';
+
 export interface OrganizerProfile {
   name: string;
   firstName: string;
   role: string;
+  appRole?: AppRole;
   email: string;
   studio: string;
   plan: 'Starter' | 'Pro Organizer' | 'Enterprise';
@@ -196,5 +199,149 @@ export interface CreatorAppLog {
   requestSummary: string;
   responseSummary: string;
   createdAt: string;
+}
+
+export type SmsDispatchMode = 'live' | 'sandbox';
+
+export interface BuilderFeatureFlags {
+  publicRegistrationsPaused: boolean;
+  pausedEventIds: string[];
+  smsMode: SmsDispatchMode;
+  signupsEnabled: boolean;
+  starterSeedingEnabled: boolean;
+}
+
+export interface BuilderEnvStatus {
+  SUPABASE_URL: boolean;
+  SUPABASE_ANON_KEY: boolean;
+  SUPABASE_SERVICE_ROLE_KEY: boolean;
+  ARKESEL_API_KEY: boolean;
+  CREATOR_PASSWORD: boolean;
+  CREATOR_EMAIL: string;
+}
+
+export interface BuilderTableCounts {
+  profiles: number;
+  events: number;
+  attendees: number;
+  disposable_shots: number;
+  creator_apps: number;
+}
+
+export interface BuilderErrorEntry {
+  id: string;
+  source: string;
+  message: string;
+  stack?: string;
+  timestamp: string;
+}
+
+export interface BuilderSmsQueueItem {
+  attendeeId: string;
+  attendeeName: string;
+  phone: string;
+  eventId: string;
+  eventTitle: string;
+  smsStatus: Attendee['smsStatus'];
+  createdAt?: string;
+}
+
+export interface BuilderTenantSummary {
+  id: string;
+  name: string;
+  email: string;
+  studio: string;
+  appRole: AppRole;
+  plan: OrganizerProfile['plan'];
+  smsCredits: number;
+  eventsCount: number;
+  attendeesCount: number;
+  shotsCount: number;
+  storageMb: number;
+  suspended: boolean;
+  lastLoginAt: string;
+  createdAt: string;
+}
+
+export interface BuilderTenantInspection {
+  tenant: BuilderTenantSummary;
+  events: EventItem[];
+  attendees: Attendee[];
+}
+
+export interface BuilderEventTrafficRow {
+  eventId: string;
+  title: string;
+  slug: string;
+  status: EventItem['status'];
+  registered: number;
+  capacity: number;
+  checkedIn: number;
+  duplicateBlocks: number;
+  cameraShots: number;
+  cameraStorageMb: number;
+  registrationPaused: boolean;
+}
+
+export interface BuilderDiagnosticFailure {
+  id: string;
+  kind: 'qr-scan' | 'webhook' | 'client-auth';
+  target: string;
+  statusCode: number;
+  reason: string;
+  payloadPreview: string;
+  expectedDiff?: string;
+  timestamp: string;
+  replayed: boolean;
+  appId?: string;
+}
+
+export interface BuilderTenantUnitEconomics {
+  userId: string;
+  name: string;
+  email: string;
+  plan: OrganizerProfile['plan'];
+  mrrUsd: number;
+  smsSentCount: number;
+  smsCostUsd: number;
+  storageMb: number;
+  storageCostUsd: number;
+  netMarginUsd: number;
+  unprofitableFlag: boolean;
+}
+
+export interface BuilderConsoleOverview {
+  storageMode: 'supabase' | 'in-memory';
+  dbLatencyMs: number;
+  rlsVerified: boolean;
+  tableCounts: BuilderTableCounts;
+  recentErrors: BuilderErrorEntry[];
+  smsTelemetry: {
+    mode: SmsDispatchMode;
+    totalDispatched: number;
+    deliveredCount: number;
+    pendingOrFailedCount: number;
+    successRatePct: number;
+    gatewayBalanceCredits: number;
+    organizerCreditLiabilities: number;
+    failedQueue: BuilderSmsQueueItem[];
+  };
+  tenants: BuilderTenantSummary[];
+  eventTraffic: BuilderEventTrafficRow[];
+  totalDuplicateBlocks: number;
+  diagnosticFailures: BuilderDiagnosticFailure[];
+  flags: BuilderFeatureFlags;
+  envStatus: BuilderEnvStatus;
+  unitEconomics: {
+    totalMrrUsd: number;
+    totalSmsCostUsd: number;
+    totalStorageCostUsd: number;
+    grossMarginUsd: number;
+    totalStorageMb: number;
+    proCount: number;
+    enterpriseCount: number;
+    starterCount: number;
+    perTenant: BuilderTenantUnitEconomics[];
+  };
 }
 

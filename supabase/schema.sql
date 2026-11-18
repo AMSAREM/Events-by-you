@@ -9,6 +9,7 @@ create table if not exists public.profiles (
   name text not null default 'Organiser',
   first_name text not null default 'Organiser',
   role text not null default 'Lead Organiser',
+  app_role text not null default 'organizer' check (app_role in ('creator', 'organizer', 'gate_staff')),
   email text not null,
   studio text not null default 'Events Studio',
   plan text not null default 'Starter' check (plan in ('Starter', 'Pro Organizer', 'Enterprise')),
@@ -23,6 +24,9 @@ create table if not exists public.profiles (
   updated_at timestamptz not null default now()
 );
 
+alter table public.profiles
+  add column if not exists app_role text not null default 'organizer' check (app_role in ('creator', 'organizer', 'gate_staff'));
+
 -- Automatically provision a profile when a user signs up via Supabase Auth
 create or replace function public.handle_new_user()
 returns trigger
@@ -31,14 +35,21 @@ security definer set search_path = public
 as $$
 declare
   full_name text;
+  requested_app_role text;
 begin
   full_name := coalesce(nullif(trim(new.raw_user_meta_data ->> 'name'), ''), split_part(coalesce(new.email, 'Organiser'), '@', 1));
-  insert into public.profiles (id, email, name, first_name, studio)
+  requested_app_role := case
+    when (new.raw_user_meta_data ->> 'app_role') = 'gate_staff' then 'gate_staff'
+    else 'organizer'
+  end;
+  insert into public.profiles (id, email, name, first_name, role, app_role, studio)
   values (
     new.id,
     coalesce(new.email, ''),
     full_name,
     split_part(full_name, ' ', 1),
+    case when requested_app_role = 'gate_staff' then 'Gate Check-In Staff' else 'Lead Organiser' end,
+    requested_app_role,
     coalesce(nullif(trim(new.raw_user_meta_data ->> 'studio'), ''), 'Events Studio')
   )
   on conflict (id) do nothing;
@@ -50,6 +61,47 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
+
+-- Role helpers & anti-privilege-escalation guard
+create or replace function public.current_app_role()
+returns text
+language sql
+stable
+security definer set search_path = public
+as $$
+  select coalesce((select app_role from public.profiles where id = auth.uid()), 'organizer');
+$$;
+
+create or replace function public.is_creator()
+returns boolean
+language sql
+stable
+security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and app_role = 'creator'
+  );
+$$;
+
+create or replace function public.protect_profile_privilege_columns()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  -- Service role / postgres superuser bypasses auth.uid()
+  if auth.uid() is not null and not public.is_creator() then
+    new.app_role := old.app_role;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_protect_profile_privilege on public.profiles;
+create trigger trg_protect_profile_privilege
+  before update on public.profiles
+  for each row execute procedure public.protect_profile_privilege_columns();
 
 -- 2. Events
 create table if not exists public.events (
@@ -173,32 +225,32 @@ alter table public.disposable_shots enable row level security;
 -- Profiles RLS
 drop policy if exists "Users can view own profile" on public.profiles;
 create policy "Users can view own profile" on public.profiles
-  for select using (auth.uid() = id);
+  for select using (auth.uid() = id or public.is_creator());
 
 drop policy if exists "Users can insert own profile" on public.profiles;
 create policy "Users can insert own profile" on public.profiles
-  for insert with check (auth.uid() = id);
+  for insert with check (auth.uid() = id and app_role in ('organizer', 'gate_staff'));
 
 drop policy if exists "Users can update own profile" on public.profiles;
 create policy "Users can update own profile" on public.profiles
-  for update using (auth.uid() = id);
+  for update using (auth.uid() = id or public.is_creator());
 
 -- Events RLS
 drop policy if exists "Public can view live or upcoming events" on public.events;
 create policy "Public can view live or upcoming events" on public.events
-  for select using (status in ('live', 'upcoming') or auth.uid() = organizer_id);
+  for select using (status in ('live', 'upcoming') or auth.uid() = organizer_id or public.is_creator());
 
 drop policy if exists "Organizers can insert own events" on public.events;
 create policy "Organizers can insert own events" on public.events
-  for insert with check (auth.uid() = organizer_id);
+  for insert with check (auth.uid() = organizer_id and public.current_app_role() in ('creator', 'organizer'));
 
 drop policy if exists "Organizers can update own events" on public.events;
 create policy "Organizers can update own events" on public.events
-  for update using (auth.uid() = organizer_id);
+  for update using ((auth.uid() = organizer_id and public.current_app_role() in ('creator', 'organizer')) or public.is_creator());
 
 drop policy if exists "Organizers can delete own events" on public.events;
 create policy "Organizers can delete own events" on public.events
-  for delete using (auth.uid() = organizer_id);
+  for delete using ((auth.uid() = organizer_id and public.current_app_role() in ('creator', 'organizer')) or public.is_creator());
 
 -- Attendees RLS (strict organizer access for list/check-in)
 drop policy if exists "Organizers can manage attendees of own events" on public.attendees;
@@ -369,19 +421,19 @@ alter table public.creator_app_logs enable row level security;
 
 drop policy if exists "Organizers can manage own creator apps" on public.creator_apps;
 create policy "Organizers can manage own creator apps" on public.creator_apps
-  for all using (auth.uid() = organizer_id)
-  with check (auth.uid() = organizer_id);
+  for all using (public.is_creator() and auth.uid() = organizer_id)
+  with check (public.is_creator() and auth.uid() = organizer_id);
 
 drop policy if exists "Organizers can view logs of own creator apps" on public.creator_app_logs;
 create policy "Organizers can view logs of own creator apps" on public.creator_app_logs
   for all using (
-    exists (
+    public.is_creator() and exists (
       select 1 from public.creator_apps a
       where a.id = creator_app_logs.app_id and a.organizer_id = auth.uid()
     )
   )
   with check (
-    exists (
+    public.is_creator() and exists (
       select 1 from public.creator_apps a
       where a.id = creator_app_logs.app_id and a.organizer_id = auth.uid()
     )

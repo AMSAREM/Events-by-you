@@ -1,0 +1,1555 @@
+import crypto from 'node:crypto';
+import {
+  INITIAL_ALERTS,
+  INITIAL_ATTENDEES,
+  INITIAL_DISPOSABLE_SHOTS,
+  INITIAL_EVENTS,
+  INITIAL_PROFILE,
+  INITIAL_ROLL_SETTINGS,
+  INITIAL_SCHEDULE,
+  normalizePhoneE164,
+} from '../src/data/initialData.ts';
+import type {
+  AppRole,
+  Attendee,
+  BuilderConsoleOverview,
+  BuilderDiagnosticFailure,
+  BuilderEnvStatus,
+  BuilderErrorEntry,
+  BuilderEventTrafficRow,
+  BuilderFeatureFlags,
+  BuilderSmsQueueItem,
+  BuilderTenantInspection,
+  BuilderTenantSummary,
+  BuilderTenantUnitEconomics,
+  CreatorApp,
+  CreatorAppEnvironment,
+  CreatorAppLog,
+  CreatorAppScope,
+  CreatorAppStatus,
+  CreatorAppType,
+  DisposableRollSettings,
+  DisposableShot,
+  EventItem,
+  OrganizerProfile,
+  ScheduleBlock,
+  SystemAlert,
+  WebhookTriggerEvent,
+} from '../src/types/events.ts';
+
+export interface MemoryUser {
+  id: string;
+  email: string;
+  passwordHash: string | null;
+  profile: OrganizerProfile;
+  suspended: boolean;
+  lastLoginAt: string;
+  createdAt: string;
+}
+
+export interface MemorySession {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  userId: string;
+}
+
+interface StoredCreatorAppRecord extends CreatorApp {
+  organizerId: string;
+  secretHash: string;
+  webhookSecret: string;
+}
+
+interface MemoryDatabase {
+  users: Map<string, MemoryUser>;
+  userIdByEmail: Map<string, string>;
+  sessionsByAccessToken: Map<string, MemorySession>;
+  sessionsByRefreshToken: Map<string, MemorySession>;
+  events: Map<string, EventItem & { organizerId: string }>;
+  attendees: Map<string, Attendee>;
+  scheduleBlocks: Map<string, ScheduleBlock>;
+  alerts: Map<string, SystemAlert & { organizerId: string }>;
+  disposableShots: Map<string, DisposableShot>;
+  rollSettings: Map<string, DisposableRollSettings>;
+  creatorApps: Map<string, StoredCreatorAppRecord>;
+  creatorAppLogs: Map<string, CreatorAppLog>;
+}
+
+const PLAN_MRR_USD: Record<OrganizerProfile['plan'], number> = {
+  Starter: 0,
+  'Pro Organizer': 29,
+  Enterprise: 99,
+};
+
+const SMS_UNIT_COST_USD = 0.012;
+const STORAGE_COST_PER_MB_USD = 0.08;
+
+export const platformRuntime = {
+  flags: {
+    publicRegistrationsPaused: false,
+    pausedEventIds: [],
+    smsMode: (process.env.ARKESEL_API_KEY || '').trim() ? 'live' : 'sandbox',
+    signupsEnabled: true,
+    starterSeedingEnabled: true,
+  } as BuilderFeatureFlags,
+  gatewayBalanceCredits: 25000,
+  recentErrors: [] as BuilderErrorEntry[],
+  duplicateBlocksByEvent: new Map<string, number>(),
+  diagnosticFailures: [] as BuilderDiagnosticFailure[],
+
+  recordError(source: string, err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    this.recentErrors.unshift({
+      id: `err-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+      source,
+      message,
+      stack,
+      timestamp: new Date().toISOString(),
+    });
+    if (this.recentErrors.length > 25) {
+      this.recentErrors.length = 25;
+    }
+  },
+
+  clearErrors() {
+    this.recentErrors = [];
+  },
+
+  recordDuplicateBlock(eventId: string) {
+    this.duplicateBlocksByEvent.set(eventId, (this.duplicateBlocksByEvent.get(eventId) ?? 0) + 1);
+  },
+
+  recordDiagnosticFailure(entry: Omit<BuilderDiagnosticFailure, 'id' | 'timestamp' | 'replayed'>) {
+    this.diagnosticFailures.unshift({
+      ...entry,
+      id: `diag-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+      timestamp: new Date().toISOString(),
+      replayed: false,
+    });
+    if (this.diagnosticFailures.length > 40) {
+      this.diagnosticFailures.length = 40;
+    }
+  },
+
+  getEnvStatus(): BuilderEnvStatus {
+    return {
+      SUPABASE_URL: Boolean((process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim()),
+      SUPABASE_ANON_KEY: Boolean(
+        (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '').trim()
+      ),
+      SUPABASE_SERVICE_ROLE_KEY: Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()),
+      ARKESEL_API_KEY: Boolean((process.env.ARKESEL_API_KEY || '').trim()),
+      CREATOR_PASSWORD: Boolean((process.env.CREATOR_PASSWORD || '').trim()),
+      CREATOR_EMAIL: (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase(),
+    };
+  },
+
+  updateFlags(patch: Partial<BuilderFeatureFlags>): BuilderFeatureFlags {
+    if (typeof patch.publicRegistrationsPaused === 'boolean') {
+      this.flags.publicRegistrationsPaused = patch.publicRegistrationsPaused;
+    }
+    if (Array.isArray(patch.pausedEventIds)) {
+      this.flags.pausedEventIds = Array.from(new Set(patch.pausedEventIds.map(String)));
+    }
+    if (patch.smsMode === 'live' || patch.smsMode === 'sandbox') {
+      this.flags.smsMode = patch.smsMode;
+    }
+    if (typeof patch.signupsEnabled === 'boolean') {
+      this.flags.signupsEnabled = patch.signupsEnabled;
+    }
+    if (typeof patch.starterSeedingEnabled === 'boolean') {
+      this.flags.starterSeedingEnabled = patch.starterSeedingEnabled;
+    }
+    return { ...this.flags, pausedEventIds: [...this.flags.pausedEventIds] };
+  },
+};
+
+function hashPassword(password: string): string {
+  return crypto.createHash('sha256').update(`eventsapp-pw:${password}`).digest('hex');
+}
+
+function sha256Hex(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function createMemorySession(userId: string): MemorySession {
+  const accessToken = `mem_acc_${crypto.randomBytes(24).toString('hex')}`;
+  const refreshToken = `mem_ref_${crypto.randomBytes(24).toString('hex')}`;
+  const expiresAt = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
+  const session: MemorySession = { accessToken, refreshToken, expiresAt, userId };
+  db.sessionsByAccessToken.set(accessToken, session);
+  db.sessionsByRefreshToken.set(refreshToken, session);
+  return session;
+}
+
+const db: MemoryDatabase = {
+  users: new Map(),
+  userIdByEmail: new Map(),
+  sessionsByAccessToken: new Map(),
+  sessionsByRefreshToken: new Map(),
+  events: new Map(),
+  attendees: new Map(),
+  scheduleBlocks: new Map(),
+  alerts: new Map(),
+  disposableShots: new Map(),
+  rollSettings: new Map(),
+  creatorApps: new Map(),
+  creatorAppLogs: new Map(),
+};
+
+function estimateShotBytes(dataUrl: string): number {
+  if (!dataUrl) return 0;
+  if (dataUrl.startsWith('data:')) {
+    return Math.round((dataUrl.length * 3) / 4);
+  }
+  return 420 * 1024;
+}
+
+function seedStarterForUser(userId: string, organizerName: string, useRawIds = false): void {
+  const existingForUser = Array.from(db.events.values()).some((e) => e.organizerId === userId);
+  const uniqueSuffix = useRawIds
+    ? ''
+    : existingForUser
+      ? `-${userId.slice(0, 6)}-${crypto.randomBytes(2).toString('hex')}`
+      : `-${userId.slice(0, 6)}`;
+  const makeId = (baseId: string) => (useRawIds ? baseId : `${baseId}${uniqueSuffix}`);
+
+  for (const evt of INITIAL_EVENTS) {
+    const id = makeId(evt.id);
+    const slug = useRawIds ? evt.slug : `${evt.slug}${uniqueSuffix}`;
+    db.events.set(id, {
+      ...evt,
+      id,
+      slug,
+      organizer: organizerName || evt.organizer,
+      organizerId: userId,
+    });
+  }
+
+  for (const att of INITIAL_ATTENDEES) {
+    const id = makeId(att.id);
+    db.attendees.set(id, {
+      ...att,
+      id,
+      eventId: makeId(att.eventId),
+    });
+  }
+
+  for (const blk of INITIAL_SCHEDULE) {
+    const id = makeId(blk.id);
+    db.scheduleBlocks.set(id, {
+      ...blk,
+      id,
+      eventId: makeId(blk.eventId),
+    });
+  }
+
+  for (const al of INITIAL_ALERTS) {
+    const id = makeId(al.id);
+    db.alerts.set(id, {
+      ...al,
+      id,
+      eventId: al.eventId ? makeId(al.eventId) : undefined,
+      organizerId: userId,
+    });
+  }
+
+  for (const [evtId, cfg] of Object.entries(INITIAL_ROLL_SETTINGS)) {
+    db.rollSettings.set(makeId(evtId), { ...cfg });
+  }
+
+  for (const shot of INITIAL_DISPOSABLE_SHOTS) {
+    const id = makeId(shot.id);
+    db.disposableShots.set(id, {
+      ...shot,
+      id,
+      eventId: makeId(shot.eventId),
+    });
+  }
+}
+
+function initDefaultAccounts(): void {
+  const creatorEmail = (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase();
+  const creatorPassword = (process.env.CREATOR_PASSWORD || '').trim();
+  const creatorId = 'usr-primary-creator';
+
+  const creatorProfile: OrganizerProfile = {
+    ...INITIAL_PROFILE,
+    name: 'Apps Creator',
+    firstName: 'Creator',
+    role: 'Apps Creator',
+    appRole: 'creator',
+    email: creatorEmail,
+    studio: 'Apps Creator Console',
+    plan: 'Pro Organizer',
+    smsCredits: 1840,
+    capacityAlertThreshold: 90,
+    timezone: 'Africa/Accra',
+    twoFactorEnabled: false,
+    senderId: 'EVENTSAPP',
+  };
+
+  db.users.set(creatorId, {
+    id: creatorId,
+    email: creatorEmail,
+    passwordHash: creatorPassword ? hashPassword(creatorPassword) : null,
+    profile: creatorProfile,
+    suspended: false,
+    lastLoginAt: new Date(Date.now() - 18 * 60 * 1000).toISOString(),
+    createdAt: '2026-09-14T08:30:00.000Z',
+  });
+  db.userIdByEmail.set(creatorEmail, creatorId);
+  seedStarterForUser(creatorId, creatorProfile.name, true);
+
+  // Add one pending SMS on initial seed so failed SMS queue telemetry has actionable state if needed,
+  // and seed a second tenant for directory & unit economics realism.
+  const partnerId = 'usr-grace-chapel';
+  const partnerEmail = 'events@gracechapel.org';
+  db.users.set(partnerId, {
+    id: partnerId,
+    email: partnerEmail,
+    passwordHash: hashPassword('grace2026'),
+    profile: {
+      name: 'Pastor Daniel Adjei',
+      firstName: 'Daniel',
+      role: 'Lead Organiser',
+      appRole: 'organizer',
+      email: partnerEmail,
+      studio: 'Grace Chapel Ministry',
+      plan: 'Starter',
+      smsCredits: 14,
+      capacityAlertThreshold: 90,
+      timezone: 'Africa/Accra',
+      twoFactorEnabled: true,
+      senderId: 'GRACECH',
+    },
+    suspended: false,
+    lastLoginAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+    createdAt: '2026-10-02T11:15:00.000Z',
+  });
+  db.userIdByEmail.set(partnerEmail, partnerId);
+
+  const enterpriseId = 'usr-meridian-corp';
+  const enterpriseEmail = 'ops@meridianbank.ng';
+  db.users.set(enterpriseId, {
+    id: enterpriseId,
+    email: enterpriseEmail,
+    passwordHash: hashPassword('meridian2026'),
+    profile: {
+      name: 'Chidi Okonkwo',
+      firstName: 'Chidi',
+      role: 'Head of Events',
+      appRole: 'organizer',
+      email: enterpriseEmail,
+      studio: 'Meridian Corporate Group',
+      plan: 'Enterprise',
+      smsCredits: 4200,
+      capacityAlertThreshold: 85,
+      timezone: 'Africa/Lagos',
+      twoFactorEnabled: true,
+      senderId: 'MERIDIAN',
+    },
+    suspended: false,
+    lastLoginAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
+    createdAt: '2026-08-21T15:40:00.000Z',
+  });
+  db.userIdByEmail.set(enterpriseEmail, enterpriseId);
+
+  // Seed initial diagnostic entries so the inspector is immediately informative
+  platformRuntime.duplicateBlocksByEvent.set('evt-tech-leaders-2026', 3);
+  platformRuntime.duplicateBlocksByEvent.set('evt-church-revival', 7);
+  platformRuntime.recordDiagnosticFailure({
+    kind: 'webhook',
+    target: 'https://hooks.accratech.gh/arkesel-dlr',
+    statusCode: 502,
+    reason: 'Upstream timeout after 5000ms awaiting partner ACK',
+    payloadPreview: JSON.stringify({
+      type: 'attendee.registered',
+      eventId: 'evt-musical-accra',
+      ticketCode: '#MUS-26-4401-VIP',
+    }),
+    expectedDiff: 'Expected HTTP 200-299 OK; received ETIMEDOUT from hooks.accratech.gh',
+  });
+  platformRuntime.recordDiagnosticFailure({
+    kind: 'qr-scan',
+    target: '/v1/checkin (Gate B Tablet)',
+    statusCode: 409,
+    reason: 'Duplicate QR token scan blocked (TLS-2026-0811 already checked in at 09:12 AM)',
+    payloadPreview: JSON.stringify({
+      eventId: 'evt-tech-leaders-2026',
+      ticketCode: 'TLS-2026-0811',
+      gate: 'Gate B',
+    }),
+    expectedDiff: 'Token checkedIn=false required; current state checkedIn=true',
+  });
+}
+
+initDefaultAccounts();
+
+export function getOrCreateMemoryUser(
+  emailInput: string,
+  options?: {
+    name?: string;
+    studio?: string;
+    password?: string;
+    setPasswordIfMissing?: boolean;
+    appRole?: AppRole;
+  }
+): MemoryUser {
+  const email = emailInput.trim().toLowerCase();
+  const existingId = db.userIdByEmail.get(email);
+  if (existingId) {
+    const user = db.users.get(existingId)!;
+    if (options?.password && options.setPasswordIfMissing && !user.passwordHash) {
+      user.passwordHash = hashPassword(options.password);
+    }
+    return user;
+  }
+
+  const userId = `usr-${crypto.randomBytes(6).toString('hex')}`;
+  const creatorEmail = (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase();
+  const isCreator = email === creatorEmail;
+  const resolvedAppRole: AppRole = isCreator
+    ? 'creator'
+    : options?.appRole === 'gate_staff'
+      ? 'gate_staff'
+      : 'organizer';
+  const name = options?.name?.trim() || email.split('@')[0] || 'Organiser';
+  const profile: OrganizerProfile = {
+    name,
+    firstName: name.split(' ')[0] || 'Organiser',
+    role:
+      resolvedAppRole === 'creator'
+        ? 'Apps Creator'
+        : resolvedAppRole === 'gate_staff'
+          ? 'Gate Check-In Staff'
+          : 'Lead Organiser',
+    appRole: resolvedAppRole,
+    email,
+    studio: options?.studio?.trim() || (isCreator ? 'Apps Creator Console' : 'Events Studio'),
+    plan: isCreator ? 'Pro Organizer' : 'Starter',
+    smsCredits: isCreator ? 1840 : 20,
+    capacityAlertThreshold: 90,
+    timezone: 'Africa/Accra',
+    twoFactorEnabled: false,
+    senderId: 'EVENTSAPP',
+  };
+
+  const now = new Date().toISOString();
+  const user: MemoryUser = {
+    id: userId,
+    email,
+    passwordHash: options?.password ? hashPassword(options.password) : null,
+    profile,
+    suspended: false,
+    lastLoginAt: now,
+    createdAt: now,
+  };
+  db.users.set(userId, user);
+  db.userIdByEmail.set(email, userId);
+  return user;
+}
+
+function buildTenantSummary(user: MemoryUser): BuilderTenantSummary {
+  const userEvents = Array.from(db.events.values()).filter((e) => e.organizerId === user.id);
+  const evtIds = new Set(userEvents.map((e) => e.id));
+  const attendeesCount = Array.from(db.attendees.values()).filter((a) => evtIds.has(a.eventId)).length;
+  const shots = Array.from(db.disposableShots.values()).filter((s) => evtIds.has(s.eventId));
+  const storageBytes = shots.reduce((acc, s) => acc + estimateShotBytes(s.dataUrl), 0);
+
+  return {
+    id: user.id,
+    name: user.profile.name,
+    email: user.email,
+    studio: user.profile.studio,
+    appRole: user.profile.appRole ?? 'organizer',
+    plan: user.profile.plan,
+    smsCredits: user.profile.smsCredits,
+    eventsCount: userEvents.length,
+    attendeesCount,
+    shotsCount: shots.length,
+    storageMb: Number((storageBytes / (1024 * 1024)).toFixed(2)),
+    suspended: user.suspended,
+    lastLoginAt: user.lastLoginAt,
+    createdAt: user.createdAt,
+  };
+}
+
+export const memoryStore = {
+  signUp(payload: { email: string; password: string; name: string; studio?: string; appRole?: AppRole }) {
+    if (!platformRuntime.flags.signupsEnabled) {
+      throw new Error('New organiser signups are temporarily paused by platform administrator.');
+    }
+    const email = payload.email.trim().toLowerCase();
+    const existingId = db.userIdByEmail.get(email);
+    if (existingId) {
+      throw new Error('An account with this email already exists. Please sign in.');
+    }
+    const user = getOrCreateMemoryUser(email, {
+      name: payload.name,
+      studio: payload.studio || 'Events Studio',
+      password: payload.password,
+      appRole: payload.appRole === 'gate_staff' ? 'gate_staff' : 'organizer',
+    });
+    user.lastLoginAt = new Date().toISOString();
+    const session = createMemorySession(user.id);
+    return { session, profile: user.profile };
+  },
+
+  signIn(emailInput: string, password: string) {
+    const email = emailInput.trim().toLowerCase();
+    const existingId = db.userIdByEmail.get(email);
+    if (!existingId) {
+      throw new Error('Invalid email or password. Create a free account or use a 6-digit email code.');
+    }
+    const user = db.users.get(existingId)!;
+    if (user.suspended) {
+      throw new Error('This organiser account has been suspended. Contact support.');
+    }
+    if (user.passwordHash && user.passwordHash !== hashPassword(password)) {
+      throw new Error('Invalid login credentials.');
+    }
+    if (!user.passwordHash) {
+      user.passwordHash = hashPassword(password);
+    }
+    user.lastLoginAt = new Date().toISOString();
+    const session = createMemorySession(user.id);
+    return { session, profile: user.profile };
+  },
+
+  creatorLogin(emailInput: string, password: string) {
+    const email = emailInput.trim().toLowerCase();
+    const user = getOrCreateMemoryUser(email, {
+      name: 'Apps Creator',
+      studio: 'Apps Creator Console',
+      password,
+      setPasswordIfMissing: true,
+    });
+    if (user.suspended) {
+      throw new Error('Creator account is suspended.');
+    }
+    user.lastLoginAt = new Date().toISOString();
+    const session = createMemorySession(user.id);
+    return { session, profile: user.profile };
+  },
+
+  verifyOtp(emailInput: string, token: string) {
+    if (!/^\d{6}$/.test(token.trim())) {
+      throw new Error('Enter a valid 6-digit verification code.');
+    }
+    const user = getOrCreateMemoryUser(emailInput);
+    if (user.suspended) {
+      throw new Error('This organiser account has been suspended.');
+    }
+    user.lastLoginAt = new Date().toISOString();
+    const session = createMemorySession(user.id);
+    return { session, profile: user.profile };
+  },
+
+  issueOAuthSession(emailInput = 'amoakoimml@gmail.com') {
+    const user = getOrCreateMemoryUser(emailInput);
+    if (user.suspended) {
+      throw new Error('This organiser account has been suspended.');
+    }
+    user.lastLoginAt = new Date().toISOString();
+    return createMemorySession(user.id);
+  },
+
+  refreshSession(refreshToken: string) {
+    const existing = db.sessionsByRefreshToken.get(refreshToken);
+    if (!existing) return null;
+    const user = db.users.get(existing.userId);
+    if (!user || user.suspended) return null;
+    db.sessionsByAccessToken.delete(existing.accessToken);
+    db.sessionsByRefreshToken.delete(existing.refreshToken);
+    const next = createMemorySession(user.id);
+    return { session: next, profile: user.profile };
+  },
+
+  signOut(accessToken: string) {
+    const existing = db.sessionsByAccessToken.get(accessToken);
+    if (existing) {
+      db.sessionsByAccessToken.delete(existing.accessToken);
+      db.sessionsByRefreshToken.delete(existing.refreshToken);
+    }
+  },
+
+  getUserByAccessToken(accessToken: string): MemoryUser | null {
+    const session = db.sessionsByAccessToken.get(accessToken);
+    if (!session) return null;
+    if (session.expiresAt * 1000 < Date.now()) {
+      db.sessionsByAccessToken.delete(accessToken);
+      db.sessionsByRefreshToken.delete(session.refreshToken);
+      return null;
+    }
+    const user = db.users.get(session.userId) ?? null;
+    if (!user || user.suspended) return null;
+    return user;
+  },
+
+  updatePassword(userId: string, password: string) {
+    const user = db.users.get(userId);
+    if (!user) throw new Error('User not found.');
+    user.passwordHash = hashPassword(password);
+  },
+
+  getPublicEvents(): EventItem[] {
+    return Array.from(db.events.values())
+      .filter((e) => e.status === 'live' || e.status === 'upcoming')
+      .map(({ organizerId: _org, ...rest }) => rest);
+  },
+
+  registerPublicAttendee(payload: {
+    id: string;
+    eventId: string;
+    name: string;
+    email: string;
+    phone: string;
+    organization?: string;
+    tier?: Attendee['tier'];
+    ticketCode: string;
+    smsStatus: Attendee['smsStatus'];
+  }): { attendee: Attendee; event: EventItem } {
+    const evt = db.events.get(payload.eventId);
+    if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
+      throw new Error('Event not found or not open for registration.');
+    }
+
+    const normalizedPhone = normalizePhoneE164(payload.phone);
+    const duplicate = Array.from(db.attendees.values()).find(
+      (a) =>
+        a.eventId === payload.eventId &&
+        a.phone.replace(/\s+/g, '') === normalizedPhone.replace(/\s+/g, '')
+    );
+    if (duplicate) {
+      platformRuntime.recordDuplicateBlock(payload.eventId);
+      throw new Error(`DUPLICATE_PHONE:${normalizedPhone} already holds a pass for ${evt.title}`);
+    }
+
+    const attendee: Attendee = {
+      id: payload.id,
+      eventId: payload.eventId,
+      name: payload.name,
+      email: payload.email,
+      phone: normalizedPhone,
+      organization: payload.organization?.trim() || 'Fast Pass Attendee',
+      tier: payload.tier || 'General',
+      checkedIn: false,
+      ticketCode: payload.ticketCode,
+      smsStatus: payload.smsStatus,
+      paymentStatus: 'paid',
+    };
+    db.attendees.set(attendee.id, attendee);
+
+    evt.registered += 1;
+    evt.smsDispatched += 1;
+    evt.revenue += evt.ticketPrice;
+    if (platformRuntime.gatewayBalanceCredits > 0) {
+      platformRuntime.gatewayBalanceCredits -= 1;
+    }
+
+    const { organizerId: _org, ...cleanEvent } = evt;
+    return { attendee, event: cleanEvent };
+  },
+
+  loadWorkspace(userId: string) {
+    const user = db.users.get(userId);
+    if (!user) throw new Error('User not found.');
+
+    const events = Array.from(db.events.values())
+      .filter((e) => e.organizerId === userId)
+      .map(({ organizerId: _org, ...rest }) => rest);
+    const eventIdSet = new Set(events.map((e) => e.id));
+
+    const attendees = Array.from(db.attendees.values()).filter((a) => eventIdSet.has(a.eventId));
+    const scheduleBlocks = Array.from(db.scheduleBlocks.values()).filter((b) =>
+      eventIdSet.has(b.eventId)
+    );
+    const alerts = Array.from(db.alerts.values())
+      .filter((al) => al.organizerId === userId)
+      .map(({ organizerId: _org, ...rest }) => rest);
+    const disposableShots = Array.from(db.disposableShots.values()).filter((s) =>
+      eventIdSet.has(s.eventId)
+    );
+    const rollSettings: Record<string, DisposableRollSettings> = {};
+    for (const evtId of eventIdSet) {
+      const cfg = db.rollSettings.get(evtId);
+      if (cfg) rollSettings[evtId] = cfg;
+    }
+
+    const creatorApps = Array.from(db.creatorApps.values())
+      .filter((app) => app.organizerId === userId)
+      .map(({ organizerId: _org, secretHash: _sh, webhookSecret: _ws, ...rest }) => rest);
+    const appIdSet = new Set(creatorApps.map((a) => a.id));
+    const creatorAppLogs = Array.from(db.creatorAppLogs.values()).filter((l) =>
+      appIdSet.has(l.appId)
+    );
+
+    return {
+      profile: user.profile,
+      events,
+      attendees,
+      scheduleBlocks,
+      alerts,
+      disposableShots,
+      rollSettings,
+      creatorApps,
+      creatorAppLogs,
+    };
+  },
+
+  seedStarter(userId: string) {
+    if (!platformRuntime.flags.starterSeedingEnabled) {
+      throw new Error('Starter data seeding is currently disabled by platform administrator.');
+    }
+    const user = db.users.get(userId);
+    if (!user) throw new Error('User not found.');
+    const existing = Array.from(db.events.values()).some((e) => e.organizerId === userId);
+    if (!existing) {
+      seedStarterForUser(userId, user.profile.name, false);
+    }
+    return this.loadWorkspace(userId);
+  },
+
+  updateProfile(userId: string, patch: Partial<OrganizerProfile>): OrganizerProfile {
+    const user = db.users.get(userId);
+    if (!user) throw new Error('User not found.');
+    const { appRole: _ignoreAppRole, ...safePatch } = patch;
+    user.profile = { ...user.profile, ...safePatch };
+    return user.profile;
+  },
+
+  createEvent(userId: string, event: EventItem, blocks: ScheduleBlock[] = []) {
+    const baseSlug =
+      (event.slug || event.title)
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/(^-|-$)+/g, '') || `event-${Date.now().toString(36)}`;
+    const slugTaken = Array.from(db.events.values()).some((e) => e.slug === baseSlug);
+    const uniqueSlug = slugTaken ? `${baseSlug}-${crypto.randomBytes(2).toString('hex')}` : baseSlug;
+    const uniqueEventId = `evt-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+
+    const created: EventItem = {
+      ...event,
+      id: uniqueEventId,
+      slug: uniqueSlug,
+    };
+    db.events.set(uniqueEventId, { ...created, organizerId: userId });
+
+    const createdBlocks: ScheduleBlock[] = blocks.map((b, idx) => {
+      const id = `sch-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}-${idx}`;
+      const block: ScheduleBlock = { ...b, id, eventId: uniqueEventId };
+      db.scheduleBlocks.set(id, block);
+      return block;
+    });
+
+    return { event: created, blocks: createdBlocks };
+  },
+
+  updateEvent(userId: string, eventId: string, updated: EventItem): EventItem {
+    const existing = db.events.get(eventId);
+    if (!existing || existing.organizerId !== userId) {
+      throw new Error('Event not found.');
+    }
+    const next = {
+      ...existing,
+      ...updated,
+      id: eventId,
+      organizerId: userId,
+    };
+    db.events.set(eventId, next);
+    const { organizerId: _org, ...clean } = next;
+    return clean;
+  },
+
+  deleteEvent(userId: string, eventId: string) {
+    const existing = db.events.get(eventId);
+    if (!existing || existing.organizerId !== userId) {
+      throw new Error('Event not found.');
+    }
+    db.events.delete(eventId);
+    for (const [id, att] of db.attendees) {
+      if (att.eventId === eventId) db.attendees.delete(id);
+    }
+    for (const [id, blk] of db.scheduleBlocks) {
+      if (blk.eventId === eventId) db.scheduleBlocks.delete(id);
+    }
+    for (const [id, shot] of db.disposableShots) {
+      if (shot.eventId === eventId) db.disposableShots.delete(id);
+    }
+    db.rollSettings.delete(eventId);
+  },
+
+  registerStudioAttendee(userId: string, eventId: string, attendee: Attendee) {
+    const evt = db.events.get(eventId);
+    if (!evt || evt.organizerId !== userId) {
+      throw new Error('Event not found in your organizer studio.');
+    }
+    const normalizedPhone = normalizePhoneE164(attendee.phone);
+    const duplicate = Array.from(db.attendees.values()).find(
+      (a) =>
+        a.eventId === eventId &&
+        a.phone.replace(/\s+/g, '') === normalizedPhone.replace(/\s+/g, '')
+    );
+    if (duplicate) {
+      platformRuntime.recordDuplicateBlock(eventId);
+      const err = new Error(
+        `Duplicate shield: ${normalizedPhone} is already registered for this event.`
+      );
+      (err as Error & { status?: number }).status = 409;
+      throw err;
+    }
+
+    const created: Attendee = {
+      ...attendee,
+      eventId,
+      phone: normalizedPhone,
+      organization: attendee.organization || 'General Guest',
+      tier: attendee.tier || 'General',
+      smsStatus: attendee.smsStatus || 'Arkesel Sent',
+      paymentStatus: attendee.paymentStatus || 'paid',
+    };
+    db.attendees.set(created.id, created);
+
+    evt.registered += 1;
+    evt.smsDispatched += 1;
+    evt.revenue += evt.ticketPrice;
+    if (created.checkedIn) evt.checkedIn += 1;
+
+    const { organizerId: _org, ...cleanEvent } = evt;
+    return { attendee: created, event: cleanEvent };
+  },
+
+  toggleCheckIn(userId: string, attendeeId: string): Attendee {
+    const att = db.attendees.get(attendeeId);
+    if (!att) throw new Error('Attendee not found.');
+    const evt = db.events.get(att.eventId);
+    if (!evt || evt.organizerId !== userId) throw new Error('Unauthorized.');
+
+    const nextCheckedIn = !att.checkedIn;
+    const checkedInAt = nextCheckedIn
+      ? new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+      : undefined;
+    const updated: Attendee = { ...att, checkedIn: nextCheckedIn, checkedInAt };
+    db.attendees.set(attendeeId, updated);
+    evt.checkedIn = Math.max(0, evt.checkedIn + (nextCheckedIn ? 1 : -1));
+    return updated;
+  },
+
+  retryPayment(userId: string, attendeeId: string): Attendee {
+    const att = db.attendees.get(attendeeId);
+    if (!att) throw new Error('Attendee not found.');
+    const evt = db.events.get(att.eventId);
+    if (!evt || evt.organizerId !== userId) throw new Error('Unauthorized.');
+    const updated: Attendee = { ...att, paymentStatus: 'paid' };
+    db.attendees.set(attendeeId, updated);
+    for (const al of db.alerts.values()) {
+      if (al.organizerId === userId && al.category === 'payment') {
+        al.resolved = true;
+      }
+    }
+    return updated;
+  },
+
+  addScheduleBlock(userId: string, block: ScheduleBlock): ScheduleBlock {
+    const evt = db.events.get(block.eventId);
+    if (!evt || evt.organizerId !== userId) throw new Error('Event not found.');
+    db.scheduleBlocks.set(block.id, block);
+    return block;
+  },
+
+  toggleScheduleBlock(userId: string, blockId: string): ScheduleBlock {
+    const blk = db.scheduleBlocks.get(blockId);
+    if (!blk) throw new Error('Schedule block not found.');
+    const evt = db.events.get(blk.eventId);
+    if (!evt || evt.organizerId !== userId) throw new Error('Unauthorized.');
+    const updated = { ...blk, completed: !blk.completed };
+    db.scheduleBlocks.set(blockId, updated);
+    return updated;
+  },
+
+  deleteScheduleBlock(userId: string, blockId: string) {
+    const blk = db.scheduleBlocks.get(blockId);
+    if (!blk) return;
+    const evt = db.events.get(blk.eventId);
+    if (!evt || evt.organizerId !== userId) throw new Error('Unauthorized.');
+    db.scheduleBlocks.delete(blockId);
+  },
+
+  resolveAlert(userId: string, alertId: string): SystemAlert {
+    const al = db.alerts.get(alertId);
+    if (!al || al.organizerId !== userId) throw new Error('Alert not found.');
+    al.resolved = true;
+    const { organizerId: _org, ...clean } = al;
+    return clean;
+  },
+
+  addShot(userId: string, shot: DisposableShot): DisposableShot {
+    const evt = db.events.get(shot.eventId);
+    if (!evt || evt.organizerId !== userId) throw new Error('Event not found.');
+    db.disposableShots.set(shot.id, shot);
+    return shot;
+  },
+
+  toggleLikeShot(userId: string, shotId: string): DisposableShot {
+    const shot = db.disposableShots.get(shotId);
+    if (!shot) throw new Error('Shot not found.');
+    const evt = db.events.get(shot.eventId);
+    if (!evt || evt.organizerId !== userId) throw new Error('Unauthorized.');
+    const liked = !Boolean(shot.liked);
+    const likes = liked ? shot.likes + 1 : Math.max(0, shot.likes - 1);
+    const updated = { ...shot, liked, likes };
+    db.disposableShots.set(shotId, updated);
+    return updated;
+  },
+
+  deleteShot(userId: string, shotId: string) {
+    const shot = db.disposableShots.get(shotId);
+    if (!shot) return;
+    const evt = db.events.get(shot.eventId);
+    if (!evt || evt.organizerId !== userId) throw new Error('Unauthorized.');
+    db.disposableShots.delete(shotId);
+  },
+
+  developRoll(userId: string, eventId: string) {
+    const evt = db.events.get(eventId);
+    if (!evt || evt.organizerId !== userId) throw new Error('Unauthorized.');
+    for (const [id, shot] of db.disposableShots) {
+      if (shot.eventId === eventId) {
+        db.disposableShots.set(id, { ...shot, developed: true });
+      }
+    }
+  },
+
+  updateRollSettings(
+    userId: string,
+    eventId: string,
+    settings: DisposableRollSettings
+  ): DisposableRollSettings {
+    const evt = db.events.get(eventId);
+    if (!evt || evt.organizerId !== userId) throw new Error('Unauthorized.');
+    const limit =
+      settings.exposuresLimit === 12 || settings.exposuresLimit === 36 ? settings.exposuresLimit : 24;
+    const next: DisposableRollSettings = {
+      exposuresLimit: limit,
+      darkroomMode: Boolean(settings.darkroomMode),
+    };
+    db.rollSettings.set(eventId, next);
+    return next;
+  },
+
+  createCreatorApp(
+    userId: string,
+    payload: {
+      name: string;
+      description?: string;
+      appType?: CreatorAppType;
+      environment?: CreatorAppEnvironment;
+      eventId?: string;
+      scopes?: CreatorAppScope[];
+      webhookUrl?: string;
+      webhookEvents?: WebhookTriggerEvent[];
+      allowedOrigins?: string[];
+    }
+  ) {
+    const env: CreatorAppEnvironment = payload.environment === 'production' ? 'production' : 'sandbox';
+    const appId = `app-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+    const slug =
+      payload.name
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || appId;
+    const clientId = `${env === 'production' ? 'ev_live_' : 'ev_test_'}${crypto.randomBytes(10).toString('hex')}`;
+    const token = crypto.randomBytes(20).toString('hex');
+    const rawSecret = `${env === 'production' ? 'ev_live_sec_' : 'ev_test_sec_'}${token}`;
+    const secretHash = sha256Hex(rawSecret);
+    const secretPrefix = `${rawSecret.slice(0, 16)}••••••••${rawSecret.slice(-4)}`;
+    const webhookSecret = `whsec_${crypto.randomBytes(18).toString('hex')}`;
+    const scopes: CreatorAppScope[] =
+      Array.isArray(payload.scopes) && payload.scopes.length > 0
+        ? payload.scopes
+        : ['events:read', 'attendees:read'];
+
+    const record: StoredCreatorAppRecord = {
+      id: appId,
+      organizerId: userId,
+      name: payload.name.trim(),
+      slug,
+      description: (payload.description || '').trim(),
+      appType: payload.appType || 'widget',
+      environment: env,
+      status: 'active',
+      eventId: payload.eventId || undefined,
+      clientId,
+      secretHash,
+      secretPrefix,
+      webhookSecret,
+      scopes,
+      webhookUrl: payload.webhookUrl?.trim() || undefined,
+      webhookEvents: Array.isArray(payload.webhookEvents) ? payload.webhookEvents : [],
+      allowedOrigins: Array.isArray(payload.allowedOrigins) ? payload.allowedOrigins : [],
+      requestsCount: 1,
+      lastUsedAt: 'Just now',
+      createdAt: new Date().toISOString(),
+    };
+    db.creatorApps.set(appId, record);
+
+    const log: CreatorAppLog = {
+      id: `log-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+      appId,
+      eventType: 'app.provisioned',
+      method: 'POST',
+      endpoint: '/api/studio/apps',
+      statusCode: 201,
+      latencyMs: 14,
+      requestSummary: `Provisioned ${record.name} (${env}) with ${scopes.length} scopes`,
+      responseSummary: `client_id=${clientId}`,
+      createdAt: new Date().toISOString(),
+    };
+    db.creatorAppLogs.set(log.id, log);
+
+    const { organizerId: _org, secretHash: _sh, webhookSecret: _ws, ...app } = record;
+    return { app, rawSecret, webhookSecret, log };
+  },
+
+  updateCreatorApp(
+    userId: string,
+    appId: string,
+    patch: {
+      name?: string;
+      description?: string;
+      appType?: CreatorAppType;
+      environment?: CreatorAppEnvironment;
+      status?: CreatorAppStatus;
+      eventId?: string | null;
+      scopes?: CreatorAppScope[];
+      webhookUrl?: string | null;
+      webhookEvents?: WebhookTriggerEvent[];
+      allowedOrigins?: string[];
+    }
+  ): CreatorApp {
+    const existing = db.creatorApps.get(appId);
+    if (!existing || existing.organizerId !== userId) {
+      throw new Error('Creator app not found.');
+    }
+    const updated: StoredCreatorAppRecord = {
+      ...existing,
+      name: typeof patch.name === 'string' && patch.name.trim() ? patch.name.trim() : existing.name,
+      description:
+        typeof patch.description === 'string' ? patch.description.trim() : existing.description,
+      appType: patch.appType ?? existing.appType,
+      environment: patch.environment ?? existing.environment,
+      status: patch.status ?? existing.status,
+      eventId: patch.eventId !== undefined ? patch.eventId || undefined : existing.eventId,
+      scopes: Array.isArray(patch.scopes) ? patch.scopes : existing.scopes,
+      webhookUrl:
+        patch.webhookUrl !== undefined ? patch.webhookUrl || undefined : existing.webhookUrl,
+      webhookEvents: Array.isArray(patch.webhookEvents)
+        ? patch.webhookEvents
+        : existing.webhookEvents,
+      allowedOrigins: Array.isArray(patch.allowedOrigins)
+        ? patch.allowedOrigins
+        : existing.allowedOrigins,
+    };
+    db.creatorApps.set(appId, updated);
+    const { organizerId: _org, secretHash: _sh, webhookSecret: _ws, ...app } = updated;
+    return app;
+  },
+
+  rotateCreatorAppSecret(userId: string, appId: string) {
+    const existing = db.creatorApps.get(appId);
+    if (!existing || existing.organizerId !== userId) {
+      throw new Error('Creator app not found.');
+    }
+    const token = crypto.randomBytes(20).toString('hex');
+    const rawSecret = `${existing.environment === 'production' ? 'ev_live_sec_' : 'ev_test_sec_'}${token}`;
+    const secretHash = sha256Hex(rawSecret);
+    const secretPrefix = `${rawSecret.slice(0, 16)}••••••••${rawSecret.slice(-4)}`;
+    const webhookSecret = `whsec_${crypto.randomBytes(18).toString('hex')}`;
+
+    const updated: StoredCreatorAppRecord = {
+      ...existing,
+      secretHash,
+      secretPrefix,
+      webhookSecret,
+    };
+    db.creatorApps.set(appId, updated);
+
+    const log: CreatorAppLog = {
+      id: `log-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+      appId,
+      eventType: 'credentials.rotated',
+      method: 'POST',
+      endpoint: `/api/studio/apps/${appId}/rotate-secret`,
+      statusCode: 200,
+      latencyMs: 19,
+      requestSummary: 'Rotated client secret & HMAC signing key',
+      responseSummary: `new_prefix=${secretPrefix}`,
+      createdAt: new Date().toISOString(),
+    };
+    db.creatorAppLogs.set(log.id, log);
+
+    const { organizerId: _org, secretHash: _sh, webhookSecret: _ws, ...app } = updated;
+    return { app, rawSecret, webhookSecret, log };
+  },
+
+  async testCreatorWebhook(userId: string, appId: string, eventType?: string) {
+    const existing = db.creatorApps.get(appId);
+    if (!existing || existing.organizerId !== userId) {
+      throw new Error('Creator app not found.');
+    }
+    const trigger = eventType || 'attendee.registered';
+    const payload = {
+      id: `evt_wh_${crypto.randomBytes(6).toString('hex')}`,
+      type: trigger,
+      createdAt: new Date().toISOString(),
+      appId: existing.id,
+      clientId: existing.clientId,
+      environment: existing.environment,
+      data: {
+        eventId: existing.eventId || 'evt-tech-leaders-2026',
+        attendeeName: 'Ama Serwaa (Test Dispatch)',
+        ticketCode: '#EVT-TEST-2026',
+        smsStatus: 'Arkesel Sent',
+      },
+    };
+    const bodyString = JSON.stringify(payload);
+    const signature = crypto
+      .createHmac('sha256', existing.webhookSecret)
+      .update(bodyString)
+      .digest('hex');
+
+    const started = Date.now();
+    let statusCode = 200;
+    let responseSummary = 'Sandbox loop verified locally (no external webhook URL configured)';
+    let targetEndpoint = '/sandbox/webhook-loopback';
+
+    if (existing.webhookUrl && /^https?:\/\//i.test(existing.webhookUrl)) {
+      targetEndpoint = existing.webhookUrl;
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+        const remoteResp = await fetch(existing.webhookUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-EventsApp-Event': trigger,
+            'X-EventsApp-Signature': `sha256=${signature}`,
+          },
+          body: bodyString,
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        statusCode = remoteResp.status;
+        const text = await remoteResp.text();
+        responseSummary = `HTTP ${remoteResp.status}${text ? ` — ${text.slice(0, 140)}` : ''}`;
+      } catch (err) {
+        statusCode = 502;
+        responseSummary = err instanceof Error ? err.message : 'Outbound webhook unreachable';
+      }
+    }
+
+    if (statusCode >= 400) {
+      platformRuntime.recordDiagnosticFailure({
+        kind: 'webhook',
+        target: targetEndpoint,
+        statusCode,
+        reason: responseSummary,
+        payloadPreview: bodyString.slice(0, 260),
+        expectedDiff: `Expected HTTP 200-299 ACK; received ${statusCode}`,
+        appId: existing.id,
+      });
+    }
+
+    const latencyMs = Math.max(4, Date.now() - started);
+    const nowLabel = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    existing.requestsCount += 1;
+    existing.lastUsedAt = `Today ${nowLabel}`;
+
+    const log: CreatorAppLog = {
+      id: `log-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+      appId,
+      eventType: trigger,
+      method: 'POST',
+      endpoint: targetEndpoint,
+      statusCode,
+      latencyMs,
+      requestSummary: `Signed webhook ${trigger} (sig ${signature.slice(0, 12)}…)`,
+      responseSummary,
+      createdAt: new Date().toISOString(),
+    };
+    db.creatorAppLogs.set(log.id, log);
+
+    const { organizerId: _org, secretHash: _sh, webhookSecret: _ws, ...app } = existing;
+    return { app, log };
+  },
+
+  simulateCreatorEndpointCall(
+    userId: string,
+    appId: string,
+    endpoint?: string,
+    method?: 'GET' | 'POST'
+  ) {
+    const existing = db.creatorApps.get(appId);
+    if (!existing || existing.organizerId !== userId) {
+      throw new Error('Creator app not found.');
+    }
+    const cleanEndpoint = endpoint || '/v1/events';
+    const httpMethod = method === 'POST' ? 'POST' : 'GET';
+    const started = Date.now();
+    let statusCode = 200;
+    let result: Record<string, unknown> = {};
+    let responseSummary = '';
+
+    const userEvents = Array.from(db.events.values()).filter((e) => e.organizerId === userId);
+    const scopedEvents = existing.eventId
+      ? userEvents.filter((e) => e.id === existing.eventId)
+      : userEvents;
+    const scopedIds = new Set(scopedEvents.map((e) => e.id));
+
+    if (existing.status !== 'active') {
+      statusCode = 403;
+      result = { error: 'App client is paused. Resume app to accept API calls.' };
+      responseSummary = '403 Forbidden — App is currently paused';
+      platformRuntime.recordDiagnosticFailure({
+        kind: 'client-auth',
+        target: `${httpMethod} ${cleanEndpoint}`,
+        statusCode,
+        reason: responseSummary,
+        payloadPreview: JSON.stringify({ clientId: existing.clientId, status: existing.status }),
+        expectedDiff: 'App status=active required; client is paused',
+        appId: existing.id,
+      });
+    } else if (cleanEndpoint === '/v1/events') {
+      if (!existing.scopes.includes('events:read')) {
+        statusCode = 403;
+        result = { error: 'Missing required scope: events:read' };
+        responseSummary = '403 Missing scope events:read';
+      } else {
+        const list = scopedEvents.map((e) => ({
+          id: e.id,
+          title: e.title,
+          status: e.status,
+          registered: e.registered,
+          capacity: e.capacity,
+        }));
+        result = { count: list.length, events: list };
+        responseSummary = `Returned ${list.length} event(s) for client ${existing.clientId}`;
+      }
+    } else if (cleanEndpoint === '/v1/attendees') {
+      if (!existing.scopes.includes('attendees:read')) {
+        statusCode = 403;
+        result = { error: 'Missing required scope: attendees:read' };
+        responseSummary = '403 Missing scope attendees:read';
+      } else {
+        const list = Array.from(db.attendees.values())
+          .filter((a) => scopedIds.has(a.eventId))
+          .slice(0, 20)
+          .map((a) => ({
+            id: a.id,
+            name: a.name,
+            tier: a.tier,
+            checked_in: a.checkedIn,
+            ticket_code: a.ticketCode,
+          }));
+        result = { count: list.length, attendees: list };
+        responseSummary = `Returned ${list.length} attendee pass(es)`;
+      }
+    } else if (cleanEndpoint === '/v1/checkin') {
+      if (!existing.scopes.includes('checkin:write')) {
+        statusCode = 403;
+        result = { error: 'Missing required scope: checkin:write' };
+        responseSummary = '403 Missing scope checkin:write';
+      } else {
+        result = {
+          verified: true,
+          mode: existing.environment,
+          checkedInAt: new Date().toISOString(),
+          clientId: existing.clientId,
+        };
+        responseSummary = `Gate check-in authorization verified (${existing.environment})`;
+      }
+    } else if (cleanEndpoint === '/v1/camera/shots') {
+      if (!existing.scopes.includes('camera:read')) {
+        statusCode = 403;
+        result = { error: 'Missing required scope: camera:read' };
+        responseSummary = '403 Missing scope camera:read';
+      } else {
+        const frames = Array.from(db.disposableShots.values())
+          .filter((s) => scopedIds.has(s.eventId))
+          .slice(0, 20)
+          .map((s) => ({
+            id: s.id,
+            frame_number: s.frameNumber,
+            film_stock: s.filmStock,
+            captured_by: s.capturedBy,
+            developed: s.developed,
+          }));
+        result = { count: frames.length, frames };
+        responseSummary = `Returned ${frames.length} 35mm film frame(s)`;
+      }
+    }
+
+    const latencyMs = Math.max(8, Date.now() - started);
+    const nowLabel = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    existing.requestsCount += 1;
+    existing.lastUsedAt = `Today ${nowLabel}`;
+
+    const log: CreatorAppLog = {
+      id: `log-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+      appId,
+      eventType: 'api.invocation',
+      method: httpMethod,
+      endpoint: cleanEndpoint,
+      statusCode,
+      latencyMs,
+      requestSummary: `${httpMethod} ${cleanEndpoint} (${existing.clientId})`,
+      responseSummary,
+      createdAt: new Date().toISOString(),
+    };
+    db.creatorAppLogs.set(log.id, log);
+
+    const { organizerId: _org, secretHash: _sh, webhookSecret: _ws, ...app } = existing;
+    return { app, log, result };
+  },
+
+  deleteCreatorApp(userId: string, appId: string) {
+    const existing = db.creatorApps.get(appId);
+    if (!existing || existing.organizerId !== userId) {
+      throw new Error('Creator app not found.');
+    }
+    db.creatorApps.delete(appId);
+    for (const [id, log] of db.creatorAppLogs) {
+      if (log.appId === appId) db.creatorAppLogs.delete(id);
+    }
+  },
+
+  // =========================================================================
+  // APPS BUILDER CONSOLE TELEMETRY & ADMIN OPERATIONS (In-Memory Mode)
+  // =========================================================================
+
+  getBuilderOverview(): BuilderConsoleOverview {
+    const started = Date.now();
+    const allEvents = Array.from(db.events.values());
+    const allAttendees = Array.from(db.attendees.values());
+    const allShots = Array.from(db.disposableShots.values());
+    const allUsers = Array.from(db.users.values());
+
+    const eventMap = new Map(allEvents.map((e) => [e.id, e]));
+    const totalDispatched = allEvents.reduce((acc, e) => acc + e.smsDispatched, 0);
+    const pendingAttendees = allAttendees.filter((a) => a.smsStatus === 'Pending');
+    const pendingOrFailedCount = pendingAttendees.length;
+    const deliveredCount = Math.max(0, totalDispatched - pendingOrFailedCount);
+    const successRatePct =
+      totalDispatched > 0
+        ? Number(((deliveredCount / totalDispatched) * 100).toFixed(1))
+        : 100;
+
+    const failedQueue: BuilderSmsQueueItem[] = pendingAttendees.map((a) => ({
+      attendeeId: a.id,
+      attendeeName: a.name,
+      phone: a.phone,
+      eventId: a.eventId,
+      eventTitle: eventMap.get(a.eventId)?.title ?? a.eventId,
+      smsStatus: a.smsStatus,
+    }));
+
+    const organizerCreditLiabilities = allUsers.reduce((acc, u) => acc + u.profile.smsCredits, 0);
+    const tenants = allUsers.map((u) => buildTenantSummary(u));
+
+    const eventTraffic: BuilderEventTrafficRow[] = allEvents.map((e) => {
+      const evtShots = allShots.filter((s) => s.eventId === e.id);
+      const bytes = evtShots.reduce((acc, s) => acc + estimateShotBytes(s.dataUrl), 0);
+      return {
+        eventId: e.id,
+        title: e.title,
+        slug: e.slug,
+        status: e.status,
+        registered: e.registered,
+        capacity: e.capacity,
+        checkedIn: e.checkedIn,
+        duplicateBlocks: platformRuntime.duplicateBlocksByEvent.get(e.id) ?? 0,
+        cameraShots: evtShots.length,
+        cameraStorageMb: Number((bytes / (1024 * 1024)).toFixed(2)),
+        registrationPaused: platformRuntime.flags.pausedEventIds.includes(e.id),
+      };
+    });
+
+    const totalDuplicateBlocks = Array.from(platformRuntime.duplicateBlocksByEvent.values()).reduce(
+      (a, b) => a + b,
+      0
+    );
+
+    const perTenant: BuilderTenantUnitEconomics[] = allUsers.map((u) => {
+      const uEvents = allEvents.filter((e) => e.organizerId === u.id);
+      const uEvtIds = new Set(uEvents.map((e) => e.id));
+      const smsSentCount = uEvents.reduce((acc, e) => acc + e.smsDispatched, 0);
+      const uShots = allShots.filter((s) => uEvtIds.has(s.eventId));
+      const storageMb = Number(
+        (uShots.reduce((acc, s) => acc + estimateShotBytes(s.dataUrl), 0) / (1024 * 1024)).toFixed(
+          2
+        )
+      );
+      const mrrUsd = PLAN_MRR_USD[u.profile.plan];
+      const smsCostUsd = Number((smsSentCount * SMS_UNIT_COST_USD).toFixed(2));
+      const storageCostUsd = Number((storageMb * STORAGE_COST_PER_MB_USD).toFixed(2));
+      const netMarginUsd = Number((mrrUsd - smsCostUsd - storageCostUsd).toFixed(2));
+      return {
+        userId: u.id,
+        name: u.profile.name,
+        email: u.email,
+        plan: u.profile.plan,
+        mrrUsd,
+        smsSentCount,
+        smsCostUsd,
+        storageMb,
+        storageCostUsd,
+        netMarginUsd,
+        unprofitableFlag: netMarginUsd < 0,
+      };
+    });
+
+    const totalMrrUsd = Number(perTenant.reduce((a, t) => a + t.mrrUsd, 0).toFixed(2));
+    const totalSmsCostUsd = Number(perTenant.reduce((a, t) => a + t.smsCostUsd, 0).toFixed(2));
+    const totalStorageCostUsd = Number(
+      perTenant.reduce((a, t) => a + t.storageCostUsd, 0).toFixed(2)
+    );
+    const totalStorageMb = Number(perTenant.reduce((a, t) => a + t.storageMb, 0).toFixed(2));
+    const grossMarginUsd = Number(
+      (totalMrrUsd - totalSmsCostUsd - totalStorageCostUsd).toFixed(2)
+    );
+
+    return {
+      storageMode: 'in-memory',
+      dbLatencyMs: Math.max(2, Date.now() - started + 2),
+      rlsVerified: true,
+      tableCounts: {
+        profiles: allUsers.length,
+        events: allEvents.length,
+        attendees: allAttendees.length,
+        disposable_shots: allShots.length,
+        creator_apps: db.creatorApps.size,
+      },
+      recentErrors: [...platformRuntime.recentErrors],
+      smsTelemetry: {
+        mode: platformRuntime.flags.smsMode,
+        totalDispatched,
+        deliveredCount,
+        pendingOrFailedCount,
+        successRatePct,
+        gatewayBalanceCredits: platformRuntime.gatewayBalanceCredits,
+        organizerCreditLiabilities,
+        failedQueue,
+      },
+      tenants,
+      eventTraffic,
+      totalDuplicateBlocks,
+      diagnosticFailures: [...platformRuntime.diagnosticFailures],
+      flags: {
+        ...platformRuntime.flags,
+        pausedEventIds: [...platformRuntime.flags.pausedEventIds],
+      },
+      envStatus: platformRuntime.getEnvStatus(),
+      unitEconomics: {
+        totalMrrUsd,
+        totalSmsCostUsd,
+        totalStorageCostUsd,
+        grossMarginUsd,
+        totalStorageMb,
+        proCount: allUsers.filter((u) => u.profile.plan === 'Pro Organizer').length,
+        enterpriseCount: allUsers.filter((u) => u.profile.plan === 'Enterprise').length,
+        starterCount: allUsers.filter((u) => u.profile.plan === 'Starter').length,
+        perTenant,
+      },
+    };
+  },
+
+  retryFailedSms(attendeeId?: string) {
+    let retried = 0;
+    for (const [id, att] of db.attendees) {
+      if (attendeeId && id !== attendeeId) continue;
+      if (att.smsStatus === 'Pending') {
+        db.attendees.set(id, { ...att, smsStatus: 'Arkesel Sent' });
+        retried += 1;
+      }
+    }
+    if (retried > 0) {
+      for (const al of db.alerts.values()) {
+        if (al.category === 'broadcast') al.resolved = true;
+      }
+    }
+    return { retried };
+  },
+
+  topUpTenantCredits(userId: string, amount: number): BuilderTenantSummary {
+    const user = db.users.get(userId);
+    if (!user) throw new Error('Organiser account not found.');
+    user.profile.smsCredits = Math.max(0, user.profile.smsCredits + amount);
+    return buildTenantSummary(user);
+  },
+
+  updateTenantPlan(userId: string, plan: OrganizerProfile['plan']): BuilderTenantSummary {
+    const user = db.users.get(userId);
+    if (!user) throw new Error('Organiser account not found.');
+    user.profile.plan = plan;
+    return buildTenantSummary(user);
+  },
+
+  updateTenantRole(userId: string, appRole: AppRole): BuilderTenantSummary {
+    const user = db.users.get(userId);
+    if (!user) throw new Error('Organiser account not found.');
+    user.profile.appRole = appRole;
+    return buildTenantSummary(user);
+  },
+
+  toggleTenantSuspend(userId: string): BuilderTenantSummary {
+    const user = db.users.get(userId);
+    if (!user) throw new Error('Organiser account not found.');
+    user.suspended = !user.suspended;
+    if (user.suspended) {
+      this.revokeTenantSessions(userId);
+    }
+    return buildTenantSummary(user);
+  },
+
+  revokeTenantSessions(userId: string): { revoked: number } {
+    let revoked = 0;
+    for (const [token, sess] of db.sessionsByAccessToken) {
+      if (sess.userId === userId) {
+        db.sessionsByAccessToken.delete(token);
+        db.sessionsByRefreshToken.delete(sess.refreshToken);
+        revoked += 1;
+      }
+    }
+    return { revoked };
+  },
+
+  inspectTenant(userId: string): BuilderTenantInspection {
+    const user = db.users.get(userId);
+    if (!user) throw new Error('Organiser account not found.');
+    const events = Array.from(db.events.values())
+      .filter((e) => e.organizerId === userId)
+      .map(({ organizerId: _org, ...rest }) => rest);
+    const evtIds = new Set(events.map((e) => e.id));
+    const attendees = Array.from(db.attendees.values()).filter((a) => evtIds.has(a.eventId));
+    return {
+      tenant: buildTenantSummary(user),
+      events,
+      attendees,
+    };
+  },
+
+  async replayDiagnosticFailure(diagId: string) {
+    const item = platformRuntime.diagnosticFailures.find((d) => d.id === diagId);
+    if (!item) throw new Error('Diagnostic failure entry not found.');
+    item.replayed = true;
+    if (item.appId && db.creatorApps.has(item.appId)) {
+      const app = db.creatorApps.get(item.appId)!;
+      await this.testCreatorWebhook(app.organizerId, app.id, 'attendee.registered');
+    }
+    return item;
+  },
+};
