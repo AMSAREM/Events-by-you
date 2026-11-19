@@ -33,6 +33,7 @@ import type {
   EventItem,
   OrganizerProfile,
   ScheduleBlock,
+  SmsDispatchLogEntry,
   SystemAlert,
   WebhookTriggerEvent,
 } from '../src/types/events.ts';
@@ -93,13 +94,64 @@ export const platformRuntime = {
     publicRegistrationsPaused: false,
     pausedEventIds: [],
     smsMode: (process.env.ARKESEL_API_KEY || '').trim() ? 'live' : 'sandbox',
+    arkeselSenderId: (process.env.ARKESEL_SENDER_ID || '').trim() || undefined,
     signupsEnabled: true,
     starterSeedingEnabled: true,
   } as BuilderFeatureFlags,
-  gatewayBalanceCredits: 25000,
+  gatewayBalanceCredits: 0,
+  gatewayBalanceLive: false,
+  gatewayBalanceError: undefined as string | undefined,
   recentErrors: [] as BuilderErrorEntry[],
   duplicateBlocksByEvent: new Map<string, number>(),
   diagnosticFailures: [] as BuilderDiagnosticFailure[],
+  smsDispatches: [] as SmsDispatchLogEntry[],
+
+  getEffectiveArkeselSenderId(explicit?: string): {
+    senderId: string;
+    isDefaultUnverifiedWarning: boolean;
+  } {
+    const cleanExplicit = (explicit || '').trim().slice(0, 11);
+    const runtimeOverride = (this.flags.arkeselSenderId || '').trim().slice(0, 11);
+    const envSender = (process.env.ARKESEL_SENDER_ID || '').trim().slice(0, 11);
+    if (cleanExplicit) {
+      return { senderId: cleanExplicit, isDefaultUnverifiedWarning: false };
+    }
+    if (runtimeOverride) {
+      return { senderId: runtimeOverride, isDefaultUnverifiedWarning: false };
+    }
+    if (envSender) {
+      return { senderId: envSender, isDefaultUnverifiedWarning: false };
+    }
+    return { senderId: 'EVENTSAPP', isDefaultUnverifiedWarning: true };
+  },
+
+  recordSmsDispatch(entry: Omit<SmsDispatchLogEntry, 'id' | 'timestamp'>): SmsDispatchLogEntry {
+    const item: SmsDispatchLogEntry = {
+      ...entry,
+      id: `sms-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+      timestamp: new Date().toISOString(),
+    };
+    this.smsDispatches.unshift(item);
+    if (this.smsDispatches.length > 50) {
+      this.smsDispatches.length = 50;
+    }
+    return item;
+  },
+
+  updateSmsDispatchByMessageId(
+    messageId: string,
+    dlrStatus: string,
+    errorReason?: string
+  ): SmsDispatchLogEntry | null {
+    const cleanId = (messageId || '').trim();
+    if (!cleanId) return null;
+    const match = this.smsDispatches.find((d) => d.messageId === cleanId);
+    if (!match) return null;
+    match.dlrStatus = dlrStatus;
+    if (errorReason) match.errorReason = errorReason;
+    match.updatedAt = new Date().toISOString();
+    return match;
+  },
 
   recordError(source: string, err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -137,6 +189,7 @@ export const platformRuntime = {
   },
 
   getEnvStatus(): BuilderEnvStatus {
+    const sender = this.getEffectiveArkeselSenderId();
     return {
       SUPABASE_URL: Boolean((process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim()),
       SUPABASE_ANON_KEY: Boolean(
@@ -144,6 +197,10 @@ export const platformRuntime = {
       ),
       SUPABASE_SERVICE_ROLE_KEY: Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()),
       ARKESEL_API_KEY: Boolean((process.env.ARKESEL_API_KEY || '').trim()),
+      ARKESEL_SENDER_ID: Boolean(
+        (process.env.ARKESEL_SENDER_ID || '').trim() || (this.flags.arkeselSenderId || '').trim()
+      ),
+      arkeselSenderIdValue: sender.senderId,
       RESEND_API_KEY: Boolean((process.env.RESEND_API_KEY || '').trim()),
       RESEND_FROM_EMAIL: Boolean((process.env.RESEND_FROM_EMAIL || '').trim()),
       CREATOR_PASSWORD: Boolean((process.env.CREATOR_PASSWORD || '').trim()),
@@ -160,6 +217,10 @@ export const platformRuntime = {
     }
     if (patch.smsMode === 'live' || patch.smsMode === 'sandbox') {
       this.flags.smsMode = patch.smsMode;
+    }
+    if (typeof patch.arkeselSenderId === 'string') {
+      const cleaned = patch.arkeselSenderId.trim().replace(/[^a-zA-Z0-9 .-]/g, '').slice(0, 11);
+      this.flags.arkeselSenderId = cleaned || undefined;
     }
     if (typeof patch.signupsEnabled === 'boolean') {
       this.flags.signupsEnabled = patch.signupsEnabled;
@@ -1629,13 +1690,21 @@ export const memoryStore = {
       recentErrors: [...platformRuntime.recentErrors],
       smsTelemetry: {
         mode: platformRuntime.flags.smsMode,
+        activeSenderId: platformRuntime.getEffectiveArkeselSenderId().senderId,
+        usingDefaultSenderIdWarning: platformRuntime.getEffectiveArkeselSenderId().isDefaultUnverifiedWarning,
+        dlrWebhookUrl: process.env.APP_URL
+          ? `${process.env.APP_URL.replace(/\/+$/, '')}/api/webhooks/arkesel-dlr`
+          : undefined,
         totalDispatched,
         deliveredCount,
         pendingOrFailedCount,
         successRatePct,
         gatewayBalanceCredits: platformRuntime.gatewayBalanceCredits,
+        gatewayBalanceLive: platformRuntime.gatewayBalanceLive,
+        gatewayBalanceError: platformRuntime.gatewayBalanceError,
         organizerCreditLiabilities,
         failedQueue,
+        recentDispatches: [...platformRuntime.smsDispatches],
       },
       tenants,
       eventTraffic,

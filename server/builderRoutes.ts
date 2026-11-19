@@ -19,6 +19,8 @@ import {
   type AuthedRequest,
 } from './helpers.ts';
 import { memoryStore, platformRuntime } from './memoryStore.ts';
+import { fetchArkeselGatewayBalance, syncArkeselDeliveryReports } from './phoneAuth.ts';
+import { getEmailDeliverabilityDiagnostics } from './resend.ts';
 import {
   createPublicSupabaseClient,
   createServiceSupabaseClient,
@@ -80,18 +82,26 @@ export function createBuilderRouter() {
 
   router.get('/overview', async (req: AuthedRequest, res) => {
     if (!isSupabaseConfigured()) {
-      return res.json(memoryStore.getBuilderOverview());
+      const [, emailDiagnostics] = await Promise.all([
+        fetchArkeselGatewayBalance(),
+        getEmailDeliverabilityDiagnostics(),
+      ]);
+      const base = memoryStore.getBuilderOverview();
+      base.emailDiagnostics = emailDiagnostics;
+      return res.json(base);
     }
 
     const started = Date.now();
     try {
       const client = createServiceSupabaseClient() ?? req.supabase!;
-      const [profRes, evtRes, attRes, shotRes, appRes] = await Promise.all([
+      const [profRes, evtRes, attRes, shotRes, appRes, , emailDiagnostics] = await Promise.all([
         client.from('profiles').select('*'),
         client.from('events').select('*'),
         client.from('attendees').select('*'),
         client.from('disposable_shots').select('id,event_id,data_url'),
         client.from('creator_apps').select('id'),
+        fetchArkeselGatewayBalance(),
+        getEmailDeliverabilityDiagnostics(),
       ]);
 
       const dbLatencyMs = Math.max(1, Date.now() - started);
@@ -223,14 +233,23 @@ export function createBuilderRouter() {
         recentErrors: [...platformRuntime.recentErrors],
         smsTelemetry: {
           mode: platformRuntime.flags.smsMode,
+          activeSenderId: platformRuntime.getEffectiveArkeselSenderId().senderId,
+          usingDefaultSenderIdWarning: platformRuntime.getEffectiveArkeselSenderId().isDefaultUnverifiedWarning,
+          dlrWebhookUrl: process.env.APP_URL
+            ? `${process.env.APP_URL.replace(/\/+$/, '')}/api/webhooks/arkesel-dlr`
+            : undefined,
           totalDispatched,
           deliveredCount,
           pendingOrFailedCount: pendingAtts.length,
           successRatePct,
           gatewayBalanceCredits: platformRuntime.gatewayBalanceCredits,
+          gatewayBalanceLive: platformRuntime.gatewayBalanceLive,
+          gatewayBalanceError: platformRuntime.gatewayBalanceError,
           organizerCreditLiabilities,
           failedQueue,
+          recentDispatches: [...platformRuntime.smsDispatches],
         },
+        emailDiagnostics,
         tenants,
         eventTraffic,
         totalDuplicateBlocks: Array.from(platformRuntime.duplicateBlocksByEvent.values()).reduce(
@@ -297,6 +316,27 @@ export function createBuilderRouter() {
     } catch (err) {
       platformRuntime.recordError('builder/sms/retry', err);
       return res.status(500).json({ error: err instanceof Error ? err.message : 'SMS retry failed.' });
+    }
+  });
+
+  router.post('/sms/sync-dlr', async (_req, res) => {
+    try {
+      const [balance, dlr, emailDiagnostics] = await Promise.all([
+        fetchArkeselGatewayBalance(),
+        syncArkeselDeliveryReports(),
+        getEmailDeliverabilityDiagnostics(true),
+      ]);
+      return res.json({
+        balance,
+        dlr,
+        emailDiagnostics,
+        recentDispatches: [...platformRuntime.smsDispatches],
+      });
+    } catch (err) {
+      platformRuntime.recordError('builder/sms/sync-dlr', err);
+      return res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to sync carrier DLR & Resend domain checks.',
+      });
     }
   });
 

@@ -994,7 +994,9 @@ export function normalizePhoneE164(raw: string, countryGateway = 'GH'): string {
   const cleaned = raw.replace(/[^\d+]/g, '');
   if (!cleaned) return '';
   if (cleaned.startsWith('+')) {
-    return `+${cleaned.slice(1).replace(/\D/g, '')}`;
+    const digitsAfterPlus = cleaned.slice(1).replace(/\D/g, '');
+    const strippedTrunkZero = digitsAfterPlus.replace(/^(233|234|254|250)0+(\d+)$/, '$1$2');
+    return `+${strippedTrunkZero}`;
   }
   const digits = cleaned.replace(/\D/g, '');
   if (!digits) return '';
@@ -1004,7 +1006,7 @@ export function normalizePhoneE164(raw: string, countryGateway = 'GH'): string {
     digits.startsWith('254') ||
     digits.startsWith('250')
   ) {
-    return `+${digits}`;
+    return `+${digits.replace(/^(233|234|254|250)0+(\d+)$/, '$1$2')}`;
   }
   const dialCode = GATEWAY_DIAL_CODES[countryGateway] || '';
   if (digits.startsWith('0') && digits.length >= 9 && dialCode) {

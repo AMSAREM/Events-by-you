@@ -176,9 +176,25 @@ export async function dispatchOptionalArkeselSms(
   phone: string,
   eventTitle: string,
   ticketCode: string,
-  senderId?: string
+  explicitSenderId?: string
 ): Promise<'Arkesel Sent' | 'Pending'> {
+  const { senderId, isDefaultUnverifiedWarning } =
+    platformRuntime.getEffectiveArkeselSenderId(explicitSenderId);
+  const cleanPhone = phone
+    .replace(/^\+/, '')
+    .replace(/\D+/g, '')
+    .replace(/^(233|234|254|250)0+(\d+)$/, '$1$2');
+
   if (platformRuntime.flags.smsMode === 'sandbox') {
+    platformRuntime.recordSmsDispatch({
+      recipient: `+${cleanPhone}`,
+      senderId,
+      senderIdIsDefaultWarning: isDefaultUnverifiedWarning,
+      purpose: 'pass',
+      mode: 'sandbox',
+      gatewayStatus: 'SANDBOX_DRY_RUN',
+      dlrStatus: 'SANDBOX_SKIPPED',
+    });
     return 'Arkesel Sent';
   }
   const apiKey = (process.env.ARKESEL_API_KEY || '').trim();
@@ -186,30 +202,75 @@ export async function dispatchOptionalArkeselSms(
     return 'Arkesel Sent';
   }
   try {
-    const cleanPhone = phone.replace(/^\+/, '').replace(/\s+/g, '');
+    const appUrl = (process.env.APP_URL || '').trim().replace(/\/+$/, '');
+    const callbackUrl =
+      appUrl && /^https:\/\//i.test(appUrl) && !appUrl.includes('localhost')
+        ? `${appUrl}/api/webhooks/arkesel-dlr`
+        : undefined;
+    const body: Record<string, unknown> = {
+      sender: senderId,
+      message: `${eventTitle}: Pass confirmed! Code: ${ticketCode}. Show this QR token at check-in.`,
+      recipients: [cleanPhone],
+    };
+    if (callbackUrl) {
+      body.callback_url = callbackUrl;
+    }
+
     const resp = await fetch('https://sms.arkesel.com/api/v2/sms/send', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        Accept: 'application/json',
         'api-key': apiKey,
       },
-      body: JSON.stringify({
-        sender: (senderId || 'EVENTSAPP').slice(0, 11),
-        message: `${eventTitle}: Pass confirmed! Code: ${ticketCode}. Show this QR token at check-in.`,
-        recipients: [cleanPhone],
-      }),
+      body: JSON.stringify(body),
     });
-    if (!resp.ok) {
+
+    const rawText = await resp.text();
+    let parsed: { status?: string; message?: string; data?: Array<{ id?: string }> | { id?: string } } = {};
+    try {
+      parsed = rawText ? (JSON.parse(rawText) as typeof parsed) : {};
+    } catch {
+      parsed = {};
+    }
+
+    const firstData = Array.isArray(parsed.data) ? parsed.data[0] : parsed.data;
+    const messageId = firstData?.id ? String(firstData.id) : undefined;
+
+    if (!resp.ok || parsed.status === 'error') {
+      const errReason = parsed.message || `Arkesel SMS API returned HTTP ${resp.status}`;
+      platformRuntime.recordSmsDispatch({
+        recipient: `+${cleanPhone}`,
+        senderId,
+        senderIdIsDefaultWarning: isDefaultUnverifiedWarning,
+        purpose: 'pass',
+        mode: 'live',
+        gatewayStatus: `HTTP_${resp.status}`,
+        dlrStatus: 'GATEWAY_ERROR',
+        errorReason: errReason,
+      });
       platformRuntime.recordDiagnosticFailure({
         kind: 'webhook',
         target: 'https://sms.arkesel.com/api/v2/sms/send',
         statusCode: resp.status,
-        reason: `Arkesel SMS API returned HTTP ${resp.status}`,
-        payloadPreview: JSON.stringify({ phone: cleanPhone, ticketCode, eventTitle }),
+        reason: errReason,
+        payloadPreview: JSON.stringify({ phone: cleanPhone, senderId, ticketCode, eventTitle }),
         expectedDiff: 'Expected HTTP 200 OK from Arkesel v2',
       });
+      return 'Pending';
     }
-    return resp.ok ? 'Arkesel Sent' : 'Pending';
+
+    platformRuntime.recordSmsDispatch({
+      messageId,
+      recipient: `+${cleanPhone}`,
+      senderId,
+      senderIdIsDefaultWarning: isDefaultUnverifiedWarning,
+      purpose: 'pass',
+      mode: 'live',
+      gatewayStatus: parsed.message || 'Accepted (Credits Deducted)',
+      dlrStatus: messageId ? 'SUBMITTED_TO_CARRIER' : 'QUEUED_NO_MSG_ID',
+    });
+    return 'Arkesel Sent';
   } catch (err) {
     platformRuntime.recordError('arkesel-sms', err);
     return 'Pending';

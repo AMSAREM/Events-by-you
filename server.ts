@@ -70,9 +70,11 @@ import {
   consumePendingSignup,
   dispatchDualAuthChallenge,
   getPendingSignup,
+  handleArkeselDlrPayload,
   hasActiveAuthChallenge,
   isArkeselConfigured,
   isSyntheticPhoneEmail,
+  sendArkeselSmsOtp,
   stagePendingSignup,
   verifyAuthOtp,
 } from './server/phoneAuth.ts';
@@ -485,6 +487,7 @@ async function createAppServer() {
   app.get('/api/health', (_req, res) => {
     const creator = getCreatorCredentials();
     const configured = isSupabaseConfigured();
+    const senderInfo = platformRuntime.getEffectiveArkeselSenderId();
     res.json({
       ok: true,
       architecture: 'hybrid',
@@ -493,12 +496,25 @@ async function createAppServer() {
       serviceRoleConfigured: Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()),
       resendConfigured: isResendConfigured(),
       arkeselConfigured: isArkeselConfigured(),
+      arkeselSenderIdConfigured: !senderInfo.isDefaultUnverifiedWarning,
+      arkeselActiveSenderId: senderInfo.senderId,
+      smsMode: platformRuntime.flags.smsMode,
       inMemoryFallback: !configured,
       creatorEmail: creator.email,
       creatorPasswordConfigured: creator.configured,
       sessionTimeoutMinutes: 30,
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // Public Arkesel Delivery Report (DLR) Webhook (receives async carrier delivery status callbacks)
+  app.all('/api/webhooks/arkesel-dlr', (req, res) => {
+    const payload = {
+      ...(typeof req.query === 'object' && req.query ? req.query : {}),
+      ...(typeof req.body === 'object' && req.body ? req.body : {}),
+    } as Record<string, unknown>;
+    const result = handleArkeselDlrPayload(payload);
+    return res.status(200).json({ ok: true, ...result });
   });
 
   // Builder Console Admin & Telemetry Routes (Creator RBAC enforced)
@@ -895,6 +911,9 @@ async function createAppServer() {
         otpType: 'sms',
         channels: delivery.channels,
         provider: delivery.provider,
+        smsSenderId: delivery.smsSenderId,
+        smsMessageId: delivery.smsMessageId,
+        smsWarning: delivery.smsWarning,
       });
     } catch (err) {
       clearPendingSignup({ phone: phoneCheck.normalized, email: cleanEmail });
@@ -1229,6 +1248,9 @@ async function createAppServer() {
           email: contacts.email,
           channels: delivery.channels,
           provider: delivery.provider,
+          smsSenderId: delivery.smsSenderId,
+          smsMessageId: delivery.smsMessageId,
+          smsWarning: delivery.smsWarning,
         });
       }
 
@@ -1262,6 +1284,9 @@ async function createAppServer() {
           email: cleanEmail,
           channels: delivery.channels,
           provider: delivery.provider,
+          smsSenderId: delivery.smsSenderId,
+          smsMessageId: delivery.smsMessageId,
+          smsWarning: delivery.smsWarning,
         });
       }
 
@@ -1345,6 +1370,9 @@ async function createAppServer() {
           email: targetEmail,
           channels: delivery.channels,
           provider: delivery.provider,
+          smsSenderId: delivery.smsSenderId,
+          smsMessageId: delivery.smsMessageId,
+          smsWarning: delivery.smsWarning,
         });
       }
 
@@ -2077,6 +2105,66 @@ async function createAppServer() {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update profile.';
       return res.status(500).json({ error: message });
+    }
+  });
+
+  app.post('/api/studio/sms/test', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    const { phone, senderId } = req.body as { phone?: string; senderId?: string };
+    const phoneCheck = validateStrictPhoneE164(phone || '');
+    if (!phoneCheck.ok) {
+      return res.status(400).json({ error: phoneCheck.error });
+    }
+    try {
+      const client = req.supabase!;
+      const { data: prof } = await client
+        .from('profiles')
+        .select('sms_credits, sender_id')
+        .eq('id', req.user!.id)
+        .maybeSingle();
+
+      const currentCredits = Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0);
+      if (currentCredits <= 0 && platformRuntime.flags.smsMode !== 'sandbox') {
+        return res.status(400).json({ error: 'No SMS credits remaining in your organizer balance.' });
+      }
+
+      const testCode = String(crypto.randomInt(100000, 999999));
+      const effectiveExplicitSender =
+        (senderId || '').trim() ||
+        (typeof (prof as Record<string, unknown> | null)?.sender_id === 'string'
+          ? String((prof as Record<string, unknown>).sender_id)
+          : undefined);
+
+      const dispatch = await sendArkeselSmsOtp({
+        phone: phoneCheck.normalized,
+        code: testCode,
+        purpose: 'test',
+        senderId: effectiveExplicitSender,
+      });
+
+      if (!dispatch.ok) {
+        return res.status(400).json({ error: dispatch.error || 'Arkesel SMS test dispatch failed.' });
+      }
+
+      let nextCredits = currentCredits;
+      if (!dispatch.sandbox) {
+        nextCredits = Math.max(0, currentCredits - 1);
+        await client
+          .from('profiles')
+          .update({ sms_credits: nextCredits, updated_at: new Date().toISOString() })
+          .eq('id', req.user!.id);
+      }
+
+      return res.json({
+        ok: true,
+        phone: phoneCheck.normalized,
+        senderId: dispatch.senderIdUsed,
+        messageId: dispatch.messageId,
+        sandbox: Boolean(dispatch.sandbox),
+        warning: dispatch.warning,
+        smsCredits: nextCredits,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'SMS test failed.' });
     }
   });
 

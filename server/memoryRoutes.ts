@@ -253,6 +253,9 @@ export function createMemoryRouter() {
       otpType: 'sms',
       channels: delivery.channels,
       provider: delivery.provider,
+      smsSenderId: delivery.smsSenderId,
+      smsMessageId: delivery.smsMessageId,
+      smsWarning: delivery.smsWarning,
     });
   });
 
@@ -447,6 +450,9 @@ export function createMemoryRouter() {
       email: targetEmail,
       channels: delivery.channels,
       provider: delivery.provider,
+      smsSenderId: delivery.smsSenderId,
+      smsMessageId: delivery.smsMessageId,
+      smsWarning: delivery.smsWarning,
     });
   });
 
@@ -722,6 +728,48 @@ export function createMemoryRouter() {
       return res.json({ profile });
     } catch (err) {
       return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to update profile.' });
+    }
+  });
+
+  router.post('/studio/sms/test', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    const { phone, senderId } = req.body as { phone?: string; senderId?: string };
+    const phoneCheck = validateStrictPhoneE164(phone || '');
+    if (!phoneCheck.ok) {
+      return res.status(400).json({ error: phoneCheck.error });
+    }
+    try {
+      const currentProfile = req.memoryUser!.profile;
+      if (currentProfile.smsCredits <= 0 && platformRuntime.flags.smsMode !== 'sandbox') {
+        return res.status(400).json({ error: 'No SMS credits remaining in your organizer balance.' });
+      }
+      const testCode = String(Math.floor(100000 + Math.random() * 899999));
+      const dispatch = await sendArkeselSmsOtp({
+        phone: phoneCheck.normalized,
+        code: testCode,
+        purpose: 'test',
+        senderId: (senderId || '').trim() || currentProfile.senderId,
+      });
+      if (!dispatch.ok) {
+        return res.status(400).json({ error: dispatch.error || 'Arkesel SMS test dispatch failed.' });
+      }
+      let nextCredits = currentProfile.smsCredits;
+      if (!dispatch.sandbox) {
+        const updated = memoryStore.updateProfile(req.user!.id, {
+          smsCredits: Math.max(0, currentProfile.smsCredits - 1),
+        });
+        nextCredits = updated.smsCredits;
+      }
+      return res.json({
+        ok: true,
+        phone: phoneCheck.normalized,
+        senderId: dispatch.senderIdUsed,
+        messageId: dispatch.messageId,
+        sandbox: Boolean(dispatch.sandbox),
+        warning: dispatch.warning,
+        smsCredits: nextCredits,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'SMS test failed.' });
     }
   });
 

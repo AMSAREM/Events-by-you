@@ -260,6 +260,7 @@ export interface BuilderFeatureFlags {
   publicRegistrationsPaused: boolean;
   pausedEventIds: string[];
   smsMode: SmsDispatchMode;
+  arkeselSenderId?: string;
   signupsEnabled: boolean;
   starterSeedingEnabled: boolean;
 }
@@ -269,10 +270,40 @@ export interface BuilderEnvStatus {
   SUPABASE_ANON_KEY: boolean;
   SUPABASE_SERVICE_ROLE_KEY: boolean;
   ARKESEL_API_KEY: boolean;
+  ARKESEL_SENDER_ID: boolean;
+  arkeselSenderIdValue: string;
   RESEND_API_KEY: boolean;
   RESEND_FROM_EMAIL: boolean;
   CREATOR_PASSWORD: boolean;
   CREATOR_EMAIL: string;
+}
+
+export interface SmsDispatchLogEntry {
+  id: string;
+  messageId?: string;
+  recipient: string;
+  senderId: string;
+  senderIdIsDefaultWarning: boolean;
+  purpose: 'signup' | 'login' | 'recovery' | 'pass' | 'test';
+  mode: SmsDispatchMode;
+  gatewayStatus: string;
+  dlrStatus: string;
+  errorReason?: string;
+  timestamp: string;
+  updatedAt?: string;
+}
+
+export interface EmailDeliverabilityDiagnostics {
+  resendConfigured: boolean;
+  activeFrom: string;
+  replyTo?: string;
+  domainName: string;
+  domainVerified: boolean;
+  usingSharedSandboxSender: boolean;
+  usingSupabaseFallback: boolean;
+  verifiedDomains: string[];
+  dnsStatus: 'verified' | 'pending' | 'unconfigured' | 'error';
+  recommendation: string;
 }
 
 export interface BuilderTableCounts {
@@ -373,14 +404,21 @@ export interface BuilderConsoleOverview {
   recentErrors: BuilderErrorEntry[];
   smsTelemetry: {
     mode: SmsDispatchMode;
+    activeSenderId: string;
+    usingDefaultSenderIdWarning: boolean;
+    dlrWebhookUrl?: string;
     totalDispatched: number;
     deliveredCount: number;
     pendingOrFailedCount: number;
     successRatePct: number;
     gatewayBalanceCredits: number;
+    gatewayBalanceLive?: boolean;
+    gatewayBalanceError?: string;
     organizerCreditLiabilities: number;
     failedQueue: BuilderSmsQueueItem[];
+    recentDispatches: SmsDispatchLogEntry[];
   };
+  emailDiagnostics?: EmailDeliverabilityDiagnostics;
   tenants: BuilderTenantSummary[];
   eventTraffic: BuilderEventTrafficRow[];
   totalDuplicateBlocks: number;
