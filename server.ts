@@ -318,6 +318,7 @@ async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
 
 async function createAppServer() {
   const app = express();
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '15mb' }));
 
   const resolveBaseUrl = (req: Request) => {
@@ -3222,13 +3223,16 @@ async function createAppServer() {
     app.use(express.static(distDir, { index: false }));
     app.get('*', async (req, res) => {
       const indexPath = path.join(distDir, 'index.html');
+      if (!fs.existsSync(indexPath)) {
+        return res.status(503).send('Production build not found. Run "npm run build" before starting the server.');
+      }
       const slugMatch = req.path.match(/^\/e\/([^/]+)(?:\/checkin)?$/i);
       const slugOrId =
         (slugMatch ? decodeURIComponent(slugMatch[1]) : '') ||
         (typeof req.query.event === 'string' ? req.query.event.trim() : '');
       if (slugOrId) {
         const evt = await resolveEventForPublicOrOg(slugOrId);
-        if (evt && fs.existsSync(indexPath)) {
+        if (evt) {
           const rawHtml = fs.readFileSync(indexPath, 'utf-8');
           const withOg = injectEventMetaTags(rawHtml, evt, resolveBaseUrl(req));
           return res.status(200).set({ 'Content-Type': 'text/html' }).send(withOg);

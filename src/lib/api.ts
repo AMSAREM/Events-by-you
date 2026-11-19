@@ -132,7 +132,8 @@ async function refreshStoredSession(): Promise<StoredAuthSession | null> {
   }
 }
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+const RAW_API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+const API_BASE_URL = RAW_API_BASE_URL.replace(/\/api$/i, '');
 
 function resolveApiUrl(url: string): string {
   if (!API_BASE_URL || /^https?:\/\//i.test(url)) return url;
@@ -183,7 +184,16 @@ async function request<T>(
   }
 
   if (!resp.ok) {
-    throw new Error(parsed?.error || `Request failed (${resp.status})`);
+    if (parsed?.error) {
+      throw new Error(parsed.error);
+    }
+    const contentType = resp.headers.get('content-type') || 'unknown';
+    if (resp.status === 404 && (!parsed || contentType.toLowerCase().includes('text/html'))) {
+      throw new Error(
+        `API route ${url} returned HTTP 404 without a JSON backend response. This deployment is serving static frontend files without the Express server ("node server.ts"). Deploy full-stack with "npm run build && npm start" or set VITE_API_BASE_URL to your backend API URL.`
+      );
+    }
+    throw new Error(`Request failed (${resp.status})`);
   }
 
   if (!parsed || typeof parsed !== 'object') {
