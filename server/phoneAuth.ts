@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { AppRole } from '../src/types/events.ts';
 import { isResendConfigured, sendAuthOtpEmail } from './resend.ts';
 import { platformRuntime } from './memoryStore.ts';
+import { createServiceSupabaseClient } from './supabase.ts';
 
 export type PhoneOtpPurpose = 'signup' | 'login' | 'recovery' | 'test';
 
@@ -46,13 +47,66 @@ function emailChallengeKey(email: string): string {
   return `email:${normalizeEmailKey(email)}`;
 }
 
-export function stagePendingSignup(
+function getPendingEncryptionKey(): Buffer {
+  const secret =
+    (
+      process.env.OTP_ENCRYPTION_KEY ||
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.CREATOR_PASSWORD ||
+      'events-app-local-otp-key'
+    ).trim();
+  return crypto.createHash('sha256').update(`pending-signup:${secret}`).digest();
+}
+
+function encryptPendingPassword(plain: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getPendingEncryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `v1:${iv.toString('base64')}:${tag.toString('base64')}:${encrypted.toString('base64')}`;
+}
+
+function decryptPendingPassword(encoded: string): string {
+  if (!encoded.startsWith('v1:')) return encoded;
+  const parts = encoded.split(':');
+  if (parts.length !== 4) {
+    throw new Error('Invalid staged signup credential payload.');
+  }
+  const iv = Buffer.from(parts[1], 'base64');
+  const tag = Buffer.from(parts[2], 'base64');
+  const data = Buffer.from(parts[3], 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', getPendingEncryptionKey(), iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+}
+
+function assertAuthTableError(
+  error: { code?: string; message?: string } | null | undefined,
+  tableName: string
+): void {
+  if (!error) return;
+  const msg = (error.message || '').toLowerCase();
+  if (
+    error.code === '42P01' ||
+    error.code === 'PGRST205' ||
+    msg.includes('does not exist') ||
+    msg.includes('could not find the table')
+  ) {
+    throw new Error(
+      `Supabase table public.${tableName} is missing. Run the latest supabase/schema.sql in your Supabase SQL Editor.`
+    );
+  }
+  throw new Error(error.message || `Supabase error accessing ${tableName}.`);
+}
+
+export async function stagePendingSignup(
   record: Omit<PendingSignupRecord, 'createdAt' | 'expiresAt'>
-): PendingSignupRecord {
+): Promise<PendingSignupRecord> {
   const now = Date.now();
+  const cleanEmail = normalizeEmailKey(record.email);
   const staged: PendingSignupRecord = {
     ...record,
-    email: normalizeEmailKey(record.email),
+    email: cleanEmail,
     createdAt: now,
     expiresAt: now + SIGNUP_TTL_MS,
   };
@@ -60,14 +114,83 @@ export function stagePendingSignup(
   if (staged.email && !isSyntheticPhoneEmail(staged.email)) {
     pendingSignupsByEmail.set(staged.email, staged);
   }
+
+  const svc = createServiceSupabaseClient();
+  if (svc) {
+    const nowIso = new Date(now).toISOString();
+    await svc.from('pending_signups').delete().lt('expires_at', nowIso);
+    if (cleanEmail) {
+      await svc.from('pending_signups').delete().eq('email', cleanEmail).neq('phone', staged.phone);
+    }
+    const { error } = await svc.from('pending_signups').upsert(
+      {
+        phone: staged.phone,
+        email: cleanEmail,
+        password_enc: encryptPendingPassword(staged.password),
+        name: staged.name,
+        studio: staged.studio,
+        country_gateway: staged.countryGateway,
+        app_role: staged.appRole,
+        created_at: nowIso,
+        expires_at: new Date(staged.expiresAt).toISOString(),
+      },
+      { onConflict: 'phone' }
+    );
+    assertAuthTableError(error, 'pending_signups');
+  }
+
   return staged;
 }
 
-export function getPendingSignup(
+export async function getPendingSignup(
   identifier: string | { phone?: string; email?: string }
-): PendingSignupRecord | null {
-  const phone = typeof identifier === 'string' ? identifier : identifier.phone || '';
+): Promise<PendingSignupRecord | null> {
+  const phone = typeof identifier === 'string' ? identifier.trim() : (identifier.phone || '').trim();
   const email = typeof identifier === 'string' ? '' : normalizeEmailKey(identifier.email);
+
+  const svc = createServiceSupabaseClient();
+  if (svc) {
+    let row: Record<string, unknown> | null = null;
+    if (phone) {
+      const { data, error } = await svc
+        .from('pending_signups')
+        .select('*')
+        .eq('phone', phone)
+        .maybeSingle();
+      assertAuthTableError(error, 'pending_signups');
+      row = (data as Record<string, unknown> | null) ?? null;
+    }
+    if (!row && email) {
+      const { data, error } = await svc
+        .from('pending_signups')
+        .select('*')
+        .eq('email', email)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      assertAuthTableError(error, 'pending_signups');
+      row = (data as Record<string, unknown> | null) ?? null;
+    }
+    if (!row) return null;
+
+    const expiresAt = new Date(String(row.expires_at)).getTime();
+    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+      await svc.from('pending_signups').delete().eq('phone', String(row.phone));
+      return null;
+    }
+
+    return {
+      phone: String(row.phone),
+      email: String(row.email),
+      password: decryptPendingPassword(String(row.password_enc)),
+      name: String(row.name),
+      studio: String(row.studio),
+      countryGateway: String(row.country_gateway || 'GH'),
+      appRole: row.app_role === 'gate_staff' ? 'gate_staff' : 'organizer',
+      createdAt: new Date(String(row.created_at)).getTime(),
+      expiresAt,
+    };
+  }
 
   const rec =
     (phone ? pendingSignupsByPhone.get(phone) : undefined) ||
@@ -81,21 +204,25 @@ export function getPendingSignup(
   return rec;
 }
 
-export function consumePendingSignup(
+export async function consumePendingSignup(
   identifier: string | { phone?: string; email?: string }
-): PendingSignupRecord | null {
-  const rec = getPendingSignup(identifier);
+): Promise<PendingSignupRecord | null> {
+  const rec = await getPendingSignup(identifier);
   if (rec) {
     pendingSignupsByPhone.delete(rec.phone);
     if (rec.email) pendingSignupsByEmail.delete(rec.email);
+    const svc = createServiceSupabaseClient();
+    if (svc) {
+      await svc.from('pending_signups').delete().eq('phone', rec.phone);
+    }
   }
   return rec;
 }
 
-export function clearPendingSignup(
+export async function clearPendingSignup(
   identifier: string | { phone?: string; email?: string }
-): void {
-  const phone = typeof identifier === 'string' ? identifier : identifier.phone || '';
+): Promise<void> {
+  const phone = typeof identifier === 'string' ? identifier.trim() : (identifier.phone || '').trim();
   const email = typeof identifier === 'string' ? '' : normalizeEmailKey(identifier.email);
   const rec =
     (phone ? pendingSignupsByPhone.get(phone) : undefined) ||
@@ -115,6 +242,18 @@ export function clearPendingSignup(
     if (rec.email) {
       pendingSignupsByEmail.delete(rec.email);
       otpChallenges.delete(emailChallengeKey(rec.email));
+    }
+  }
+
+  const svc = createServiceSupabaseClient();
+  if (svc) {
+    if (phone) {
+      await svc.from('pending_signups').delete().eq('phone', phone);
+      await svc.from('auth_otp_challenges').delete().eq('phone', phone);
+    }
+    if (email) {
+      await svc.from('pending_signups').delete().eq('email', email);
+      await svc.from('auth_otp_challenges').delete().eq('email', email);
     }
   }
 }
@@ -149,10 +288,50 @@ function deleteChallengeEntries(challenge: AuthOtpChallenge): void {
   if (challenge.email) otpChallenges.delete(emailChallengeKey(challenge.email));
 }
 
-export function hasActiveAuthChallenge(params: { phone?: string; email?: string }): boolean {
+export async function hasActiveAuthChallenge(params: {
+  phone?: string;
+  email?: string;
+}): Promise<boolean> {
+  const cleanPhone = params.phone?.trim() || '';
+  const cleanEmail = params.email?.trim() ? normalizeEmailKey(params.email) : '';
+
+  const svc = createServiceSupabaseClient();
+  if (svc) {
+    let row: Record<string, unknown> | null = null;
+    if (cleanPhone) {
+      const { data, error } = await svc
+        .from('auth_otp_challenges')
+        .select('id, expires_at')
+        .eq('phone', cleanPhone)
+        .order('issued_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      assertAuthTableError(error, 'auth_otp_challenges');
+      row = (data as Record<string, unknown> | null) ?? null;
+    }
+    if (!row && cleanEmail) {
+      const { data, error } = await svc
+        .from('auth_otp_challenges')
+        .select('id, expires_at')
+        .eq('email', cleanEmail)
+        .order('issued_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      assertAuthTableError(error, 'auth_otp_challenges');
+      row = (data as Record<string, unknown> | null) ?? null;
+    }
+    if (!row) return false;
+    const expiresAt = new Date(String(row.expires_at)).getTime();
+    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+      await svc.from('auth_otp_challenges').delete().eq('id', String(row.id));
+      return false;
+    }
+    return true;
+  }
+
   const now = Date.now();
-  const byPhone = params.phone ? otpChallenges.get(phoneChallengeKey(params.phone)) : undefined;
-  const byEmail = params.email ? otpChallenges.get(emailChallengeKey(params.email)) : undefined;
+  const byPhone = cleanPhone ? otpChallenges.get(phoneChallengeKey(cleanPhone)) : undefined;
+  const byEmail = cleanEmail ? otpChallenges.get(emailChallengeKey(cleanEmail)) : undefined;
   const challenge = byPhone || byEmail;
   if (!challenge) return false;
   if (now > challenge.expiresAt) {
@@ -162,11 +341,11 @@ export function hasActiveAuthChallenge(params: { phone?: string; email?: string 
   return true;
 }
 
-export function issueAuthOtp(params: {
+export async function issueAuthOtp(params: {
   phone?: string;
   email?: string;
   purpose: PhoneOtpPurpose;
-}): { code: string; expiresAt: number } {
+}): Promise<{ code: string; expiresAt: number }> {
   const code = String(crypto.randomInt(100000, 1000000));
   const now = Date.now();
   const expiresAt = now + OTP_TTL_MS;
@@ -175,11 +354,12 @@ export function issueAuthOtp(params: {
     params.email && !isSyntheticPhoneEmail(params.email)
       ? normalizeEmailKey(params.email)
       : undefined;
+  const codeHash = hashOtpCode(code);
 
   const challenge: AuthOtpChallenge = {
     phone: cleanPhone,
     email: cleanEmail,
-    codeHash: hashOtpCode(code),
+    codeHash,
     purpose: params.purpose,
     expiresAt,
     issuedAt: now,
@@ -188,32 +368,127 @@ export function issueAuthOtp(params: {
 
   if (cleanPhone) otpChallenges.set(phoneChallengeKey(cleanPhone), challenge);
   if (cleanEmail) otpChallenges.set(emailChallengeKey(cleanEmail), challenge);
+
+  const svc = createServiceSupabaseClient();
+  if (svc) {
+    const nowIso = new Date(now).toISOString();
+    await svc.from('auth_otp_challenges').delete().lt('expires_at', nowIso);
+    if (cleanPhone) {
+      await svc.from('auth_otp_challenges').delete().eq('phone', cleanPhone);
+    }
+    if (cleanEmail) {
+      await svc.from('auth_otp_challenges').delete().eq('email', cleanEmail);
+    }
+    const { error } = await svc.from('auth_otp_challenges').insert({
+      id: `otp-${crypto.randomUUID()}`,
+      phone: cleanPhone || null,
+      email: cleanEmail || null,
+      code_hash: codeHash,
+      purpose: params.purpose,
+      attempts: 0,
+      issued_at: nowIso,
+      expires_at: new Date(expiresAt).toISOString(),
+    });
+    assertAuthTableError(error, 'auth_otp_challenges');
+  }
+
   return { code, expiresAt };
 }
 
-export function issuePhoneOtp(
+export async function issuePhoneOtp(
   normalizedPhone: string,
   purpose: PhoneOtpPurpose
-): { code: string; expiresAt: number } {
+): Promise<{ code: string; expiresAt: number }> {
   return issueAuthOtp({ phone: normalizedPhone, purpose });
 }
 
-export function verifyAuthOtp(params: {
+export async function verifyAuthOtp(params: {
   phone?: string;
   email?: string;
   token: string;
-}): { ok: true; purpose: PhoneOtpPurpose; phone?: string; email?: string } | { ok: false; error: string } {
+}): Promise<
+  { ok: true; purpose: PhoneOtpPurpose; phone?: string; email?: string } | { ok: false; error: string }
+> {
   const cleanCode = params.token.replace(/\D/g, '');
   if (!/^\d{6}$/.test(cleanCode)) {
     return { ok: false, error: 'Enter a valid 6-digit verification code.' };
   }
 
-  const byPhone = params.phone?.trim()
-    ? otpChallenges.get(phoneChallengeKey(params.phone.trim()))
-    : undefined;
-  const byEmail = params.email?.trim()
-    ? otpChallenges.get(emailChallengeKey(params.email.trim()))
-    : undefined;
+  const cleanPhone = params.phone?.trim() || '';
+  const cleanEmail = params.email?.trim() ? normalizeEmailKey(params.email) : '';
+  const candidateHash = hashOtpCode(cleanCode);
+
+  const svc = createServiceSupabaseClient();
+  if (svc) {
+    let row: Record<string, unknown> | null = null;
+    if (cleanPhone) {
+      const { data, error } = await svc
+        .from('auth_otp_challenges')
+        .select('*')
+        .eq('phone', cleanPhone)
+        .order('issued_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      assertAuthTableError(error, 'auth_otp_challenges');
+      row = (data as Record<string, unknown> | null) ?? null;
+    }
+    if (!row && cleanEmail) {
+      const { data, error } = await svc
+        .from('auth_otp_challenges')
+        .select('*')
+        .eq('email', cleanEmail)
+        .order('issued_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      assertAuthTableError(error, 'auth_otp_challenges');
+      row = (data as Record<string, unknown> | null) ?? null;
+    }
+
+    if (!row) {
+      return {
+        ok: false,
+        error: 'No active verification code found. Request a new 6-digit code via SMS & Email.',
+      };
+    }
+
+    const rowId = String(row.id);
+    const expiresAt = new Date(String(row.expires_at)).getTime();
+    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+      await svc.from('auth_otp_challenges').delete().eq('id', rowId);
+      return { ok: false, error: 'Verification code has expired. Request a new 6-digit code.' };
+    }
+
+    const attempts = Number(row.attempts ?? 0);
+    if (attempts >= MAX_OTP_ATTEMPTS) {
+      await svc.from('auth_otp_challenges').delete().eq('id', rowId);
+      return { ok: false, error: 'Too many incorrect attempts. Request a new 6-digit code.' };
+    }
+
+    if (!safeHexEqual(candidateHash, String(row.code_hash))) {
+      const nextAttempts = attempts + 1;
+      const remaining = MAX_OTP_ATTEMPTS - nextAttempts;
+      if (remaining <= 0) {
+        await svc.from('auth_otp_challenges').delete().eq('id', rowId);
+        return { ok: false, error: 'Too many incorrect attempts. Request a new 6-digit code.' };
+      }
+      await svc.from('auth_otp_challenges').update({ attempts: nextAttempts }).eq('id', rowId);
+      return {
+        ok: false,
+        error: `Invalid 6-digit verification code (${remaining} attempt${remaining === 1 ? '' : 's'} remaining).`,
+      };
+    }
+
+    await svc.from('auth_otp_challenges').delete().eq('id', rowId);
+    return {
+      ok: true,
+      purpose: (row.purpose as PhoneOtpPurpose) || 'login',
+      phone: row.phone ? String(row.phone) : undefined,
+      email: row.email ? String(row.email) : undefined,
+    };
+  }
+
+  const byPhone = cleanPhone ? otpChallenges.get(phoneChallengeKey(cleanPhone)) : undefined;
+  const byEmail = cleanEmail ? otpChallenges.get(emailChallengeKey(cleanEmail)) : undefined;
   const challenge = byPhone || byEmail;
 
   if (!challenge) {
@@ -231,7 +506,6 @@ export function verifyAuthOtp(params: {
     return { ok: false, error: 'Too many incorrect attempts. Request a new 6-digit code.' };
   }
 
-  const candidateHash = hashOtpCode(cleanCode);
   if (!safeHexEqual(candidateHash, challenge.codeHash)) {
     challenge.attempts += 1;
     const remaining = MAX_OTP_ATTEMPTS - challenge.attempts;
@@ -254,11 +528,11 @@ export function verifyAuthOtp(params: {
   };
 }
 
-export function verifyPhoneOtp(
+export async function verifyPhoneOtp(
   normalizedPhone: string,
   token: string
-): { ok: true; purpose: PhoneOtpPurpose } | { ok: false; error: string } {
-  const res = verifyAuthOtp({ phone: normalizedPhone, token });
+): Promise<{ ok: true; purpose: PhoneOtpPurpose } | { ok: false; error: string }> {
+  const res = await verifyAuthOtp({ phone: normalizedPhone, token });
   if (!res.ok) return res;
   return { ok: true, purpose: res.purpose };
 }
@@ -625,7 +899,7 @@ export async function dispatchDualAuthChallenge(params: {
     };
   }
 
-  const { code } = issueAuthOtp({
+  const { code } = await issueAuthOtp({
     phone: targetPhone,
     email: targetEmail,
     purpose: params.purpose,
@@ -648,6 +922,7 @@ export async function dispatchDualAuthChallenge(params: {
         : Promise.resolve({
             ok: false,
             configured: false,
+            sandbox: false,
             messageId: undefined,
             senderIdUsed: undefined,
             warning: undefined,
@@ -720,7 +995,7 @@ export async function dispatchDualAuthChallenge(params: {
     const failures: string[] = [];
     if (!smsSent) failures.push(`SMS (Arkesel): ${smsError || 'Failed to send SMS'}`);
     if (!emailSent) failures.push(`Email (Resend): ${emailError || 'Failed to send email'}`);
-    clearPendingSignup({ phone: targetPhone, email: targetEmail });
+    await clearPendingSignup({ phone: targetPhone, email: targetEmail });
 
     return {
       ok: false,

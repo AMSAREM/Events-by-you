@@ -37,6 +37,7 @@ import {
   dispatchDualAuthChallenge,
   getPendingSignup,
   hasActiveAuthChallenge,
+  sendArkeselSmsOtp,
   stagePendingSignup,
   verifyAuthOtp,
 } from './phoneAuth.ts';
@@ -218,7 +219,7 @@ export function createMemoryRouter() {
       });
     }
 
-    stagePendingSignup({
+    await stagePendingSignup({
       phone: phoneCheck.normalized,
       email: cleanEmail,
       password: password!,
@@ -238,7 +239,7 @@ export function createMemoryRouter() {
     });
 
     if (!delivery.ok) {
-      clearPendingSignup({ phone: phoneCheck.normalized, email: cleanEmail });
+      await clearPendingSignup({ phone: phoneCheck.normalized, email: cleanEmail });
       return res.status(400).json({
         error:
           delivery.error ||
@@ -259,7 +260,7 @@ export function createMemoryRouter() {
     });
   });
 
-  router.post('/auth/verify-otp', (req, res) => {
+  router.post('/auth/verify-otp', async (req, res) => {
     const { email, phone, token, otpType, countryGateway } = req.body as {
       email?: string;
       phone?: string;
@@ -285,10 +286,10 @@ export function createMemoryRouter() {
       const useDualChallenge =
         Boolean(normalizedPhone) ||
         otpType === 'sms' ||
-        hasActiveAuthChallenge({ phone: normalizedPhone, email: normalizedEmail });
+        (await hasActiveAuthChallenge({ phone: normalizedPhone, email: normalizedEmail }));
 
       if (useDualChallenge) {
-        const otpRes = verifyAuthOtp({
+        const otpRes = await verifyAuthOtp({
           phone: normalizedPhone || undefined,
           email: normalizedEmail || undefined,
           token: cleanToken,
@@ -298,7 +299,7 @@ export function createMemoryRouter() {
         }
         const resolvedPhone = otpRes.phone || normalizedPhone;
         const resolvedEmail = otpRes.email || normalizedEmail;
-        const pending = getPendingSignup({ phone: resolvedPhone, email: resolvedEmail });
+        const pending = await getPendingSignup({ phone: resolvedPhone, email: resolvedEmail });
         if (pending) {
           const created = memoryStore.signUp({
             email: pending.email,
@@ -309,7 +310,7 @@ export function createMemoryRouter() {
             studio: pending.studio,
             appRole: pending.appRole,
           });
-          consumePendingSignup({ phone: pending.phone, email: pending.email });
+          await consumePendingSignup({ phone: pending.phone, email: pending.email });
           return res.json(created);
         }
         const result = memoryStore.verifyOtp(
@@ -417,7 +418,7 @@ export function createMemoryRouter() {
     }
     const cleanEmail = email?.trim() ? email.trim().toLowerCase() : '';
 
-    const pending = getPendingSignup({ phone: normalizedPhone, email: cleanEmail });
+    const pending = await getPendingSignup({ phone: normalizedPhone, email: cleanEmail });
     const existing = normalizedPhone
       ? memoryStore.getUserByPhone(normalizedPhone)
       : cleanEmail

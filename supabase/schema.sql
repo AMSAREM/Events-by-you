@@ -513,3 +513,40 @@ create policy "Organizers can view logs of own creator apps" on public.creator_a
     )
   );
 
+-- 10. Serverless Auth OTP Challenges (Service-Role Only — RLS Enabled, No Public Policies)
+create table if not exists public.auth_otp_challenges (
+  id text primary key,
+  phone text,
+  email text,
+  code_hash text not null,
+  purpose text not null check (purpose in ('signup', 'login', 'recovery', 'test')),
+  attempts integer not null default 0,
+  issued_at timestamptz not null default now(),
+  expires_at timestamptz not null
+);
+
+create index if not exists idx_auth_otp_phone on public.auth_otp_challenges(phone) where phone is not null;
+create index if not exists idx_auth_otp_email on public.auth_otp_challenges(email) where email is not null;
+create index if not exists idx_auth_otp_expires on public.auth_otp_challenges(expires_at);
+
+alter table public.auth_otp_challenges enable row level security;
+
+-- 11. Serverless Staged Pending Signups (Service-Role Only — RLS Enabled, No Public Policies)
+create table if not exists public.pending_signups (
+  phone text primary key,
+  email text not null,
+  password_enc text not null,
+  name text not null,
+  studio text not null,
+  country_gateway text not null default 'GH',
+  app_role text not null default 'organizer' check (app_role in ('organizer', 'gate_staff')),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null
+);
+
+create index if not exists idx_pending_signups_email on public.pending_signups(email);
+create index if not exists idx_pending_signups_expires on public.pending_signups(expires_at);
+
+alter table public.pending_signups enable row level security;
+
+

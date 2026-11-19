@@ -318,10 +318,16 @@ async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
   };
 }
 
-async function createAppServer() {
+export async function createExpressApp(options?: { serverless?: boolean }) {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '15mb' }));
+  const jsonParser = express.json({ limit: '15mb' });
+  app.use((req, res, next) => {
+    if (req.body !== undefined && typeof req.body === 'object' && req.readableEnded) {
+      return next();
+    }
+    return jsonParser(req, res, next);
+  });
 
   const configuredCorsOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
     .split(',')
@@ -487,13 +493,16 @@ async function createAppServer() {
   app.get('/api/health', (_req, res) => {
     const creator = getCreatorCredentials();
     const configured = isSupabaseConfigured();
+    const serviceRoleConfigured = Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim());
     const senderInfo = platformRuntime.getEffectiveArkeselSenderId();
     res.json({
       ok: true,
       architecture: 'hybrid',
+      runtime: process.env.VERCEL || options?.serverless ? 'vercel-serverless' : 'node-server',
       database: configured ? 'supabase' : 'in-memory',
+      otpStorage: configured && serviceRoleConfigured ? 'supabase' : 'in-memory',
       supabaseConfigured: configured,
-      serviceRoleConfigured: Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()),
+      serviceRoleConfigured,
       resendConfigured: isResendConfigured(),
       arkeselConfigured: isArkeselConfigured(),
       arkeselSenderIdConfigured: !senderInfo.isDefaultUnverifiedWarning,
@@ -877,8 +886,8 @@ async function createAppServer() {
         });
       }
 
-      // Stage registration in volatile memory ONLY (zero writes to Supabase auth.users or public.profiles yet)
-      stagePendingSignup({
+      // Stage registration in Supabase pending_signups (zero writes to Supabase auth.users or public.profiles yet)
+      await stagePendingSignup({
         phone: phoneCheck.normalized,
         email: cleanEmail,
         password: password!,
@@ -898,7 +907,7 @@ async function createAppServer() {
 
       if (!delivery.ok) {
         // Roll back staged state cleanly; nothing was ever written to the database
-        clearPendingSignup({ phone: phoneCheck.normalized, email: cleanEmail });
+        await clearPendingSignup({ phone: phoneCheck.normalized, email: cleanEmail });
         return res.status(400).json({
           error: delivery.error || 'Could not dispatch verification code to both SMS and email. Account was not created.',
         });
@@ -916,7 +925,7 @@ async function createAppServer() {
         smsWarning: delivery.smsWarning,
       });
     } catch (err) {
-      clearPendingSignup({ phone: phoneCheck.normalized, email: cleanEmail });
+      await clearPendingSignup({ phone: phoneCheck.normalized, email: cleanEmail });
       const message = err instanceof Error ? err.message : 'Sign-up failed. Account was not created.';
       return res.status(500).json({ error: message });
     }
@@ -951,10 +960,10 @@ async function createAppServer() {
       const useDualChallenge =
         Boolean(normalizedPhone) ||
         otpType === 'sms' ||
-        hasActiveAuthChallenge({ phone: normalizedPhone, email: normalizedEmail });
+        (await hasActiveAuthChallenge({ phone: normalizedPhone, email: normalizedEmail }));
 
       if (useDualChallenge) {
-        const otpCheck = verifyAuthOtp({
+        const otpCheck = await verifyAuthOtp({
           phone: normalizedPhone || undefined,
           email: normalizedEmail || undefined,
           token: cleanToken,
@@ -970,14 +979,14 @@ async function createAppServer() {
 
         const resolvedPhone = otpCheck.phone || normalizedPhone;
         const resolvedEmail = otpCheck.email || normalizedEmail;
-        const pending = getPendingSignup({ phone: resolvedPhone, email: resolvedEmail });
+        const pending = await getPendingSignup({ phone: resolvedPhone, email: resolvedEmail });
         const publicClient = createPublicSupabaseClient();
 
         if (pending) {
           // Re-verify uniqueness right before atomic commit
           const dupPhone = await findSupabaseUserByPhone(svc, pending.phone);
           if (dupPhone) {
-            consumePendingSignup({ phone: pending.phone, email: pending.email });
+            await consumePendingSignup({ phone: pending.phone, email: pending.email });
             return res.status(409).json({
               error: `An account with phone number ${pending.phone} already exists. Please sign in instead.`,
             });
@@ -985,7 +994,7 @@ async function createAppServer() {
           if (pending.email) {
             const dupEmail = await findSupabaseUserByEmail(svc, pending.email);
             if (dupEmail) {
-              consumePendingSignup({ phone: pending.phone, email: pending.email });
+              await consumePendingSignup({ phone: pending.phone, email: pending.email });
               return res.status(409).json({
                 error: `An account with email ${pending.email} already exists. Please sign in instead.`,
               });
@@ -1045,7 +1054,7 @@ async function createAppServer() {
               throw new Error(sessionRes.error?.message || 'Could not start authenticated session.');
             }
 
-            consumePendingSignup({ phone: pending.phone, email: pending.email });
+            await consumePendingSignup({ phone: pending.phone, email: pending.email });
             return res.json({
               session: {
                 accessToken: sessionRes.data.session.access_token,
@@ -1329,7 +1338,7 @@ async function createAppServer() {
       }
       const cleanEmail = email?.trim() ? email.trim().toLowerCase() : '';
 
-      const pending = getPendingSignup({ phone: normalizedPhone, email: cleanEmail });
+      const pending = await getPendingSignup({ phone: normalizedPhone, email: cleanEmail });
       let targetPhone = pending?.phone || normalizedPhone || undefined;
       let targetEmail = pending?.email || cleanEmail || undefined;
       let targetName = pending?.name;
@@ -1526,7 +1535,7 @@ async function createAppServer() {
     const redirectTo =
       typeof req.query.redirectTo === 'string' && req.query.redirectTo
         ? req.query.redirectTo
-        : `${req.protocol}://${req.get('host')}`;
+        : resolveBaseUrl(req);
     try {
       const supabase = createPublicSupabaseClient();
       const { data, error } = await supabase.auth.signInWithOAuth({
@@ -3311,7 +3320,10 @@ async function createAppServer() {
   // =========================================================================
 
   const isProd =
-    process.env.NODE_ENV === 'production' || process.env.npm_lifecycle_event === 'start';
+    process.env.NODE_ENV === 'production' ||
+    process.env.npm_lifecycle_event === 'start' ||
+    Boolean(process.env.VERCEL) ||
+    Boolean(options?.serverless);
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -3343,6 +3355,13 @@ async function createAppServer() {
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(__dirname, 'dist');
+    const resolveIndexHtmlPath = () => {
+      const candidates = [
+        path.join(distDir, 'index.html'),
+        path.resolve(process.cwd(), 'dist', 'index.html'),
+      ];
+      return candidates.find((p) => fs.existsSync(p)) ?? null;
+    };
     const distAssetsDir = path.join(distDir, 'assets');
     if (fs.existsSync(distAssetsDir)) {
       app.use(
@@ -3353,14 +3372,33 @@ async function createAppServer() {
         })
       );
     }
-    app.use(express.static(distDir, { index: false, maxAge: '1h' }));
+    if (fs.existsSync(distDir)) {
+      app.use(express.static(distDir, { index: false, maxAge: '1h' }));
+    }
     app.get('*', async (req, res) => {
-      const indexPath = path.join(distDir, 'index.html');
-      if (!fs.existsSync(indexPath)) {
+      const indexPath = resolveIndexHtmlPath();
+      let rawHtml: string | null = indexPath ? fs.readFileSync(indexPath, 'utf-8') : null;
+
+      if (!rawHtml && (process.env.VERCEL || options?.serverless) && req.headers['x-events-og-fetch'] !== '1') {
+        try {
+          const origin = resolveBaseUrl(req);
+          const htmlRes = await fetch(`${origin}/index.html`, {
+            headers: { 'x-events-og-fetch': '1' },
+          });
+          if (htmlRes.ok) {
+            rawHtml = await htmlRes.text();
+          }
+        } catch {
+          rawHtml = null;
+        }
+      }
+
+      if (!rawHtml) {
         return res
           .status(503)
           .send('Production build not found. Run "npm run build" before starting the server.');
       }
+
       res.setHeader('Cache-Control', 'no-cache, must-revalidate');
       const slugMatch = req.path.match(/^\/e\/([^/]+)(?:\/checkin)?$/i);
       const slugOrId =
@@ -3369,25 +3407,36 @@ async function createAppServer() {
       if (slugOrId) {
         const evt = await resolveEventForPublicOrOg(slugOrId);
         if (evt) {
-          const rawHtml = fs.readFileSync(indexPath, 'utf-8');
           const withOg = injectEventMetaTags(rawHtml, evt, resolveBaseUrl(req));
           return res.status(200).set({ 'Content-Type': 'text/html' }).send(withOg);
         }
       }
-      return res.sendFile(indexPath);
+      return res.status(200).set({ 'Content-Type': 'text/html' }).send(rawHtml);
     });
   }
 
-  const PORT = Number(process.env.PORT) || 3000;
-  const modeLabel = isSupabaseConfigured()
-    ? 'Supabase single source of truth'
-    : 'In-memory store (Supabase env vars not set)';
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Events App server listening on http://0.0.0.0:${PORT} (${modeLabel})`);
-  });
+  return app;
 }
 
-createAppServer().catch((err) => {
-  console.error('Failed to start Events App server:', err);
-  process.exit(1);
-});
+const isEntryServerFile =
+  Boolean(process.argv[1]) && /\bserver\.(ts|js|mjs)$/i.test(process.argv[1]);
+const isServerlessRuntime =
+  Boolean(process.env.VERCEL) || process.env.EVENTS_SERVERLESS === '1' || !isEntryServerFile;
+
+if (!isServerlessRuntime) {
+  createExpressApp({ serverless: false })
+    .then((app) => {
+      const PORT = Number(process.env.PORT) || 3000;
+      const modeLabel = isSupabaseConfigured()
+        ? 'Supabase single source of truth'
+        : 'In-memory store (Supabase env vars not set)';
+      app.listen(PORT, '0.0.0.0', () => {
+        console.log(`Events App server listening on http://0.0.0.0:${PORT} (${modeLabel})`);
+      });
+    })
+    .catch((err) => {
+      console.error('Failed to start Events App server:', err);
+      process.exit(1);
+    });
+}
+
