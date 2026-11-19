@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -10,7 +10,9 @@ import {
   Download,
   Edit3,
   ExternalLink,
+  Gift,
   GripVertical,
+  ImagePlus,
   LayoutGrid,
   Link2,
   MapPin,
@@ -33,8 +35,15 @@ import {
   SystemAlert,
   TimeRange,
 } from '../types/events';
-import { normalizePhoneE164, VELOCITY_SERIES } from '../data/initialData';
-import { SplineChart } from './MonochromeArtwork';
+import { getCategoryPreset, normalizePhoneE164, VELOCITY_SERIES } from '../data/initialData';
+import { compressFlyerImageFile } from '../lib/flyerUpload';
+import {
+  buildEventInvitationUrl,
+  buildEventOgImageUrl,
+  DeterministicQrSvg,
+  downloadQrSvg,
+} from '../lib/qr';
+import { MonochromePoster, SplineChart } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
 
 type WorkspaceTab =
@@ -54,8 +63,9 @@ interface EventWorkspaceScreenProps {
   profile: OrganizerProfile;
   onBackToEvents: () => void;
   onOpenEditModal: (event: EventItem) => void;
+  onUpdateEvent?: (updated: EventItem) => Promise<void> | void;
   onOpenPlans: () => void;
-  onPreviewPublicEvent: () => void;
+  onPreviewPublicEvent: (focus?: 'top' | 'checkin') => void;
   onToggleCheckIn: (attendeeId: string) => void;
   onRegisterAttendee?: (eventId: string, attendee: Attendee) => void;
   onToggleScheduleBlock: (blockId: string) => void;
@@ -79,6 +89,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   profile,
   onBackToEvents,
   onOpenEditModal,
+  onUpdateEvent,
   onOpenPlans,
   onPreviewPublicEvent,
   onToggleCheckIn,
@@ -101,6 +112,9 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [attendeeFilter, setAttendeeFilter] = useState<'all' | 'checked' | 'pending'>('all');
   const [timeRange, setTimeRange] = useState<TimeRange>('7D');
+  const [flyerFailed, setFlyerFailed] = useState(false);
+  const [uploadingFlyer, setUploadingFlyer] = useState(false);
+  const workspaceFlyerInputRef = useRef<HTMLInputElement | null>(null);
 
   // Add Program Block inline state
   const [addingBlock, setAddingBlock] = useState(false);
@@ -135,7 +149,21 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
       `Reminder: ${event.title} starts tomorrow at ${event.time}. Show your QR pass at the gate.`
     );
     setThankYouSent(false);
-  }, [event.id, event.title, event.date, event.venue, event.time]);
+    setFlyerFailed(false);
+  }, [event.id, event.title, event.date, event.venue, event.time, event.flyerUrl]);
+
+  const handleWorkspaceFlyerUpload = async (file: File | undefined) => {
+    if (!file || !onUpdateEvent) return;
+    setUploadingFlyer(true);
+    try {
+      const compressed = await compressFlyerImageFile(file);
+      setFlyerFailed(false);
+      await onUpdateEvent({ ...event, flyerUrl: compressed });
+      triggerToast('Event flyer uploaded to workspace & invitation link');
+    } finally {
+      setUploadingFlyer(false);
+    }
+  };
 
   const triggerToast = (msg: string) => {
     setActionToast(msg);
@@ -183,24 +211,58 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     });
   }, [eventAttendees, attendeeFilter, searchQuery]);
 
+  const invitationUrl = useMemo(
+    () => buildEventInvitationUrl(event.slug || event.id),
+    [event.slug, event.id]
+  );
+  const checkinKioskUrl = useMemo(
+    () => buildEventInvitationUrl(event.slug || event.id, 'checkin'),
+    [event.slug, event.id]
+  );
+  const ogImageUrl = useMemo(
+    () => buildEventOgImageUrl(event.slug || event.id),
+    [event.slug, event.id]
+  );
+  const flyerSrc = event.flyerUrl || getCategoryPreset(event.category).flyerUrl;
+
+  const giftTotalGhs = useMemo(
+    () =>
+      eventAttendees.reduce(
+        (sum, a) =>
+          sum +
+          (a.giftEntry?.giftType === 'cash-momo' && (a.giftEntry.currency || 'GHS') === 'GHS'
+            ? a.giftEntry.amount || 0
+            : 0),
+        0
+      ),
+    [eventAttendees]
+  );
+  const giftEntriesCount = useMemo(
+    () => eventAttendees.filter((a) => Boolean(a.giftEntry)).length,
+    [eventAttendees]
+  );
+
   const handleCopyLink = () => {
-    const url = `${window.location.origin}/e/${event.slug}`;
     if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(url).catch(() => {});
+      navigator.clipboard.writeText(invitationUrl).catch(() => {});
     }
     setCopiedToast(true);
     setTimeout(() => setCopiedToast(false), 2000);
   };
 
   const handleExportCsv = () => {
-    const headers = ['Name', 'Email', 'Phone', 'Tier', 'TicketCode', 'CheckedIn'];
+    const headers = ['Name', 'Email', 'Phone', 'ValidationCircle', 'Tier', 'TicketCode', 'CheckedIn', 'GiftSummary'];
     const rows = eventAttendees.map((a) => [
       a.name,
       a.email,
       a.phone,
+      a.validationGroup || '',
       a.tier,
       a.ticketCode,
       a.checkedIn ? 'Yes' : 'No',
+      a.giftEntry
+        ? `${a.giftEntry.giftType}${a.giftEntry.amount ? ` (${a.giftEntry.currency || 'GHS'} ${a.giftEntry.amount})` : ''}`
+        : '',
     ]);
     const csv = [headers.join(','), ...rows.map((r) => r.map((c) => `"${c}"`).join(','))].join(
       '\n'
@@ -216,14 +278,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   };
 
   const handleDownloadQrSvg = () => {
-    const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#FFFFFF"/><path d="M10 10 h24 v24 h-24 z M14 14 h16 v16 h-16 z M18 18 h8 v8 h-8 z" fill="#0B0B0B"/><path d="M66 10 h24 v24 h-24 z M70 14 h16 v16 h-16 z M74 18 h8 v8 h-8 z" fill="#0B0B0B"/><path d="M10 66 h24 v24 h-24 z M14 70 h16 v16 h-16 z M18 74 h8 v8 h-8 z" fill="#0B0B0B"/><rect fill="#0B0B0B" height="6" width="6" x="40" y="12"/><rect fill="#0B0B0B" height="6" width="6" x="50" y="12"/><rect fill="#0B0B0B" height="6" width="8" x="44" y="24"/><rect fill="#0B0B0B" height="8" width="6" x="12" y="44"/><rect fill="#0B0B0B" height="6" width="8" x="24" y="42"/><rect fill="#0B0B0B" height="8" width="8" x="40" y="40"/><rect fill="#0B0B0B" height="6" width="6" x="52" y="44"/><rect fill="#0B0B0B" height="6" width="10" x="66" y="40"/><rect fill="#0B0B0B" height="6" width="8" x="80" y="44"/><rect fill="#0B0B0B" height="8" width="6" x="44" y="56"/><rect fill="#0B0B0B" height="6" width="8" x="60" y="54"/><rect fill="#0B0B0B" height="6" width="6" x="74" y="58"/><rect fill="#0B0B0B" height="8" width="6" x="40" y="70"/><rect fill="#0B0B0B" height="6" width="8" x="54" y="72"/><rect fill="#0B0B0B" height="8" width="10" x="68" y="70"/><rect fill="#0B0B0B" height="8" width="6" x="82" y="76"/><rect fill="#0B0B0B" height="6" width="10" x="44" y="84"/><rect fill="#0B0B0B" height="6" width="6" x="60" y="84"/></svg>`;
-    const blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${event.slug}-gate-qr.svg`;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadQrSvg(checkinKioskUrl, `${event.slug}-gate-qr.svg`);
     triggerToast('Gate Check-in SVG QR downloaded');
   };
 
@@ -345,7 +400,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
             </span>
             <button
               type="button"
-              onClick={onPreviewPublicEvent}
+              onClick={() => onPreviewPublicEvent('top')}
               className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E8E8EA] text-[#1A1C1D] hover:bg-[#E2E2E4] text-[11px] font-mono tracking-wide transition-colors"
             >
               <Link2 className="w-3.5 h-3.5" />
@@ -357,7 +412,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
               className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-[11px] font-medium shadow-sm"
             >
               <Copy className="w-3.5 h-3.5" />
-              Copy Link
+              Copy Invite Link
             </button>
             {copiedToast && (
               <span className="text-[11px] font-semibold text-[#0B0B0B]">Copied!</span>
@@ -365,6 +420,14 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onPreviewPublicEvent('checkin')}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] transition-colors text-xs font-semibold shadow-sm whitespace-nowrap shrink-0"
+            >
+              <QrCode className="w-4 h-4" />
+              Check-In &amp; QR Screen
+            </button>
             {onOpenDisposableCamera && (
               <button
                 type="button"
@@ -423,71 +486,132 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           </div>
         </div>
 
-        {/* Title & Logistics + Quick Metrics Counter Badges */}
-        <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-6">
-          <div className="max-w-2xl">
-            <div className="text-[11px] font-medium uppercase text-[#71717A] tracking-wider mb-1">
-              Creator Workspace
-            </div>
-            <h1 className="font-display text-[28px] sm:text-[36px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.03em] mb-2">
-              {event.title}
-            </h1>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px] text-[#71717A]">
-              <span className="inline-flex items-center gap-1.5 tabular-nums">
-                <Calendar className="w-4 h-4 text-[#0B0B0B]" />
-                {event.date}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="inline-flex items-center gap-1.5 tabular-nums">
-                <Clock className="w-4 h-4 text-[#0B0B0B]" />
-                {event.time}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="inline-flex items-center gap-1.5">
-                <MapPin className="w-4 h-4 text-[#0B0B0B]" />
-                {event.venue}
-              </span>
+        {/* Prominent Organizer Flyer Showcase + Title & Metrics */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+          {/* Prominent Event Flyer / Image Showcase */}
+          <div className="lg:col-span-5">
+            <input
+              ref={workspaceFlyerInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                void handleWorkspaceFlyerUpload(file);
+              }}
+            />
+            <div className="relative group rounded-2xl overflow-hidden border border-[#E5E5EA] bg-[#0B0B0B] aspect-[16/10] shadow-md">
+              {flyerSrc && !flyerFailed ? (
+                <img
+                  src={flyerSrc}
+                  alt={`${event.title} uploaded flyer`}
+                  onError={() => setFlyerFailed(true)}
+                  className="w-full h-full object-cover object-center group-hover:scale-[1.02] transition-transform duration-300"
+                />
+              ) : (
+                <MonochromePoster variant={event.artwork} className="w-full h-full" />
+              )}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/15 to-transparent pointer-events-none" />
+              <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-2">
+                <span className="px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-md text-white text-[10px] font-semibold tracking-wider uppercase border border-white/15">
+                  {event.flyerUrl?.startsWith('data:') ? 'Uploaded Flyer' : 'Event Flyer'}
+                </span>
+              </div>
+              {isEventCreator && (
+                <div className="absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    disabled={uploadingFlyer}
+                    onClick={() =>
+                      onUpdateEvent ? workspaceFlyerInputRef.current?.click() : onOpenEditModal(event)
+                    }
+                    className="px-3.5 py-1.5 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-100 text-[11px] font-bold inline-flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                  >
+                    <ImagePlus className="w-3.5 h-3.5" />
+                    <span>{uploadingFlyer ? 'Saving...' : 'Upload / Replace Flyer'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onOpenEditModal(event)}
+                    className="px-3 py-1.5 rounded-full bg-black/75 hover:bg-black text-white border border-white/20 text-[11px] font-semibold transition-colors"
+                  >
+                    Edit Theme &amp; Share
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            <div className="px-4 py-2.5 rounded-full bg-white shadow-sm flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-[#F5F5F7] flex items-center justify-center text-[#0B0B0B] text-xs font-bold tabular-nums">
-                {capacityPct}%
+          {/* Event Details & Live Workspace Counters */}
+          <div className="lg:col-span-7 flex flex-col justify-between gap-5 min-w-0">
+            <div>
+              <div className="text-[11px] font-medium uppercase text-[#71717A] tracking-wider mb-1">
+                {event.category} · {event.designTheme || getCategoryPreset(event.category).designTheme} Theme
               </div>
-              <div className="flex flex-col">
-                <span className="text-xs font-semibold text-[#0B0B0B] tabular-nums">
-                  {totalRegistered} / {event.capacity} Attendees
+              <h1 className="font-display text-[26px] sm:text-[34px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.03em] mb-2">
+                {event.title}
+              </h1>
+              <p className="text-xs sm:text-sm text-[#71717A] leading-relaxed mb-3 line-clamp-2">
+                {event.subtitle}
+              </p>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px] text-[#71717A]">
+                <span className="inline-flex items-center gap-1.5 tabular-nums">
+                  <Calendar className="w-4 h-4 text-[#0B0B0B]" />
+                  {event.date}
                 </span>
-                <span className="text-[11px] text-[#71717A]">{profile.plan} Capacity</span>
+                <span aria-hidden="true">·</span>
+                <span className="inline-flex items-center gap-1.5 tabular-nums">
+                  <Clock className="w-4 h-4 text-[#0B0B0B]" />
+                  {event.time}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span className="inline-flex items-center gap-1.5">
+                  <MapPin className="w-4 h-4 text-[#0B0B0B]" />
+                  {event.venue}
+                </span>
               </div>
             </div>
 
-            <div className="px-4 py-2.5 rounded-full bg-white shadow-sm flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center text-xs font-bold tabular-nums">
-                {turnoutPct}%
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="px-4 py-2.5 rounded-full bg-white shadow-sm flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-[#F5F5F7] flex items-center justify-center text-[#0B0B0B] text-xs font-bold tabular-nums">
+                  {capacityPct}%
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-xs font-semibold text-[#0B0B0B] tabular-nums">
+                    {totalRegistered} / {event.capacity} Attendees
+                  </span>
+                  <span className="text-[11px] text-[#71717A]">{profile.plan} Capacity</span>
+                </div>
               </div>
-              <div className="flex flex-col">
-                <span className="text-xs font-semibold text-[#0B0B0B] tabular-nums">
-                  {totalCheckedIn} Checked In
-                </span>
-                <span className="text-[11px] text-[#71717A]">Real-time Turnout</span>
-              </div>
-            </div>
 
-            <button
-              type="button"
-              onClick={onOpenPlans}
-              className="px-4 py-2.5 rounded-full bg-white shadow-sm flex items-center gap-3 text-left hover:bg-[#E8E8EA] transition-colors"
-            >
-              <MessageSquare className="w-4.5 h-4.5 text-[#0B0B0B]" />
-              <div className="flex flex-col">
-                <span className="text-xs font-semibold text-[#0B0B0B] tabular-nums">
-                  {profile.smsCredits.toLocaleString()} Credits Left
-                </span>
-                <span className="text-[11px] text-[#71717A]">SMS Balance · Top Up</span>
+              <div className="px-4 py-2.5 rounded-full bg-white shadow-sm flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center text-xs font-bold tabular-nums">
+                  {turnoutPct}%
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-xs font-semibold text-[#0B0B0B] tabular-nums">
+                    {totalCheckedIn} Checked In
+                  </span>
+                  <span className="text-[11px] text-[#71717A]">Real-time Turnout</span>
+                </div>
               </div>
-            </button>
+
+              <button
+                type="button"
+                onClick={onOpenPlans}
+                className="px-4 py-2.5 rounded-full bg-white shadow-sm flex items-center gap-3 text-left hover:bg-[#E8E8EA] transition-colors"
+              >
+                <MessageSquare className="w-4.5 h-4.5 text-[#0B0B0B]" />
+                <div className="flex flex-col">
+                  <span className="text-xs font-semibold text-[#0B0B0B] tabular-nums">
+                    {profile.smsCredits.toLocaleString()} Credits Left
+                  </span>
+                  <span className="text-[11px] text-[#71717A]">SMS Balance · Top Up</span>
+                </div>
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -539,7 +663,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           {/* Overview Banner when Overview tab active */}
           {activeTab === 'overview' && (
             <section className="bg-[#F5F5F7] rounded-[28px] p-6 sm:p-8 space-y-4">
-              <div className="flex items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <h2 className="font-display text-[22px] font-bold text-[#0B0B0B] tracking-[-0.02em]">
                     Event Summary &amp; Landing Page
@@ -548,7 +672,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={onPreviewPublicEvent}
+                  onClick={() => onPreviewPublicEvent('top')}
                   className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 >
                   <span>Open /e/{event.slug}</span>
@@ -567,9 +691,15 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   </span>
                 </div>
                 <div className="p-4 rounded-2xl bg-white">
-                  <span className="text-[11px] text-[#71717A] block">Ticket Pricing</span>
+                  <span className="text-[11px] text-[#71717A] block">
+                    {event.extraDataConfig?.enableGiftTable ? 'Gift Table Pledges' : 'Ticket Pricing'}
+                  </span>
                   <span className="text-sm font-semibold text-[#0B0B0B] tabular-nums">
-                    {event.ticketPrice === 0 ? 'Free Admission' : `$${event.ticketPrice}`}
+                    {event.extraDataConfig?.enableGiftTable
+                      ? `GHS ${giftTotalGhs.toLocaleString()} (${giftEntriesCount} gifts)`
+                      : event.ticketPrice === 0
+                        ? 'Free Admission'
+                        : `$${event.ticketPrice}`}
                   </span>
                 </div>
               </div>
@@ -956,6 +1086,19 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                               <span className="text-sm sm:text-base font-semibold text-[#0B0B0B]">
                                 {att.name}
                               </span>
+                              {att.validationGroup && (
+                                <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#0B0B0B] text-[10px] font-semibold">
+                                  {att.validationGroup}
+                                </span>
+                              )}
+                              {att.giftEntry && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#FBF9F5] border border-[#E6DDD0] text-[#0B0B0B] text-[10px] font-semibold">
+                                  <Gift className="w-2.5 h-2.5" />
+                                  {att.giftEntry.giftType === 'cash-momo'
+                                    ? `${att.giftEntry.currency || 'GHS'} ${att.giftEntry.amount?.toLocaleString()}`
+                                    : att.giftEntry.registryItem || 'Gift Note'}
+                                </span>
+                              )}
                               {att.checkedIn ? (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#E8E8EA] text-[#0B0B0B] text-[11px] font-medium tabular-nums">
                                   <span className="w-1.5 h-1.5 rounded-full bg-[#0B0B0B]" />
@@ -1040,18 +1183,18 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           {activeTab === 'share' && (
             <section className="bg-[#F5F5F7] rounded-[28px] p-6 sm:p-8 space-y-4">
               <h2 className="font-display text-[22px] font-bold text-[#0B0B0B] tracking-[-0.02em]">
-                Public RSVP Link &amp; Check-In Kiosk
+                Invitation Link, OG Card &amp; Check-In Kiosk
               </h2>
               <div className="p-4 rounded-2xl bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   <span className="text-xs font-semibold text-[#0B0B0B] block">
-                    Live Attendee Registration URL
+                    Live Attendee Invitation URL
                   </span>
-                  <span className="text-xs font-mono text-[#71717A]">
-                    https://eventsapp.africa/e/{event.slug}
+                  <span className="text-xs font-mono text-[#71717A] break-all">
+                    {invitationUrl}
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <button
                     type="button"
                     onClick={handleCopyLink}
@@ -1061,12 +1204,31 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={onPreviewPublicEvent}
+                    onClick={() => onPreviewPublicEvent('checkin')}
+                    className="px-4 py-2 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    Check-In QR
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onPreviewPublicEvent('top')}
                     className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold"
                   >
-                    Launch Demo
+                    Open Invite
                   </button>
                 </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white border border-[#E5E5EA] space-y-2">
+                <span className="text-xs font-semibold text-[#0B0B0B] block">
+                  OpenGraph Social Share Image (/api/og/event/{event.slug})
+                </span>
+                <img
+                  src={ogImageUrl}
+                  alt={`${event.title} OG card`}
+                  className="w-full rounded-xl aspect-[1200/630] object-cover border border-[#E5E5EA] bg-[#0B0B0B]"
+                />
               </div>
 
               <div className="p-4 rounded-2xl bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-[#E5E5EA]">
@@ -1244,30 +1406,12 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
 
             {isEventCreator && isQrPassPublished ? (
               <>
-                <div className="p-4 bg-white rounded-2xl shadow-sm flex items-center justify-center">
-                  <svg className="w-40 h-40" fill="currentColor" viewBox="0 0 100 100" aria-hidden="true">
-                    <path d="M10 10 h24 v24 h-24 z M14 14 h16 v16 h-16 z M18 18 h8 v8 h-8 z" fill="#0B0B0B" />
-                    <path d="M66 10 h24 v24 h-24 z M70 14 h16 v16 h-16 z M74 18 h8 v8 h-8 z" fill="#0B0B0B" />
-                    <path d="M10 66 h24 v24 h-24 z M14 70 h16 v16 h-16 z M18 74 h8 v8 h-8 z" fill="#0B0B0B" />
-                    <rect fill="#0B0B0B" height="6" width="6" x="40" y="12" />
-                    <rect fill="#0B0B0B" height="6" width="6" x="50" y="12" />
-                    <rect fill="#0B0B0B" height="6" width="8" x="44" y="24" />
-                    <rect fill="#0B0B0B" height="8" width="6" x="12" y="44" />
-                    <rect fill="#0B0B0B" height="6" width="8" x="24" y="42" />
-                    <rect fill="#0B0B0B" height="8" width="8" x="40" y="40" />
-                    <rect fill="#0B0B0B" height="6" width="6" x="52" y="44" />
-                    <rect fill="#0B0B0B" height="6" width="10" x="66" y="40" />
-                    <rect fill="#0B0B0B" height="6" width="8" x="80" y="44" />
-                    <rect fill="#0B0B0B" height="8" width="6" x="44" y="56" />
-                    <rect fill="#0B0B0B" height="6" width="8" x="60" y="54" />
-                    <rect fill="#0B0B0B" height="6" width="6" x="74" y="58" />
-                    <rect fill="#0B0B0B" height="8" width="6" x="40" y="70" />
-                    <rect fill="#0B0B0B" height="6" width="8" x="54" y="72" />
-                    <rect fill="#0B0B0B" height="8" width="10" x="68" y="70" />
-                    <rect fill="#0B0B0B" height="8" width="6" x="82" y="76" />
-                    <rect fill="#0B0B0B" height="6" width="10" x="44" y="84" />
-                    <rect fill="#0B0B0B" height="6" width="6" x="60" y="84" />
-                  </svg>
+                <div className="p-4 bg-white rounded-2xl shadow-sm flex items-center justify-center border border-[#E5E5EA]">
+                  <DeterministicQrSvg
+                    value={checkinKioskUrl}
+                    size={160}
+                    label={`Kiosk QR for ${event.title}`}
+                  />
                 </div>
 
                 <div className="w-full flex flex-col gap-1">

@@ -39,7 +39,7 @@ interface SettingsScreenProps {
 }
 
 const DEFAULT_AVATAR_URL =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuBmEcfPvuFvuuxx3UHPYq1H4E_R6zkbwKoz-us43vjjsCyy4qCSO-Hj_37shNNysJNxckc8kPZ2VrXuGnSD_jJzNTCWzD0WXmPsOlmiNisOm_U7JJIBf-v1sYOsde8UdDQKhAS_h2ks6AegQzgSIr_r8LN0awmA4HCmNFYAB01WGWC6b5WPGkTwsgXXKGqLkwyyjx7N33MqYndiwhxqK-qkkzAY_ncv3vEuSGyGwP0';
+  '/src/assets/images/flyer_corporate_gala_1795075792816.jpg';
 
 const TOPUP_BUNDLES = [
   {

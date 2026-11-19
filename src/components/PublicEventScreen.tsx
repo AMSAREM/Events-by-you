@@ -9,32 +9,46 @@ import {
   Camera,
   Check,
   ChevronDown,
+  Copy,
+  Download,
   ExternalLink,
+  Gift,
   Info,
+  Link2,
   Loader2,
+  Lock,
   Mail,
   MapPin,
   MessageSquare,
   Navigation,
+  QrCode,
   Share2,
   ShieldCheck,
   Sparkles,
   User,
   Users,
   Wallet,
+  X,
 } from 'lucide-react';
-import { Attendee, EventItem } from '../types/events';
-import { normalizePhoneE164 } from '../data/initialData';
+import { Attendee, AttendeeGiftEntry, DesignTheme, EventItem } from '../types/events';
+import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
+import {
+  buildEventInvitationUrl,
+  buildEventOgImageUrl,
+  DeterministicQrSvg,
+  downloadQrSvg,
+} from '../lib/qr';
 
 interface PublicEventScreenProps {
   events: EventItem[];
   attendees: Attendee[];
   initialEventId?: string;
-  initialFocus?: 'top' | 'register';
+  initialFocus?: 'top' | 'register' | 'checkin';
   isLoadingEvents?: boolean;
   isSignedIn?: boolean;
   hasSetEvent?: boolean;
   onBackHome: () => void;
+  onSelectEvent?: (event: EventItem) => void;
   onOpenStudio: () => void;
   onNavigateSignUp?: () => void;
   onCreateEvent?: () => void;
@@ -43,42 +57,27 @@ interface PublicEventScreenProps {
   onOpenLegal?: (doc: 'terms' | 'privacy') => void;
 }
 
-const FLYER_HERO_IMG =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuDB9p-wUB4rUeDw-qPBezXd-au6s-kM-gfqxbwrCbbDbYE6MeBxdzf76a_Y27WCPgw8EeJ5wz6NyXKtmqVbsQASf4nilIjiEKzwdsXbQOYsl6Ps0KhkLh-jhTUpk9AsXBAD_G9zJlkU8h1qIEz1gtcfUlTzoXNvm_i5jYXMs-FRl_A-HACoNgOlxOHQxKL84gfqzAHZIFJ53hGLIVtH7qy6546LQpWKciLjiSXqD-I';
-
-const VENUE_MAP_CHECKOUT_IMG =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuAoULdwiLk5vifLKQU3hPExsYFMOX1JUca7lT0q-1ANWN3DZUoR-5AYE4Xrx2uTXhWkgXHLohOo76we7qSqHh7LGeGoqqG6u0Z2DkoPC4jIrYUShPUWk6xZbBC-PTfM4fFuA8UR0oMPGZs33VC6niaoGH5fC-h2guWxYesQRy0VVeJABI7-yyGbN38Mdk7dHlWwfDzdCWazRM0CTSJ6R_OOJZV1Z_Ke4AHTRevks4o';
-
-const VENUE_MAP_PASS_IMG =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuB9PUGoGWokVvCQin8gS2PjT3g4Dw73Ei52xLSFPv4pZPuexXIBFAU119C0zgxhIUtjCDjA7SZKN05uKFUnmZTPe5TPN5kqm9sbXkmSz8DFcKJRg03Ew73P9F6KF6mCeN0km8Dg_6Pd3sL_vPc9W09UmvFZFUXw6L2aAwhC9UsruG45RVPeu0ZVAAVyDARcpcvEqfRtShp-eSFuFTRho3zeIAgCfwnLofjtRgP3jUM';
-
 const SPEAKERS = [
   {
     name: 'Dr. Kwame Mensah',
     initials: 'KM',
-    role: 'Keynote Speaker',
-    topic: 'Future of African Tech Infrastructure',
+    role: 'Keynote Speaker & Ceremony Host',
+    topic: 'Opening Welcome, Lineage & Shared Gathering',
     time: '10:00 AM',
-    avatar:
-      'https://lh3.googleusercontent.com/aida-public/AB6AXuBeoR-yxLSnw0P-nvgOpqtrdZtih3y3EVeq8PvCJbph_EasonGO3SYH2M9uNe4pD0rYrw9vJ89OeGkch_U6u6b9-TpWkmbpZZqJ1u6TV4EtLQkIs0Lvh7XSLRHQj0nuBqY_TyeZtUZkx7k4hzGEV1xaH3vOPD12aF_QqI3iw9GpJ0FQTMKNW75BSXEW4YPhb-k5nA3EVsla3qEhqlY6IIIZe95JqhYCd2qk_eJYK_8',
   },
   {
     name: 'Elena Boateng',
     initials: 'EB',
-    role: 'VP Engineering · CrossPay',
-    topic: 'Scaling FinTech Rails Across Borders',
+    role: 'Program Director · Logistics Lead',
+    topic: 'Hospitality, Guest Seating & Reception Coordination',
     time: '01:30 PM',
-    avatar:
-      'https://lh3.googleusercontent.com/aida-public/AB6AXuDk6U_eY4JjTR8DmIHiI4BA-OkvUNMU79K_Bbu-znhqEv3t9pRCWlrd4FVV4dcguRQWy9fdb4piRlf9IpiJDH1BRezpjCyAoJsCHmVgQch1JETG7PICHWJw8RwyDUrHJQ4WdHiEAhkmYLcagUVoB9NOi8bOFGIsBNyBlSn60-X1BJes2i0pH6si4ctB1zxlA3IQDOjRpvG4QDI_zD8vnyoTDyYK1NjSoKtXqXTyVQo',
   },
   {
     name: 'Josh Mensah',
     initials: 'JM',
-    role: 'Lead Systems Architect',
-    topic: 'Building Resilient Edge Architectures',
+    role: 'Executive Producer · Events Studio',
+    topic: 'Evening Program & Featured Highlights',
     time: '03:45 PM',
-    avatar:
-      'https://lh3.googleusercontent.com/aida-public/AB6AXuBu_CFxmr2V2QcEl4w05UAxyeryVNFTuxnOEEK6VillVQtBnwfCjmg_6FwEXL-2RFQ0DGMKjvmsClX7mevWwqImjjbsbjw1rOU5xn82LuaZXjGjt9NlsZG-WP9r74GaGrC24c4nBaAQ-jk9pHY-ibO43dfcPLOczG2DSSPA2kzjTGqV2zmnG-XZLgZqrRhIkCC8A7hHk943IWVYLjILlor-st5pnb0PuHk1S3rMTD0',
   },
 ];
 
@@ -89,6 +88,41 @@ const COUNTRY_CODES = [
   { code: '+250', flag: '🇷🇼', label: 'RW' },
 ];
 
+const HERO_THEME_FRAME: Record<
+  DesignTheme,
+  {
+    scrim: string;
+    badgeClass: string;
+    borderClass: string;
+    accentText: string;
+  }
+> = {
+  'editorial-ivory': {
+    scrim: 'bg-gradient-to-t from-[#12100E] via-[#12100E]/55 to-[#12100E]/20',
+    badgeClass: 'bg-[#F5EFE6] text-[#141210]',
+    borderClass: 'border-[#E6DDD0]/30',
+    accentText: 'text-[#F5EFE6]',
+  },
+  'obsidian-gold': {
+    scrim: 'bg-gradient-to-t from-[#09090B] via-[#09090B]/55 to-[#09090B]/20',
+    badgeClass: 'bg-[#D4AF37] text-[#09090B]',
+    borderClass: 'border-[#D4AF37]/40',
+    accentText: 'text-[#F3DF98]',
+  },
+  'swiss-grid': {
+    scrim: 'bg-gradient-to-t from-[#0B0B0B] via-[#0B0B0B]/55 to-[#0B0B0B]/15',
+    badgeClass: 'bg-white text-[#0B0B0B]',
+    borderClass: 'border-white/25',
+    accentText: 'text-zinc-200',
+  },
+  'warm-monochrome': {
+    scrim: 'bg-gradient-to-t from-[#0B0B0B] via-[#0B0B0B]/60 to-[#0B0B0B]/20',
+    badgeClass: 'bg-zinc-100 text-[#0B0B0B]',
+    borderClass: 'border-white/20',
+    accentText: 'text-zinc-300',
+  },
+};
+
 export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   events,
   attendees,
@@ -96,18 +130,16 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   initialFocus = 'top',
   isLoadingEvents = false,
   isSignedIn = false,
-  hasSetEvent = false,
   onBackHome,
+  onSelectEvent,
   onOpenStudio,
-  onNavigateSignUp,
-  onCreateEvent,
   onRegisterAttendee,
   onOpenDisposableCamera,
   onOpenLegal,
 }) => {
   const activeEvents = useMemo(
-    () => events.filter((e) => e.status === 'live' || e.status === 'upcoming'),
-    [events]
+    () => events.filter((e) => e.status === 'live' || e.status === 'upcoming' || e.id === initialEventId),
+    [events, initialEventId]
   );
 
   const [selectedEventId, setSelectedEventId] = useState(
@@ -115,8 +147,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   );
 
   useEffect(() => {
-    if (initialEventId && events.some((e) => e.id === initialEventId)) {
-      setSelectedEventId(initialEventId);
+    if (initialEventId && events.some((e) => e.id === initialEventId || e.slug === initialEventId)) {
+      const found = events.find((e) => e.id === initialEventId || e.slug === initialEventId);
+      if (found) setSelectedEventId(found.id);
     } else if (!events.some((e) => e.id === selectedEventId)) {
       setSelectedEventId(activeEvents[0]?.id || events[0]?.id || '');
     }
@@ -125,8 +158,12 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const selectedEvent =
     events.find((e) => e.id === selectedEventId) ?? activeEvents[0] ?? events[0];
 
+  const [showCheckinModal, setShowCheckinModal] = useState(initialFocus === 'checkin');
+
   useEffect(() => {
-    if (initialFocus === 'register' && selectedEvent) {
+    if (initialFocus === 'checkin') {
+      setShowCheckinModal(true);
+    } else if (initialFocus === 'register' && selectedEvent) {
       const timer = window.setTimeout(() => {
         const el = document.getElementById('register-section');
         if (el) {
@@ -137,22 +174,48 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     }
   }, [initialFocus, selectedEvent]);
 
+  const categoryPreset = useMemo(
+    () => getCategoryPreset(selectedEvent?.category || 'Events'),
+    [selectedEvent?.category]
+  );
+  const validationConfig = selectedEvent?.validationConfig ?? categoryPreset.validationConfig;
+  const extraDataConfig = selectedEvent?.extraDataConfig ?? categoryPreset.extraDataConfig;
+
   const [name, setName] = useState('');
   const [countryPrefix, setCountryPrefix] = useState('+233');
   const [phoneInput, setPhoneInput] = useState('');
   const [email, setEmail] = useState('');
+  const [validationGroup, setValidationGroup] = useState('');
+  const [inviteCodeInput, setInviteCodeInput] = useState('');
+
+  // Wedding gift table & extra custom form state
+  const [giftMode, setGiftMode] = useState<'none' | 'cash-momo' | 'registry-item' | 'blessing-only'>(
+    'none'
+  );
+  const [giftCurrency, setGiftCurrency] = useState<'GHS' | 'USD'>('GHS');
+  const [giftAmount, setGiftAmount] = useState<string>('250');
+  const [giftItem, setGiftItem] = useState<string>('');
+  const [giftSide, setGiftSide] = useState<string>("Bride's Family");
+  const [giftMessage, setGiftMessage] = useState<string>('');
+  const [customResponses, setCustomResponses] = useState<Record<string, string>>({});
+
   const [issuedPass, setIssuedPass] = useState<Attendee | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [shareToast, setShareToast] = useState(false);
   const [walletSaved, setWalletSaved] = useState(false);
-
+  const [showOgPreview, setShowOgPreview] = useState(false);
   const [heroFailed, setHeroFailed] = useState(false);
-  const [mapFailed, setMapFailed] = useState(false);
-  const [speakerFailed, setSpeakerFailed] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setHeroFailed(false);
+    setValidationGroup('');
+    setInviteCodeInput('');
+    setGiftMode('none');
+    setGiftItem(extraDataConfig.giftRegistryItems?.[0] ?? '');
+    setGiftMessage('');
+    setCustomResponses({});
+    setDuplicateError(null);
   }, [selectedEvent?.id, selectedEvent?.flyerUrl]);
 
   const normalizedPhone = useMemo(() => {
@@ -167,10 +230,24 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     return `${countryPrefix}${digits}`;
   }, [phoneInput, countryPrefix]);
 
+  const invitationUrl = useMemo(
+    () => buildEventInvitationUrl(selectedEvent?.slug ?? selectedEvent?.id ?? 'event'),
+    [selectedEvent?.slug, selectedEvent?.id]
+  );
+
+  const checkinKioskUrl = useMemo(
+    () => buildEventInvitationUrl(selectedEvent?.slug ?? selectedEvent?.id ?? 'event', 'checkin'),
+    [selectedEvent?.slug, selectedEvent?.id]
+  );
+
+  const ogImageUrl = useMemo(
+    () => buildEventOgImageUrl(selectedEvent?.slug ?? selectedEvent?.id ?? 'event'),
+    [selectedEvent?.slug, selectedEvent?.id]
+  );
+
   const handleShare = () => {
-    const url = `${window.location.origin}/e/${selectedEvent?.slug ?? 'tech-leaders-summit-2026'}`;
     if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(url).catch(() => {});
+      navigator.clipboard.writeText(invitationUrl).catch(() => {});
     }
     setShareToast(true);
     setTimeout(() => setShareToast(false), 2600);
@@ -181,12 +258,12 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     const ics = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
-      'PRODID:-//Events App//Africa Tech & Creators//EN',
+      'PRODID:-//Events App//Event Registration & SMS Ticketing//EN',
       'BEGIN:VEVENT',
-      `UID:${issuedPass?.ticketCode ?? selectedEvent.slug}@eventsapp.africa`,
+      `UID:${issuedPass?.ticketCode ?? selectedEvent.slug}@eventsbyyou.xyz`,
       `SUMMARY:${selectedEvent.title}`,
       `LOCATION:${selectedEvent.venue}, ${selectedEvent.city}`,
-      `DESCRIPTION:Digital Gate Pass ${issuedPass?.ticketCode ?? ''} · Powered by Events App`,
+      `DESCRIPTION:Digital Gate Pass ${issuedPass?.ticketCode ?? ''} (${issuedPass?.validationGroup ?? 'Guest'}) · ${invitationUrl}`,
       'DTSTART:20261128T090000Z',
       'DTEND:20261128T170000Z',
       'END:VEVENT',
@@ -206,15 +283,40 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     setTimeout(() => setWalletSaved(false), 3000);
   };
 
+  const switchEvent = (eventId: string) => {
+    setSelectedEventId(eventId);
+    setIssuedPass(null);
+    setDuplicateError(null);
+    const matched = events.find((e) => e.id === eventId);
+    if (matched) onSelectEvent?.(matched);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEvent || submitting) return;
-    if (!isSignedIn || !hasSetEvent) {
-      setDuplicateError(
-        !isSignedIn
-          ? 'Please sign up first to unlock Check-In Registration.'
-          : 'Please create or set an event first to enable Check-In Registration.'
-      );
+    if (selectedEvent.status === 'draft') {
+      setDuplicateError('This event is still a draft. Publish it in Creator Studio to open check-in.');
+      return;
+    }
+    if (selectedEvent.qrPassPublished === false) {
+      setDuplicateError('Check-in QR passes have not been published by the event creator yet.');
+      return;
+    }
+    if (
+      validationConfig.enabled &&
+      validationConfig.options.length > 0 &&
+      !validationGroup.trim()
+    ) {
+      setDuplicateError(`Please complete the Validation Form: choose your ${validationConfig.label}.`);
+      return;
+    }
+    if (
+      validationConfig.enabled &&
+      validationConfig.requireInviteCode &&
+      validationConfig.inviteCode &&
+      inviteCodeInput.trim().toUpperCase() !== validationConfig.inviteCode.trim().toUpperCase()
+    ) {
+      setDuplicateError('Invalid invitation passcode. Please confirm the code from your host.');
       return;
     }
     if (!name.trim()) {
@@ -229,9 +331,12 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       setDuplicateError('Please enter your email address for pass confirmation.');
       return;
     }
-    if (selectedEvent.qrPassPublished === false) {
-      setDuplicateError('Check-in QR passes have not been published by the event creator yet.');
-      return;
+
+    for (const field of extraDataConfig.customFields || []) {
+      if (field.required && !(customResponses[field.id] || '').trim()) {
+        setDuplicateError(`Please complete required event field: ${field.label}`);
+        return;
+      }
     }
 
     const cleanTarget = normalizedPhone.replace(/\s+/g, '');
@@ -245,6 +350,26 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
         `Duplicate shield: ${normalizedPhone} already holds a pass for ${selectedEvent.title}.`
       );
       return;
+    }
+
+    let giftEntry: AttendeeGiftEntry | undefined;
+    if (extraDataConfig.enableGiftTable && giftMode !== 'none') {
+      giftEntry = {
+        giftType: giftMode,
+        currency: giftCurrency,
+        amount: giftMode === 'cash-momo' ? Math.max(1, Number(giftAmount) || 0) : undefined,
+        registryItem:
+          giftMode === 'registry-item'
+            ? giftItem || extraDataConfig.giftRegistryItems?.[0] || 'Registry Gift'
+            : undefined,
+        side: giftSide || validationGroup || undefined,
+        message: giftMessage.trim() || undefined,
+      };
+    }
+
+    const filteredCustom: Record<string, string> = {};
+    for (const [k, v] of Object.entries(customResponses)) {
+      if (v.trim()) filteredCustom[k] = v.trim();
     }
 
     setDuplicateError(null);
@@ -263,13 +388,17 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       name: name.trim(),
       email: email.trim(),
       phone: normalizedPhone,
-      organization: 'Fast Pass Attendee',
+      organization: validationGroup || 'Fast Pass Attendee',
       eventId: selectedEvent.id,
       tier: 'General',
       checkedIn: false,
       ticketCode: `#${codePrefix}-2026-${randomNum}`,
       smsStatus: 'Arkesel Sent',
       paymentStatus: 'paid',
+      validationGroup: validationGroup || undefined,
+      inviteCodeUsed: inviteCodeInput.trim() || undefined,
+      giftEntry,
+      customResponses: Object.keys(filteredCustom).length > 0 ? filteredCustom : undefined,
     };
 
     try {
@@ -329,8 +458,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   }
 
   const spotsRemaining = Math.max(0, selectedEvent.capacity - selectedEvent.registered);
-  const canCheckInRegister = Boolean(isSignedIn && hasSetEvent);
+  const canCheckInRegister = selectedEvent.status !== 'draft';
   const isQrPassPublished = selectedEvent.qrPassPublished !== false;
+  const activeDesignTheme: DesignTheme =
+    selectedEvent.designTheme || categoryPreset.designTheme || 'obsidian-gold';
+  const themeFrame = HERO_THEME_FRAME[activeDesignTheme];
+  const heroFlyerSrc = selectedEvent.flyerUrl || categoryPreset.flyerUrl;
+
   const occupancyPct = Math.min(
     100,
     Math.round((selectedEvent.registered / Math.max(1, selectedEvent.capacity)) * 100)
@@ -345,7 +479,106 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
   return (
     <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col overflow-x-clip selection:bg-[#0B0B0B] selection:text-white">
-      {/* Sticky Top Header matching Mobile Stack Checkout */}
+      {/* Fullscreen Kiosk Check-In & QR Pass Modal */}
+      {showCheckinModal && (
+        <div
+          className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-md flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="checkin-qr-kiosk-title"
+        >
+          <div className="w-full max-w-md bg-white rounded-[32px] p-6 sm:p-7 shadow-2xl border border-[#E5E5EA] space-y-5 relative">
+            <button
+              type="button"
+              onClick={() => setShowCheckinModal(false)}
+              aria-label="Close check-in QR screen"
+              className="absolute top-5 right-5 w-9 h-9 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] flex items-center justify-center text-[#0B0B0B]"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="space-y-1 pr-8">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[10px] font-bold uppercase tracking-wider">
+                <QrCode className="w-3 h-3" />
+                Live Gate Check-In QR
+              </span>
+              <h2 id="checkin-qr-kiosk-title" className="font-display text-xl font-bold text-[#0B0B0B] tracking-tight pt-1">
+                {selectedEvent.title}
+              </h2>
+              <p className="text-xs text-[#71717A] tabular-nums">
+                {selectedEvent.date} · {selectedEvent.time} · {selectedEvent.venue}
+              </p>
+            </div>
+
+            <div className="bg-[#F5F5F7] rounded-3xl p-5 flex flex-col items-center text-center gap-3 border border-[#E5E5EA]">
+              <div className="relative p-4 bg-white rounded-2xl shadow-sm border border-[#E5E5EA]">
+                <DeterministicQrSvg
+                  value={checkinKioskUrl}
+                  size={200}
+                  label={`Gate check-in QR code for ${selectedEvent.title}`}
+                />
+              </div>
+              <div className="space-y-0.5">
+                <p className="text-xs font-semibold text-[#0B0B0B]">
+                  Scan at Gate Entrance or Desk
+                </p>
+                <p className="text-[11px] font-mono text-[#71717A] break-all">
+                  /e/{selectedEvent.slug}?tab=checkin
+                </p>
+              </div>
+              <div className="w-full grid grid-cols-2 gap-2 pt-1 text-left">
+                <div className="bg-white rounded-2xl px-3 py-2">
+                  <span className="text-[10px] text-[#71717A] block">Checked / Registered</span>
+                  <span className="text-xs font-bold text-[#0B0B0B] tabular-nums">
+                    {selectedEvent.checkedIn} / {selectedEvent.registered} guests
+                  </span>
+                </div>
+                <div className="bg-white rounded-2xl px-3 py-2">
+                  <span className="text-[10px] text-[#71717A] block">Pass Status</span>
+                  <span className="text-xs font-bold text-emerald-700">
+                    {isQrPassPublished ? 'Active Gate QR' : 'Pending Creator'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => downloadQrSvg(checkinKioskUrl, `${selectedEvent.slug}-checkin-qr.svg`)}
+                className="h-11 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download QR
+              </button>
+              <button
+                type="button"
+                onClick={handleShare}
+                className="h-11 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1.5"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                Copy Invite Link
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowCheckinModal(false);
+                document
+                  .getElementById('register-section')
+                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              className="w-full h-12 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors"
+            >
+              <span>Complete Guest Check-In Registration</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Sticky Top Header */}
       <header className="fixed top-0 inset-x-0 w-full z-50 bg-[#F5F5F7]/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] pt-[env(safe-area-inset-top)]">
         <div className="h-16 max-w-3xl mx-auto px-4 sm:px-6 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1 min-w-0">
@@ -365,7 +598,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               <ArrowLeft className="w-5 h-5" />
             </button>
             <h1 className="font-display text-base font-semibold text-[#1A1C1D] truncate">
-              Check-In Registration &amp; QR Pass
+              Event Invitation &amp; Check-In
             </h1>
           </div>
 
@@ -373,13 +606,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             {!issuedPass && (
               <select
                 value={selectedEvent.id}
-                onChange={(e) => {
-                  setSelectedEventId(e.target.value);
-                  setIssuedPass(null);
-                  setDuplicateError(null);
-                }}
+                onChange={(e) => switchEvent(e.target.value)}
                 aria-label="Select event"
-                className="hidden sm:block h-9 max-w-[175px] px-3 rounded-full bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none truncate"
+                className="hidden sm:block h-9 max-w-[190px] px-3 rounded-full bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none truncate"
               >
                 {activeEvents.map((evt) => (
                   <option key={evt.id} value={evt.id}>
@@ -390,9 +619,17 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             )}
             <button
               type="button"
+              onClick={() => setShowCheckinModal(true)}
+              className="h-9 px-3 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold inline-flex items-center gap-1.5 hover:bg-neutral-800 transition-colors"
+            >
+              <QrCode className="w-3.5 h-3.5" />
+              <span className="hidden xs:inline">Check-In QR</span>
+            </button>
+            <button
+              type="button"
               onClick={handleShare}
               aria-label="Share Page"
-              title="Copy Event Link"
+              title="Copy Invitation Link"
               className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-[#E8E8EA] transition-colors text-[#1A1C1D]"
             >
               <Share2 className="w-4.5 h-4.5" />
@@ -415,7 +652,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
         <div className="max-w-3xl mx-auto flex flex-col space-y-6">
           {shareToast && (
             <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold shadow-lg">
-              Event link copied to clipboard!
+              Invitation link copied: /e/{selectedEvent.slug}
             </div>
           )}
 
@@ -429,11 +666,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   </span>
                   <select
                     value={selectedEvent.id}
-                    onChange={(e) => {
-                      setSelectedEventId(e.target.value);
-                      setIssuedPass(null);
-                      setDuplicateError(null);
-                    }}
+                    onChange={(e) => switchEvent(e.target.value)}
                     aria-label="Select event on mobile"
                     className="flex-1 bg-transparent text-xs font-semibold text-[#0B0B0B] focus:outline-none truncate text-right"
                   >
@@ -446,52 +679,80 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 </div>
               )}
 
-              {/* SCREEN 1: FLYER & HERO CARD */}
-              <section className="w-full relative rounded-[32px] overflow-hidden bg-[#0B0B0B] text-white shadow-xl">
-                <div className="w-full h-80 relative flex flex-col justify-between p-5">
+              {/* SCREEN 1: EDITORIAL GRAPHIC-DESIGNED FLYER HERO CARD */}
+              <section className="w-full relative rounded-[32px] overflow-hidden bg-[#0B0B0B] text-white shadow-xl border border-black/10">
+                <div className="w-full min-h-[340px] sm:min-h-[380px] relative flex flex-col justify-between p-5 sm:p-7">
                   {!heroFailed && (
                     <img
-                      src={selectedEvent.flyerUrl || FLYER_HERO_IMG}
-                      alt={selectedEvent.title}
-                      referrerPolicy="no-referrer"
+                      src={heroFlyerSrc}
+                      alt={`${selectedEvent.title} official event flyer`}
                       onError={() => setHeroFailed(true)}
                       className="absolute inset-0 w-full h-full object-cover"
                     />
                   )}
-                  <div className="absolute inset-0 bg-gradient-to-t from-[#0B0B0B] via-[#0B0B0B]/45 to-black/25" />
+                  <div className={`absolute inset-0 ${themeFrame.scrim}`} />
+                  <div
+                    className={`absolute inset-3 sm:inset-4 rounded-[24px] border ${themeFrame.borderClass} pointer-events-none`}
+                  />
 
-                  {/* Top Badges */}
-                  <div className="relative z-10 flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-1.5 bg-white/95 backdrop-blur-md text-[#0B0B0B] text-xs font-semibold px-3.5 py-1.5 rounded-full shadow-sm tabular-nums">
-                      <span className="w-2 h-2 rounded-full bg-[#EF4444]" />
-                      {spotsRemaining > 0 ? `${spotsRemaining} spots remaining` : 'Waitlist open'}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        document
-                          .getElementById('register-section')
-                          ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                      }}
-                      className="bg-white/95 hover:bg-white text-[#0B0B0B] text-[11px] font-semibold px-3 py-1.5 rounded-full shadow-sm transition-colors"
-                    >
-                      {!isQrPassPublished
-                        ? 'QR Pass Pending'
-                        : selectedEvent.ticketPrice === 0
-                          ? 'Claim Free Pass ↓'
-                          : `Get Pass ($${selectedEvent.ticketPrice}) ↓`}
-                    </button>
+                  {/* Top Designer Stamp Bar */}
+                  <div className="relative z-10 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full shadow-sm ${themeFrame.badgeClass}`}
+                      >
+                        {selectedEvent.category}
+                      </span>
+                      <span className="inline-flex items-center gap-1.5 bg-white/95 backdrop-blur-md text-[#0B0B0B] text-[11px] font-semibold px-3 py-1 rounded-full shadow-sm tabular-nums">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                        {spotsRemaining > 0 ? `${spotsRemaining} seats open` : 'Waitlist open'}
+                      </span>
+                      {extraDataConfig.enableGiftTable && (
+                        <span className="inline-flex items-center gap-1 bg-black/75 backdrop-blur-md text-white border border-white/25 text-[11px] font-semibold px-3 py-1 rounded-full">
+                          <Gift className="w-3 h-3" />
+                          Gift Table
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setShowCheckinModal(true)}
+                        className="bg-black/75 hover:bg-black text-white border border-white/30 text-[11px] font-semibold px-3 py-1.5 rounded-full backdrop-blur-md inline-flex items-center gap-1.5 transition-colors"
+                      >
+                        <QrCode className="w-3.5 h-3.5" />
+                        Check-In QR
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          document
+                            .getElementById('register-section')
+                            ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }}
+                        className="bg-white hover:bg-zinc-100 text-[#0B0B0B] text-[11px] font-bold px-3.5 py-1.5 rounded-full shadow-sm transition-colors"
+                      >
+                        {!isQrPassPublished
+                          ? 'QR Pending'
+                          : selectedEvent.ticketPrice === 0
+                            ? 'RSVP Free ↓'
+                            : `Get Pass ($${selectedEvent.ticketPrice}) ↓`}
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Main Flyer Title & Logistics */}
-                  <div className="relative z-10 space-y-1.5">
-                    <span className="text-[11px] font-medium text-[#E3E1EC] tracking-widest uppercase block">
-                      {selectedEvent.category} · {selectedEvent.organizer}
+                  {/* Main Editorial Title & Logistics */}
+                  <div className="relative z-10 space-y-2 pt-8">
+                    <span
+                      className={`text-[11px] font-mono font-semibold tracking-[0.18em] uppercase block ${themeFrame.accentText}`}
+                    >
+                      {selectedEvent.organizer} Presents · Official Invitation
                     </span>
-                    <h2 className="font-display text-[28px] leading-[34px] font-bold text-white tracking-[-0.02em]">
+                    <h2 className="font-display text-[28px] sm:text-[36px] leading-[1.12] font-bold text-white tracking-[-0.03em] text-balance">
                       {selectedEvent.title}
                     </h2>
-                    <div className="pt-1 flex flex-col gap-1 text-[#E8E8EA] text-[13px]">
+                    <div className="pt-1 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[#E8E8EA] text-[13px]">
                       <div className="flex items-center gap-1.5 tabular-nums">
                         <CalendarDays className="w-4 h-4 text-[#E2E2E4] shrink-0" />
                         <span>
@@ -500,7 +761,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       </div>
                       <div className="flex items-center gap-1.5">
                         <MapPin className="w-4 h-4 text-[#E2E2E4] shrink-0" />
-                        <span className="truncate">
+                        <span>
                           {selectedEvent.venue} · {selectedEvent.city}
                         </span>
                       </div>
@@ -513,7 +774,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-[#444748] flex items-center gap-1.5">
                       <Users className="w-3.5 h-3.5 text-[#0B0B0B]" />
-                      Capacity Status
+                      Live Gate &amp; RSVP Occupancy
                     </span>
                     <span className="text-xs text-[#0B0B0B] font-bold tabular-nums">
                       {selectedEvent.registered} / {selectedEvent.capacity} Claimed ({occupancyPct}
@@ -526,6 +787,97 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       style={{ width: `${occupancyPct}%` }}
                     />
                   </div>
+                </div>
+              </section>
+
+              {/* Shareable Invitation Link & Dynamic OG Card Bar */}
+              <section className="bg-white rounded-[28px] p-4 sm:p-5 shadow-sm border border-[#E5E5EA] space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#71717A]">
+                      <Link2 className="w-3.5 h-3.5 text-[#0B0B0B]" />
+                      <span>Direct Event Invitation Link &amp; OG Card</span>
+                    </div>
+                    <p className="text-xs font-mono font-semibold text-[#0B0B0B] truncate mt-0.5">
+                      {invitationUrl}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowOgPreview((p) => !p)}
+                      className="h-9 px-3.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] transition-colors"
+                    >
+                      {showOgPreview ? 'Hide OG Preview' : 'Preview OG Card'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleShare}
+                      className="h-9 px-4 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      Copy Invite Link
+                    </button>
+                  </div>
+                </div>
+
+                {showOgPreview && (
+                  <div className="rounded-2xl overflow-hidden border border-[#E5E5EA] bg-[#F5F5F7] p-2 space-y-2">
+                    <img
+                      src={ogImageUrl}
+                      alt={`${selectedEvent.title} OpenGraph share card`}
+                      className="w-full rounded-xl aspect-[1200/630] object-cover bg-[#0B0B0B]"
+                    />
+                    <p className="text-[11px] text-[#71717A] px-1 flex items-center justify-between">
+                      <span>Dynamic og:image attached to /e/{selectedEvent.slug}</span>
+                      <span className="font-mono text-[#0B0B0B]">1200 × 630 SVG</span>
+                    </p>
+                  </div>
+                )}
+              </section>
+
+              {/* Prominent Check-In & QR Code Kiosk Desk Card */}
+              <section className="bg-[#0B0B0B] text-white rounded-[28px] p-5 sm:p-6 shadow-md flex flex-col sm:flex-row items-center justify-between gap-5">
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className="p-2.5 bg-white rounded-2xl shrink-0">
+                    <DeterministicQrSvg
+                      value={checkinKioskUrl}
+                      size={76}
+                      label={`Gate QR for ${selectedEvent.title}`}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-widest text-zinc-400">
+                      <QrCode className="w-3 h-3" />
+                      Prominent Check-In &amp; QR Desk
+                    </span>
+                    <h3 className="font-display text-lg font-bold text-white mt-0.5">
+                      Instant Gate Check-In &amp; QR Screen
+                    </h3>
+                    <p className="text-xs text-zinc-300 mt-0.5 leading-relaxed">
+                      Validate your guest circle below or launch the fullscreen Check-In QR display for rapid gate scanning.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-col sm:items-end gap-2 w-full sm:w-auto shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowCheckinModal(true)}
+                    className="w-full sm:w-auto h-10 px-4 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                  >
+                    <QrCode className="w-4 h-4" />
+                    <span>Open QR Check-In Screen</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadQrSvg(checkinKioskUrl, `${selectedEvent.slug}-checkin-qr.svg`)
+                    }
+                    className="w-full sm:w-auto h-9 px-4 rounded-full bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Save Check-In QR (.svg)</span>
+                  </button>
                 </div>
               </section>
 
@@ -546,6 +898,8 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     selectedEvent.category,
                     selectedEvent.city,
                     selectedEvent.ticketPrice === 0 ? 'Free RSVP' : `$${selectedEvent.ticketPrice} Ticket`,
+                    validationConfig.enabled ? 'Validated Guest List' : 'Open Entry',
+                    extraDataConfig.enableGiftTable ? 'Couple Gift Table' : 'Custom RSVP Form',
                   ].map((tag) => (
                     <span
                       key={tag}
@@ -559,16 +913,16 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
               {/* Event Disposable Camera Launch Card */}
               {onOpenDisposableCamera && (
-                <section className="bg-[#0B0B0B] text-white rounded-[28px] p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <section className="bg-white border border-[#E5E5EA] text-[#0B0B0B] rounded-[28px] p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="flex items-start gap-3.5 min-w-0">
-                    <div className="w-11 h-11 rounded-2xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0">
+                    <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
                       <Camera className="w-5 h-5" />
                     </div>
                     <div className="min-w-0">
-                      <h3 className="text-sm font-bold text-white">
+                      <h3 className="text-sm font-bold text-[#0B0B0B]">
                         Shared Event Disposable Camera
                       </h3>
-                      <p className="text-xs text-zinc-300 mt-0.5 leading-relaxed">
+                      <p className="text-xs text-[#71717A] mt-0.5 leading-relaxed">
                         Snap candid 35mm film photos with guests on the shared event camera roll.
                       </p>
                     </div>
@@ -576,7 +930,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => onOpenDisposableCamera(selectedEvent.id, name.trim() || undefined)}
-                    className="w-full sm:w-auto px-4 py-2.5 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                    className="w-full sm:w-auto px-4 py-2.5 rounded-full bg-[#0B0B0B] text-white hover:bg-neutral-800 text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
                   >
                     <Camera className="w-3.5 h-3.5" />
                     <span>{isSignedIn ? 'Open Camera' : 'Sign In for Camera'}</span>
@@ -608,21 +962,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     key={spk.name}
                     className="bg-white rounded-[24px] p-4 shadow-sm flex items-center gap-4"
                   >
-                    {!speakerFailed[spk.name] ? (
-                      <img
-                        src={spk.avatar}
-                        alt={spk.name}
-                        referrerPolicy="no-referrer"
-                        onError={() =>
-                          setSpeakerFailed((prev) => ({ ...prev, [spk.name]: true }))
-                        }
-                        className="w-14 h-14 rounded-full object-cover shrink-0 bg-[#F5F5F7]"
-                      />
-                    ) : (
-                      <div className="w-14 h-14 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center font-bold text-sm shrink-0">
-                        {spk.initials}
-                      </div>
-                    )}
+                    <div className="w-14 h-14 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center font-bold text-sm shrink-0">
+                      {spk.initials}
+                    </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <h4 className="text-base font-semibold text-[#0B0B0B] truncate">
@@ -643,83 +985,57 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 ))}
               </section>
 
-              {/* Venue Location Map Preview */}
+              {/* Venue Location Preview (Architectural Card — no external broken URLs) */}
               <section className="bg-white rounded-[28px] p-5 shadow-sm space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
                     <MapPin className="w-5 h-5 text-[#0B0B0B]" />
-                    <h3 className="text-base font-semibold text-[#0B0B0B]">Venue</h3>
+                    <h3 className="text-base font-semibold text-[#0B0B0B]">Venue &amp; Directions</h3>
                   </div>
                   <a
-                    href="https://maps.google.com/?q=Accra+International+Conference+Centre"
+                    href={`https://maps.google.com/?q=${encodeURIComponent(`${selectedEvent.venue} ${selectedEvent.city}`)}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-xs font-semibold text-[#0B0B0B] underline inline-flex items-center gap-1"
                   >
-                    <span>Get Directions</span>
+                    <span>Open in Maps</span>
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
-                <div className="w-full h-44 rounded-2xl relative overflow-hidden bg-[#E8E8EA]">
-                  {!mapFailed ? (
-                    <img
-                      src={VENUE_MAP_CHECKOUT_IMG}
-                      alt={`${selectedEvent.venue} map`}
-                      referrerPolicy="no-referrer"
-                      onError={() => setMapFailed(true)}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-xs text-[#71717A]">
-                      {selectedEvent.venue}
-                    </div>
-                  )}
-                  <div className="absolute bottom-2.5 left-2.5 bg-white/95 backdrop-blur-md px-3 py-1 rounded-full flex items-center gap-1.5 shadow-sm">
-                    <MapPin className="w-3.5 h-3.5 text-[#EF4444]" />
-                    <span className="text-[11px] text-[#0B0B0B] font-semibold">
-                      Castle Rd, {selectedEvent.city}
+                <div className="w-full h-40 rounded-2xl relative overflow-hidden bg-[#F5F5F7] border border-[#E5E5EA] flex items-center justify-between px-5">
+                  <div className="space-y-1 max-w-[70%]">
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-[#71717A]">
+                      Gate Entrance Coordinates
                     </span>
+                    <p className="text-sm sm:text-base font-bold text-[#0B0B0B]">
+                      {selectedEvent.venue}
+                    </p>
+                    <p className="text-xs text-[#71717A]">
+                      {selectedEvent.city} · Guest parking &amp; QR Fast Pass lane
+                    </p>
+                  </div>
+                  <div className="w-12 h-12 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
+                    <Navigation className="w-5 h-5" />
                   </div>
                 </div>
               </section>
 
-              {/* Frictionless Registration Card */}
+              {/* Guest Validation, Gift Table & Check-In Registration Form */}
               <section
                 id="register-section"
                 className="scroll-mt-24 bg-white rounded-[32px] p-6 shadow-md space-y-5"
               >
                 {!canCheckInRegister ? (
-                  <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-3 text-center">
+                  <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2.5 text-center">
                     <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
                       <ShieldCheck className="w-5 h-5" />
                     </div>
                     <h3 className="font-display text-lg font-bold text-[#0B0B0B] tracking-tight">
-                      {!isSignedIn
-                        ? 'Sign Up Required for Check-In Registration'
-                        : 'Set Up an Event to Enable Check-In Registration'}
+                      Event Is In Draft Mode
                     </h3>
                     <p className="text-xs text-[#71717A] leading-relaxed max-w-md mx-auto">
-                      {!isSignedIn
-                        ? 'Check-in registration is only available after signing up and setting up an event.'
-                        : 'You are signed in, but no event has been set yet. Create your first event to unlock check-in registration.'}
+                      Publish this event from Creator Studio to open guest validation and QR pass registration.
                     </p>
-                    <div className="pt-1 flex justify-center">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!isSignedIn && onNavigateSignUp) {
-                            onNavigateSignUp();
-                          } else if (isSignedIn && onCreateEvent) {
-                            onCreateEvent();
-                          } else {
-                            onOpenStudio();
-                          }
-                        }}
-                        className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold transition-colors"
-                      >
-                        {!isSignedIn ? 'Sign Up to Unlock' : 'Create & Set Event'}
-                      </button>
-                    </div>
                   </div>
                 ) : !isQrPassPublished ? (
                   <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2.5 text-center">
@@ -730,7 +1046,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       Check-In QR Passes Pending Publication
                     </h3>
                     <p className="text-xs text-[#71717A] leading-relaxed max-w-md mx-auto">
-                      Only the event creator can publish check-in QR passes. Guest registration and QR pass delivery will open once the creator publishes check-in passes for this event.
+                      Guest registration and QR pass delivery will open once the creator publishes check-in passes for this event.
                     </p>
                   </div>
                 ) : (
@@ -739,7 +1055,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   <div className="flex items-center justify-between gap-2 mb-1">
                     <div className="inline-flex items-center gap-1 bg-[#F3F3F5] text-[#0B0B0B] text-[11px] font-medium px-2.5 py-0.5 rounded-full">
                       <Bolt className="w-3.5 h-3.5" />
-                      <span>Instant Check-In Registration</span>
+                      <span>Guest Validation &amp; Check-In Registration</span>
                     </div>
                     <button
                       type="button"
@@ -748,7 +1064,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                         setName('Yaw Osei');
                         setCountryPrefix('+233');
                         setPhoneInput(`024 778 9${rand}`);
-                        setEmail(`yaw.osei${rand}@techhub.gh`);
+                        setEmail(`yaw.osei${rand}@eventsbyyou.xyz`);
+                        if (validationConfig.options.length > 0) {
+                          setValidationGroup(validationConfig.options[0]);
+                        }
+                        if (validationConfig.requireInviteCode && validationConfig.inviteCode) {
+                          setInviteCodeInput(validationConfig.inviteCode);
+                        }
                         setDuplicateError(null);
                       }}
                       className="text-[11px] font-semibold text-[#71717A] hover:text-[#0B0B0B] underline underline-offset-2"
@@ -757,11 +1079,10 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     </button>
                   </div>
                   <h3 className="font-display text-[22px] leading-7 font-bold text-[#0B0B0B] tracking-[-0.02em]">
-                    {spotsRemaining > 0 ? 'Register & Get QR Check-In Pass' : 'Join Priority Waitlist'}
+                    {spotsRemaining > 0 ? 'Validate & Get QR Check-In Pass' : 'Join Priority Waitlist'}
                   </h3>
                   <p className="text-[13px] text-[#71717A]">
-                    No password or app required. Your scannable QR gate pass is delivered
-                    immediately via SMS &amp; Email.
+                    Select your guest circle, submit event details, and receive your scannable QR gate pass immediately.
                   </p>
                 </div>
 
@@ -772,14 +1093,72 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   </div>
                 )}
 
-                <form onSubmit={handleSubmit} className="space-y-4">
+                <form onSubmit={handleSubmit} className="space-y-5">
+                  {/* STEP 1: EVENT VALIDATION FORM */}
+                  {validationConfig.enabled && validationConfig.options.length > 0 && (
+                    <div className="p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <ShieldCheck className="w-4 h-4 text-[#0B0B0B]" />
+                          <span className="text-xs font-bold text-[#0B0B0B]">
+                            {validationConfig.label} *
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-[#71717A]">
+                          {selectedEvent.category} Validation
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {validationConfig.options.map((opt) => {
+                          const active = validationGroup === opt;
+                          return (
+                            <button
+                              key={opt}
+                              type="button"
+                              onClick={() => {
+                                setValidationGroup(opt);
+                                if (!giftSide) setGiftSide(opt);
+                                setDuplicateError(null);
+                              }}
+                              className={`px-3 py-2 rounded-xl text-xs font-semibold text-left border transition-all flex items-center justify-between gap-1.5 ${
+                                active
+                                  ? 'bg-[#0B0B0B] text-white border-[#0B0B0B] shadow-sm'
+                                  : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                              }`}
+                            >
+                              <span className="truncate">{opt}</span>
+                              {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {validationConfig.requireInviteCode && (
+                        <div className="pt-1 space-y-1">
+                          <label className="text-[11px] font-semibold text-[#0B0B0B] flex items-center gap-1">
+                            <Lock className="w-3 h-3" />
+                            Private Invitation Passcode Required
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={inviteCodeInput}
+                            onChange={(e) => setInviteCodeInput(e.target.value)}
+                            placeholder="Enter host invitation code (e.g. ROYAL2026)"
+                            className="w-full h-10 px-4 rounded-full bg-white border border-[#E5E5EA] text-xs font-mono uppercase text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Full Name */}
                   <div className="space-y-1.5">
                     <label
                       className="block text-xs font-semibold text-[#0B0B0B]"
                       htmlFor="checkout-fullName"
                     >
-                      Full Name
+                      Full Name *
                     </label>
                     <div className="relative">
                       <input
@@ -801,7 +1180,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       className="block text-xs font-semibold text-[#0B0B0B]"
                       htmlFor="checkout-phone"
                     >
-                      Phone Number (For SMS Pass)
+                      Phone Number (For SMS Pass) *
                     </label>
                     <div className="flex gap-2">
                       <div className="relative shrink-0">
@@ -853,7 +1232,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       className="block text-xs font-semibold text-[#0B0B0B]"
                       htmlFor="checkout-email"
                     >
-                      Email Address
+                      Email Address *
                     </label>
                     <div className="relative">
                       <input
@@ -862,12 +1241,223 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                         required
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
-                        placeholder="e.g. ama@techhub.gh"
+                        placeholder="e.g. ama@eventsbyyou.xyz"
                         className="w-full h-12 px-4 pr-10 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
                       />
                       <Mail className="w-4 h-4 text-[#71717A] absolute right-4 top-4 pointer-events-none" />
                     </div>
                   </div>
+
+                  {/* EVENT-SPECIFIC EXTRA DATA COLLECTION FIELDS */}
+                  {(extraDataConfig.customFields?.length ?? 0) > 0 && (
+                    <div className="p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-[#0B0B0B]">
+                          Additional {selectedEvent.category} Details
+                        </span>
+                        <span className="text-[10px] font-mono uppercase text-[#71717A]">
+                          Organizer Form
+                        </span>
+                      </div>
+                      <div className="space-y-3">
+                        {extraDataConfig.customFields.map((field) => {
+                          const val = customResponses[field.id] || '';
+                          return (
+                            <div key={field.id} className="space-y-1">
+                              <label className="block text-xs font-semibold text-[#0B0B0B]">
+                                {field.label}
+                                {field.required ? ' *' : ''}
+                              </label>
+                              {field.type === 'select' && field.options ? (
+                                <select
+                                  required={field.required}
+                                  value={val}
+                                  onChange={(e) =>
+                                    setCustomResponses((prev) => ({
+                                      ...prev,
+                                      [field.id]: e.target.value,
+                                    }))
+                                  }
+                                  className="w-full h-11 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs font-medium text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                                >
+                                  <option value="">Select an option...</option>
+                                  {field.options.map((opt) => (
+                                    <option key={opt} value={opt}>
+                                      {opt}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : field.type === 'textarea' ? (
+                                <textarea
+                                  rows={2}
+                                  required={field.required}
+                                  value={val}
+                                  onChange={(e) =>
+                                    setCustomResponses((prev) => ({
+                                      ...prev,
+                                      [field.id]: e.target.value,
+                                    }))
+                                  }
+                                  placeholder={field.placeholder || 'Enter response...'}
+                                  className="w-full p-3 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none resize-none"
+                                />
+                              ) : (
+                                <input
+                                  type="text"
+                                  required={field.required}
+                                  value={val}
+                                  onChange={(e) =>
+                                    setCustomResponses((prev) => ({
+                                      ...prev,
+                                      [field.id]: e.target.value,
+                                    }))
+                                  }
+                                  placeholder={field.placeholder || 'Enter response...'}
+                                  className="w-full h-11 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* WEDDING GIFT TABLE & CASH ENVELOPE REGISTRY FORM */}
+                  {(selectedEvent.category === 'Wedding' || extraDataConfig.enableGiftTable) && (
+                    <div className="p-4 sm:p-5 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] space-y-3.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-2.5">
+                          <div className="w-9 h-9 rounded-xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
+                            <Gift className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-[#0B0B0B]">
+                              {extraDataConfig.giftTitle || 'Couple Gift Table & Cash Envelope'}
+                            </h4>
+                            <p className="text-[11px] text-[#71717A] mt-0.5">
+                              Log a gift table item, Mobile Money envelope, or well-wishes note with your RSVP.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                        {(
+                          [
+                            { id: 'none', label: 'No Gift Yet' },
+                            { id: 'cash-momo', label: 'MoMo / Cash' },
+                            { id: 'registry-item', label: 'Registry Gift' },
+                            { id: 'blessing-only', label: 'Wishes Note' },
+                          ] as const
+                        ).map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setGiftMode(opt.id)}
+                            className={`py-2 px-2.5 rounded-xl text-[11px] font-semibold border transition-colors ${
+                              giftMode === opt.id
+                                ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                                : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {giftMode !== 'none' && (
+                        <div className="space-y-3 pt-1">
+                          {giftMode === 'cash-momo' && (
+                            <div className="p-3 rounded-xl bg-white border border-[#E5E5EA] space-y-2.5">
+                              {extraDataConfig.momoNumber && (
+                                <p className="text-[11px] text-[#444748]">
+                                  Couple MoMo / Gift Line:{' '}
+                                  <strong className="font-mono text-[#0B0B0B]">
+                                    {extraDataConfig.momoNumber}
+                                  </strong>{' '}
+                                  ({extraDataConfig.momoName || selectedEvent.organizer})
+                                </p>
+                              )}
+                              <div className="flex gap-2">
+                                <select
+                                  value={giftCurrency}
+                                  onChange={(e) =>
+                                    setGiftCurrency(e.target.value as 'GHS' | 'USD')
+                                  }
+                                  aria-label="Gift currency"
+                                  className="h-10 px-3 rounded-xl bg-[#F5F5F7] text-xs font-bold text-[#0B0B0B]"
+                                >
+                                  <option value="GHS">GHS</option>
+                                  <option value="USD">USD</option>
+                                </select>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={giftAmount}
+                                  onChange={(e) => setGiftAmount(e.target.value)}
+                                  placeholder="Pledge / envelope amount"
+                                  className="flex-1 h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono font-semibold text-[#0B0B0B]"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {giftMode === 'registry-item' && (
+                            <div>
+                              <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                                Select Gift Table Registry Item
+                              </label>
+                              <select
+                                value={giftItem}
+                                onChange={(e) => setGiftItem(e.target.value)}
+                                className="w-full h-10 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs font-medium text-[#0B0B0B]"
+                              >
+                                {(
+                                  extraDataConfig.giftRegistryItems ?? [
+                                    'Cash Envelope Blessing',
+                                    'Couple Dinnerware Set',
+                                    'Honeymoon Travel Fund',
+                                  ]
+                                ).map((item) => (
+                                  <option key={item} value={item}>
+                                    {item}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <div>
+                              <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                                Guest Side / Honoring
+                              </label>
+                              <input
+                                type="text"
+                                value={giftSide || validationGroup}
+                                onChange={(e) => setGiftSide(e.target.value)}
+                                placeholder="e.g. Bride's Family / Groom's Friends"
+                                className="w-full h-10 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                                Well-Wishes &amp; Card Note
+                              </label>
+                              <input
+                                type="text"
+                                value={giftMessage}
+                                onChange={(e) => setGiftMessage(e.target.value)}
+                                placeholder="Write a blessing for the couple..."
+                                className="w-full h-10 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Instant Notification Callout */}
                   <div className="p-3 rounded-2xl bg-[#F3F3F5] flex items-start gap-2 text-[#444748]">
@@ -887,7 +1477,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       {submitting
                         ? 'Registering...'
                         : selectedEvent.ticketPrice === 0
-                          ? 'Register Free Pass'
+                          ? 'Validate & Generate QR Pass'
                           : `Claim Pass ($${selectedEvent.ticketPrice})`}
                     </span>
                     <ArrowRight className="w-5 h-5" />
@@ -926,9 +1516,16 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               <div className="relative bg-white rounded-[32px] p-6 shadow-sm overflow-hidden mb-6">
                 <div className="flex items-start justify-between gap-2 mb-4">
                   <div>
-                    <span className="inline-block px-2.5 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[11px] font-medium tracking-wider uppercase mb-1.5">
-                      Fast Pass Attendee
-                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                      <span className="inline-block px-2.5 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[11px] font-medium tracking-wider uppercase">
+                        Fast Pass Attendee
+                      </span>
+                      {issuedPass.validationGroup && (
+                        <span className="inline-block px-2.5 py-0.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#0B0B0B] text-[11px] font-semibold">
+                          {issuedPass.validationGroup}
+                        </span>
+                      )}
+                    </div>
                     <h3 className="font-display text-[22px] leading-7 font-bold text-[#0B0B0B] tracking-[-0.02em]">
                       {selectedEvent.title}
                     </h3>
@@ -955,78 +1552,77 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <span className="text-[11px] text-[#71717A] block">Access Level</span>
+                    <span className="text-[11px] text-[#71717A] block">Validated Circle</span>
                     <span className="text-xs font-semibold text-[#0B0B0B]">
-                      Main + VIP Lounge
+                      {issuedPass.validationGroup || issuedPass.tier}
                     </span>
                   </div>
                 </div>
 
-                {/* QR Code Section */}
+                {/* Unique Deterministic QR Code Section */}
                 <div className="relative flex flex-col items-center justify-center p-4 bg-[#F9F9FB] rounded-2xl mb-4">
-                  <div className="relative p-3 bg-white rounded-2xl shadow-sm">
-                    <div className="absolute top-1 left-1 w-3 h-3 border-t-2 border-l-2 border-[#0B0B0B]" />
-                    <div className="absolute top-1 right-1 w-3 h-3 border-t-2 border-r-2 border-[#0B0B0B]" />
-                    <div className="absolute bottom-1 left-1 w-3 h-3 border-b-2 border-l-2 border-[#0B0B0B]" />
-                    <div className="absolute bottom-1 right-1 w-3 h-3 border-b-2 border-r-2 border-[#0B0B0B]" />
-                    <svg
-                      className="w-36 h-36"
-                      fill="none"
-                      viewBox="0 0 160 160"
-                      aria-hidden="true"
-                    >
-                      <rect fill="#0B0B0B" height="40" rx="4" width="40" x="10" y="10" />
-                      <rect fill="white" height="24" rx="2" width="24" x="18" y="18" />
-                      <rect fill="#0B0B0B" height="12" rx="1" width="12" x="24" y="24" />
-                      <rect fill="#0B0B0B" height="40" rx="4" width="40" x="110" y="10" />
-                      <rect fill="white" height="24" rx="2" width="24" x="118" y="18" />
-                      <rect fill="#0B0B0B" height="12" rx="1" width="12" x="124" y="24" />
-                      <rect fill="#0B0B0B" height="40" rx="4" width="40" x="10" y="110" />
-                      <rect fill="white" height="24" rx="2" width="24" x="18" y="118" />
-                      <rect fill="#0B0B0B" height="12" rx="1" width="12" x="24" y="124" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="60" y="12" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="76" y="12" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="92" y="12" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="60" y="28" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="84" y="28" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="68" y="44" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="84" y="44" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="12" y="60" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="28" y="60" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="44" y="60" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="16" x="60" y="60" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="84" y="60" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="100" y="60" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="116" y="60" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="16" x="132" y="60" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="28" y="76" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="16" x="52" y="76" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="76" y="76" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="16" x="92" y="76" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="124" y="76" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="16" x="12" y="92" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="36" y="92" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="60" y="92" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="84" y="92" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="16" x="108" y="92" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="132" y="92" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="60" y="108" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="16" x="76" y="108" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="100" y="108" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="116" y="108" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="68" y="124" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="84" y="124" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="16" x="108" y="124" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="132" y="124" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="16" x="60" y="140" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="8" x="92" y="140" />
-                      <rect fill="#0B0B0B" height="8" rx="2" width="16" x="116" y="140" />
-                    </svg>
+                  <div className="relative p-3 bg-white rounded-2xl shadow-sm border border-[#E5E5EA]">
+                    <DeterministicQrSvg
+                      value={`${issuedPass.ticketCode}|${selectedEvent.slug}|${issuedPass.phone}`}
+                      size={156}
+                      label={`Check-In QR Pass for ${issuedPass.name}`}
+                    />
                   </div>
                   <p className="text-[11px] text-[#71717A] mt-2 tracking-wide uppercase">
-                    Scan for instant badge print
+                    Scan at gate for instant badge check-in
                   </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadQrSvg(
+                        `${issuedPass.ticketCode}|${selectedEvent.slug}|${issuedPass.phone}`,
+                        `${selectedEvent.slug}-${issuedPass.ticketCode.replace(/[^A-Za-z0-9-]/g, '')}.svg`
+                      )
+                    }
+                    className="mt-2 px-3.5 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5"
+                  >
+                    <Download className="w-3 h-3" />
+                    Download Personal QR Pass (.svg)
+                  </button>
                 </div>
+
+                {/* Recorded Gift Table or Extra Data Summary */}
+                {(issuedPass.giftEntry || issuedPass.customResponses) && (
+                  <div className="mb-4 p-4 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] space-y-2 text-xs">
+                    {issuedPass.giftEntry && (
+                      <div className="flex items-start gap-2">
+                        <Gift className="w-4 h-4 text-[#0B0B0B] shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-semibold text-[#0B0B0B]">
+                            Wedding Gift Table Recorded:{' '}
+                            {issuedPass.giftEntry.giftType === 'cash-momo'
+                              ? `${issuedPass.giftEntry.currency || 'GHS'} ${issuedPass.giftEntry.amount?.toLocaleString()} Cash / MoMo Blessing`
+                              : issuedPass.giftEntry.giftType === 'registry-item'
+                                ? issuedPass.giftEntry.registryItem
+                                : 'Couple Well-Wishes Note'}
+                          </p>
+                          {issuedPass.giftEntry.message && (
+                            <p className="text-[11px] text-[#71717A] mt-0.5 italic">
+                              &ldquo;{issuedPass.giftEntry.message}&rdquo;
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {issuedPass.customResponses && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {Object.entries(issuedPass.customResponses).map(([k, v]) => (
+                          <span
+                            key={k}
+                            className="px-2.5 py-0.5 rounded-full bg-white border border-[#E5E5EA] text-[11px] text-[#0B0B0B]"
+                          >
+                            {k}: <strong>{v}</strong>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Event Key Logistics */}
                 <div className="space-y-3 pt-1">
@@ -1051,7 +1647,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                         {selectedEvent.venue}
                       </span>
                       <span className="text-[11px] text-[#71717A] block">
-                        Castle Rd, {selectedEvent.city} · Main Gate 2
+                        {selectedEvent.city} · Fast Pass Check-In Lane
                       </span>
                     </div>
                   </div>
@@ -1163,7 +1759,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   className="w-full h-11 bg-[#E8E8EA] text-[#0B0B0B] rounded-full flex items-center justify-center gap-2 hover:bg-[#E2E2E4] transition-colors text-xs font-semibold"
                 >
                   <Share2 className="w-4 h-4" />
-                  <span>Share Event Pass Link</span>
+                  <span>Copy Event Invitation Link</span>
                 </button>
               </div>
 
@@ -1172,10 +1768,10 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 <div className="flex items-center justify-between mb-3">
                   <div>
                     <h3 className="text-base font-semibold text-[#0B0B0B]">Venue &amp; Arrival</h3>
-                    <p className="text-[11px] text-[#71717A]">{selectedEvent.venue}</p>
+                    <p className="text-[11px] text-[#71717A]">{selectedEvent.venue} · {selectedEvent.city}</p>
                   </div>
                   <a
-                    href={`https://maps.google.com/?q=${encodeURIComponent(selectedEvent.venue)}`}
+                    href={`https://maps.google.com/?q=${encodeURIComponent(`${selectedEvent.venue} ${selectedEvent.city}`)}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label="Directions"
@@ -1184,17 +1780,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     <Navigation className="w-4 h-4" />
                   </a>
                 </div>
-                <div className="w-full h-36 bg-[#E8E8EA] rounded-2xl relative overflow-hidden">
-                  <img
-                    src={VENUE_MAP_PASS_IMG}
-                    alt="Venue Arrival Map"
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute inset-0 bg-[#0B0B0B]/10" />
-                  <div className="absolute bottom-2 left-2 bg-[#0B0B0B]/85 backdrop-blur-md px-3 py-1 rounded-full text-white text-[11px] font-medium">
-                    Guest Parking &amp; Gate Check-In Available
-                  </div>
+                <div className="w-full px-4 py-3 bg-[#F5F5F7] rounded-2xl flex items-center justify-between text-xs text-[#0B0B0B]">
+                  <span className="font-medium">Guest Parking &amp; Gate Check-In Available</span>
+                  <span className="font-mono text-[11px] text-[#71717A]">{selectedEvent.time}</span>
                 </div>
               </div>
 

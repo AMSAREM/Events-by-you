@@ -1,6 +1,5 @@
 import React, { useRef, useState } from 'react';
 import {
-  AlertCircle,
   ArrowLeft,
   ArrowRight,
   Calendar,
@@ -8,10 +7,13 @@ import {
   CheckCircle2,
   Clock,
   Copy,
+  Gift,
   ImagePlus,
+  Link2,
   Mail,
   MapPin,
   MessageSquare,
+  Navigation,
   Plus,
   ShieldCheck,
   Trash2,
@@ -19,11 +21,15 @@ import {
 } from 'lucide-react';
 import {
   ArtworkVariant,
+  CustomFormField,
+  DesignTheme,
   EventItem,
   OrganizerProfile,
   ScheduleBlock,
 } from '../types/events';
-import { EVENT_CATEGORIES } from '../data/initialData';
+import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
+import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
+import { EventFlyerCard } from './EventFlyerCard';
 import { MonochromePoster } from './MonochromeArtwork';
 
 interface CreateEventWizardScreenProps {
@@ -34,14 +40,14 @@ interface CreateEventWizardScreenProps {
   onCreateEvent: (event: EventItem, blocks: ScheduleBlock[]) => Promise<void> | void;
 }
 
-const DEFAULT_FLYER_URL =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuB64zppvQ--lTZt5G8HBRwJiEoTH_IfBaf4trwNq4H_g6Nt7M4qJrhBBI-5lCfDNFpjQTfQSM5hjXN2hrwuNoTq0qPnpsqDKiuR29BPOKzpMOyIBenB94FsZEvsFLvLYZVECuvfGc9tm7JV5Lwh5lNqNRPs2U2RhEQx91pmOHFGs4D0vjYj8XaEhWsaH5CyD662oOrO8WbM5IanKjWzDAyq7wAJt1xoXBdIwa_4sLU';
-
-const DEFAULT_MAP_URL =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuBG7XwCjdJL0mywXlYxEdYbBKh6f91nmzT9OsA7DYZpARieaEYX8dX6HIzvhcl2k-1vKXcNTXZ75cX-uhN5kLFYtZuO-gTscHm5p0chIaBDm2CGzD21CbjM-KWMFrUsZnunsCRk15ngt8OQJ6-is1tDwj5_k4Q3Fj9O_HNlmJYu039OhwDk4x3zkjtJugvccalmUSTXuAvuyvN4Fl32FFciGu3C-4hnLJKIK5hEXpw';
-
-const DEFAULT_MOBILE_CARD_URL =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuDE0LSA2Iri_71JYod29SaVB-S2EA4Buwds9qDMeE-eR0ztOY0xYczSQc12FQW30PLYhBrBye5ENH9_68SdNyImwmFjOyB4E8SS3JybbMjl0_bU0PK9vFaE89oZ6GsJ82lFtky69CxU_yHZyL8pIozZxcKUu8tROop6gaPuaEkVRT54914HOC3MvYshiE1nSJIfP-2sQ7VvL_uHtV7-_GV1KB6XZ5bkgIs7zYNMBsE';
+const FLYER_GALLERY = [
+  { id: 'events', label: 'Conference', url: '/src/assets/images/flyer_tech_summit_1795075791295.jpg' },
+  { id: 'wedding', label: 'Wedding', url: '/src/assets/images/flyer_wedding_royal_1795075790983.jpg' },
+  { id: 'church', label: 'Church', url: '/src/assets/images/flyer_church_revival_1795075792994.jpg' },
+  { id: 'musical', label: 'Musical', url: '/src/assets/images/flyer_musical_live_1795075793134.jpg' },
+  { id: 'corporate', label: 'Corporate', url: '/src/assets/images/flyer_corporate_gala_1795075792816.jpg' },
+  { id: 'funeral', label: 'Memorial', url: '/src/assets/images/flyer_funeral_memorial_1795075793453.jpg' },
+];
 
 const ARTWORK_OPTIONS: { id: ArtworkVariant; label: string }[] = [
   { id: 'architecture', label: 'Architecture' },
@@ -59,6 +65,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   onNavigateBilling,
   onCreateEvent,
 }) => {
+  const initialPreset = getCategoryPreset('Events');
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [category, setCategory] = useState<string>('Events');
   const [title, setTitle] = useState('Accra Annual Gathering & Showcase 2026');
@@ -77,11 +84,27 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const [venue, setVenue] = useState('Mövenpick Ambassador Hotel');
   const [city, setCity] = useState('Accra, Ghana');
 
-  const [flyerUrl, setFlyerUrl] = useState<string>(DEFAULT_FLYER_URL);
+  const [flyerUrl, setFlyerUrl] = useState<string>(initialPreset.flyerUrl);
+  const [designTheme, setDesignTheme] = useState<DesignTheme>(initialPreset.designTheme);
   const [flyerFailed, setFlyerFailed] = useState(false);
-  const [mapFailed, setMapFailed] = useState(false);
-  const [cardFailed, setCardFailed] = useState(false);
   const [artwork, setArtwork] = useState<ArtworkVariant>('architecture');
+
+  // Event-specific Validation & Wedding Gift / Custom Data config
+  const [validationEnabled, setValidationEnabled] = useState(true);
+  const [validationLabel, setValidationLabel] = useState(initialPreset.validationConfig.label);
+  const [validationOptionsText, setValidationOptionsText] = useState(
+    initialPreset.validationConfig.options.join(', ')
+  );
+  const [requireInviteCode, setRequireInviteCode] = useState(false);
+  const [inviteCode, setInviteCode] = useState('GUEST2026');
+
+  const [enableGiftTable, setEnableGiftTable] = useState(false);
+  const [giftTitle, setGiftTitle] = useState('Couple Gift Table & Cash Envelope Registry');
+  const [momoNumber, setMomoNumber] = useState('+233 24 559 8104');
+  const [customFields, setCustomFields] = useState<CustomFormField[]>(
+    initialPreset.extraDataConfig.customFields
+  );
+  const [newCustomLabel, setNewCustomLabel] = useState('');
 
   // Step 2: Schedule blocks
   const [draftBlocks, setDraftBlocks] = useState<
@@ -90,15 +113,15 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     {
       id: 'wiz-blk-1',
       time: '09:00 - 10:00',
-      title: 'Opening Keynote: Resilient Cloud Infrastructure',
+      title: 'Opening Keynote & Guest Arrival',
       lead: profile.name,
       stage: 'Main Auditorium',
     },
     {
       id: 'wiz-blk-2',
       time: '10:30 - 11:45',
-      title: 'Panel: Arkesel SMS & Mobile Payout Rails',
-      lead: 'Regional FinTech Leads',
+      title: 'Featured Showcase & Program Session',
+      lead: 'Program Leads',
       stage: 'Hall B',
     },
   ]);
@@ -141,7 +164,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   };
 
   const handleCopySlug = () => {
-    const full = `${window.location.origin}/e/${slug}`;
+    const full = buildEventInvitationUrl(slug);
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(full).catch(() => {});
     }
@@ -157,7 +180,6 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
       if (typeof reader.result === 'string') {
         setFlyerUrl(reader.result);
         setFlyerFailed(false);
-        setCardFailed(false);
       }
     };
     reader.readAsDataURL(file);
@@ -297,6 +319,20 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
         block2: 'Panel: Arkesel SMS & Mobile Payout Rails',
       },
     };
+    const catPreset = getCategoryPreset(nextCat);
+    setFlyerUrl(catPreset.flyerUrl);
+    setFlyerFailed(false);
+    setDesignTheme(catPreset.designTheme);
+    setValidationEnabled(catPreset.validationConfig.enabled);
+    setValidationLabel(catPreset.validationConfig.label);
+    setValidationOptionsText(catPreset.validationConfig.options.join(', '));
+    setRequireInviteCode(Boolean(catPreset.validationConfig.requireInviteCode));
+    setInviteCode(catPreset.validationConfig.inviteCode || 'GUEST2026');
+    setEnableGiftTable(Boolean(catPreset.extraDataConfig.enableGiftTable));
+    if (catPreset.extraDataConfig.giftTitle) setGiftTitle(catPreset.extraDataConfig.giftTitle);
+    if (catPreset.extraDataConfig.momoNumber) setMomoNumber(catPreset.extraDataConfig.momoNumber);
+    setCustomFields(catPreset.extraDataConfig.customFields);
+
     const p = presets[nextCat];
     if (p) {
       setTitle(p.title);
@@ -318,6 +354,12 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     try {
       const eventId = `evt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       const finalCap = isFreePlan ? Math.min(50, Math.max(10, capacity)) : Math.max(10, capacity);
+      const parsedOptions = validationOptionsText
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const preset = getCategoryPreset(category || 'Events');
+
       const createdEvent: EventItem = {
         id: eventId,
         slug: slug.trim() || 'new-event',
@@ -338,7 +380,23 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
         revenue: 0,
         organizer: profile.studio || profile.name,
         artwork,
-        flyerUrl: flyerUrl || undefined,
+        flyerUrl: flyerUrl || preset.flyerUrl,
+        designTheme,
+        validationConfig: {
+          enabled: validationEnabled,
+          label: validationLabel.trim() || preset.validationConfig.label,
+          options: parsedOptions.length > 0 ? parsedOptions : preset.validationConfig.options,
+          requireInviteCode,
+          inviteCode: inviteCode.trim() || undefined,
+        },
+        extraDataConfig: {
+          enableGiftTable,
+          giftTitle: giftTitle.trim() || preset.extraDataConfig.giftTitle,
+          momoNumber: momoNumber.trim() || undefined,
+          momoName: profile.studio || profile.name,
+          giftRegistryItems: preset.extraDataConfig.giftRegistryItems,
+          customFields,
+        },
         venueFormat,
         senderId,
         qrPassPublished: publishStatus === 'draft' ? false : publishQrPass,
@@ -360,6 +418,42 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const previewEventDraft: EventItem = {
+    id: 'preview-draft',
+    slug: slug || 'new-event',
+    title: title || 'Untitled Event',
+    subtitle: overview,
+    category: category || 'Events',
+    status: 'upcoming',
+    date: dateLabel,
+    isoDate: '2026-12-18',
+    time: timeLabel,
+    venue: venue || 'Main Hall',
+    city: city || 'Accra',
+    capacity,
+    registered: 0,
+    checkedIn: 0,
+    smsDispatched: 0,
+    ticketPrice,
+    revenue: 0,
+    organizer: profile.studio || profile.name,
+    artwork,
+    flyerUrl,
+    designTheme,
+    validationConfig: {
+      enabled: validationEnabled,
+      label: validationLabel,
+      options: validationOptionsText
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    },
+    extraDataConfig: {
+      enableGiftTable,
+      customFields,
+    },
   };
 
   const steps = [
@@ -710,42 +804,96 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                   </div>
                 </div>
 
-                {/* Map Visual Preview */}
-                <div className="relative w-full h-36 rounded-2xl overflow-hidden shadow-sm bg-[#E8E8EA]">
-                  {!mapFailed ? (
-                    <img
-                      src={DEFAULT_MAP_URL}
-                      alt="Venue location map preview"
-                      referrerPolicy="no-referrer"
-                      onError={() => setMapFailed(true)}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full bg-gradient-to-br from-[#EEEEF0] to-[#D9DADC]" />
-                  )}
-                  <div className="absolute inset-0 bg-[#0B0B0B]/15 flex items-end p-4">
-                    <div className="bg-white/95 backdrop-blur-md px-3.5 py-1.5 rounded-full inline-flex items-center gap-2 shadow-sm text-xs font-semibold text-[#0B0B0B]">
-                      <MapPin className="w-3.5 h-3.5" />
-                      <span>
-                        {venue} · {city}
-                      </span>
-                    </div>
+                {/* Venue Blueprint Visual Preview */}
+                <div className="w-full h-28 rounded-2xl bg-white border border-[#E5E5EA] px-5 flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-[#71717A]">
+                      Invitation Venue Pin
+                    </span>
+                    <p className="text-sm font-bold text-[#0B0B0B] mt-0.5">{venue}</p>
+                    <p className="text-xs text-[#71717A]">{city} · Google Maps Directions auto-linked</p>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
+                    <Navigation className="w-4 h-4" />
                   </div>
                 </div>
               </section>
 
-              {/* Card 3: Flyer & Monochrome Motif */}
+              {/* Card 3: Graphic-Designer Flyer Banner & Theme */}
               <section className="bg-[#F5F5F7] rounded-3xl p-6 sm:p-8 space-y-5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <ImagePlus className="w-4.5 h-4.5 text-[#0B0B0B]" />
                     <h2 className="font-display text-xl font-bold text-[#0B0B0B]">
-                      Flyer &amp; Visual Banner
+                      Designer Flyer Banner &amp; Poster Theme
                     </h2>
                   </div>
                   <span className="px-2.5 py-1 rounded-full bg-[#E8E8EA] text-[11px] font-semibold uppercase tracking-wider text-[#71717A]">
-                    16:9 Media
+                    Editorial Media
                   </span>
+                </div>
+
+                {/* Editorial Theme Styles */}
+                <div>
+                  <label className="block text-xs font-semibold text-[#0B0B0B] mb-2">
+                    Graphic Design Theme
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {(
+                      [
+                        { id: 'editorial-ivory', label: 'Editorial Ivory' },
+                        { id: 'obsidian-gold', label: 'Obsidian Gold' },
+                        { id: 'swiss-grid', label: 'Swiss Grid' },
+                        { id: 'warm-monochrome', label: 'Monochrome' },
+                      ] as const
+                    ).map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setDesignTheme(t.id)}
+                        className={`h-10 rounded-2xl text-xs font-semibold border transition-colors ${
+                          designTheme === t.id
+                            ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                            : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                        }`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Curated Studio Flyer Presets */}
+                <div>
+                  <label className="block text-xs font-semibold text-[#0B0B0B] mb-2">
+                    Studio Flyer Presets (Or upload custom artwork below)
+                  </label>
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                    {FLYER_GALLERY.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setFlyerUrl(item.url);
+                          setFlyerFailed(false);
+                        }}
+                        className={`rounded-2xl overflow-hidden border-2 transition-all bg-white ${
+                          flyerUrl === item.url
+                            ? 'border-[#0B0B0B] ring-2 ring-[#0B0B0B]/15'
+                            : 'border-transparent hover:border-[#71717A]'
+                        }`}
+                      >
+                        <img
+                          src={item.url}
+                          alt={item.label}
+                          className="w-full h-14 object-cover"
+                        />
+                        <span className="block text-[10px] font-semibold text-[#0B0B0B] py-1 truncate px-1">
+                          {item.label}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-center">
@@ -754,7 +902,6 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                       <img
                         src={flyerUrl}
                         alt="Event flyer banner preview"
-                        referrerPolicy="no-referrer"
                         onError={() => setFlyerFailed(true)}
                         className="w-full h-full object-cover"
                       />
@@ -764,7 +911,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                       </div>
                     )}
                     <span className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-full bg-[#0B0B0B]/80 text-white text-[10px] font-semibold">
-                      16:9 Banner Active
+                      Flyer Banner Active
                     </span>
                   </div>
 
@@ -779,21 +926,19 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="p-6 rounded-2xl bg-white border border-dashed border-[#C4C7C7] hover:border-[#0B0B0B] text-center transition-colors flex flex-col items-center gap-1.5"
+                      className="p-5 rounded-2xl bg-white border border-dashed border-[#C4C7C7] hover:border-[#0B0B0B] text-center transition-colors flex flex-col items-center gap-1.5"
                     >
                       <ImagePlus className="w-6 h-6 text-[#0B0B0B]" />
                       <span className="text-xs font-semibold text-[#0B0B0B]">
-                        Click to upload custom event flyer
+                        Upload custom flyer or banner image
                       </span>
                       <span className="text-[11px] text-[#71717A]">
-                        PNG, JPG, or WebP up to 5.0 MB
+                        PNG, JPG, or WebP · Attached automatically to Invitation &amp; OG cards
                       </span>
                     </button>
 
                     <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-                      <span className="text-[11px] text-[#71717A]">
-                        Fallback Poster Motif:
-                      </span>
+                      <span className="text-[11px] text-[#71717A]">Fallback Motif:</span>
                       <div className="flex flex-wrap gap-1.5">
                         {ARTWORK_OPTIONS.map((opt) => (
                           <button
@@ -811,6 +956,172 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                         ))}
                       </div>
                     </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* Card 4: Guest Validation Form & Wedding Gift Table / Extra Data */}
+              <section className="bg-[#F5F5F7] rounded-3xl p-6 sm:p-8 space-y-5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4.5 h-4.5 text-[#0B0B0B]" />
+                    <h2 className="font-display text-xl font-bold text-[#0B0B0B]">
+                      Guest Validation, Gift Table &amp; Extra Data
+                    </h2>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full bg-[#E8E8EA] text-[11px] font-semibold uppercase tracking-wider text-[#71717A]">
+                    RSVP Form Rules
+                  </span>
+                </div>
+
+                {/* Validation Form */}
+                <div className="p-4 rounded-2xl bg-white space-y-3 border border-[#E5E5EA]">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-bold text-[#0B0B0B]">
+                        Guest Circle Validation Form
+                      </p>
+                      <p className="text-[11px] text-[#71717A]">
+                        Require guests to identify their circle (e.g. Bride&apos;s Family, Groom&apos;s Family, Friends) before check-in.
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={validationEnabled}
+                      onChange={(e) => setValidationEnabled(e.target.checked)}
+                      className="w-4 h-4 accent-[#0B0B0B]"
+                    />
+                  </div>
+                  {validationEnabled && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                          Validation Prompt Title
+                        </label>
+                        <input
+                          type="text"
+                          value={validationLabel}
+                          onChange={(e) => setValidationLabel(e.target.value)}
+                          className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                          Selectable Circles (comma separated)
+                        </label>
+                        <input
+                          type="text"
+                          value={validationOptionsText}
+                          onChange={(e) => setValidationOptionsText(e.target.value)}
+                          className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                        />
+                      </div>
+                      <label className="sm:col-span-2 flex items-center gap-2 text-xs text-[#0B0B0B] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={requireInviteCode}
+                          onChange={(e) => setRequireInviteCode(e.target.checked)}
+                          className="w-4 h-4 accent-[#0B0B0B]"
+                        />
+                        <span>Require private invitation passcode ({inviteCode || 'GUEST2026'})</span>
+                      </label>
+                    </div>
+                  )}
+                </div>
+
+                {/* Wedding Gift Table */}
+                <div className="p-4 rounded-2xl bg-white space-y-3 border border-[#E5E5EA]">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Gift className="w-4 h-4 text-[#0B0B0B]" />
+                      <div>
+                        <p className="text-xs font-bold text-[#0B0B0B]">
+                          Wedding Gift Table &amp; Cash Envelope Registry
+                        </p>
+                        <p className="text-[11px] text-[#71717A]">
+                          Collect cash/MoMo pledges, registry items, and guest well-wishes during RSVP.
+                        </p>
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={enableGiftTable}
+                      onChange={(e) => setEnableGiftTable(e.target.checked)}
+                      className="w-4 h-4 accent-[#0B0B0B]"
+                    />
+                  </div>
+                  {enableGiftTable && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <input
+                        type="text"
+                        value={giftTitle}
+                        onChange={(e) => setGiftTitle(e.target.value)}
+                        placeholder="Gift table section title"
+                        className="h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                      />
+                      <input
+                        type="text"
+                        value={momoNumber}
+                        onChange={(e) => setMomoNumber(e.target.value)}
+                        placeholder="MoMo receiving number (e.g. +233 24...)"
+                        className="h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B]"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Custom Extra Data Fields */}
+                <div className="p-4 rounded-2xl bg-white space-y-3 border border-[#E5E5EA]">
+                  <p className="text-xs font-bold text-[#0B0B0B]">
+                    Additional Event Data Fields ({customFields.length})
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {customFields.map((fld) => (
+                      <span
+                        key={fld.id}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#F5F5F7] text-[11px] font-semibold text-[#0B0B0B]"
+                      >
+                        <span>{fld.label}</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCustomFields((prev) => prev.filter((item) => item.id !== fld.id))
+                          }
+                          aria-label={`Remove ${fld.label}`}
+                          className="text-[#71717A] hover:text-[#EF4444]"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newCustomLabel}
+                      onChange={(e) => setNewCustomLabel(e.target.value)}
+                      placeholder="Add extra data question (e.g. Song Request, Dietary Note)"
+                      className="flex-1 h-9 px-3.5 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newCustomLabel.trim()) return;
+                        setCustomFields((prev) => [
+                          ...prev,
+                          {
+                            id: `field_${Date.now().toString(36)}`,
+                            label: newCustomLabel.trim(),
+                            type: 'text',
+                            required: false,
+                          },
+                        ]);
+                        setNewCustomLabel('');
+                      }}
+                      className="px-4 h-9 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold shrink-0"
+                    >
+                      + Add Field
+                    </button>
                   </div>
                 </div>
               </section>
@@ -1158,47 +1469,35 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
             )}
           </section>
 
-          {/* Live Mobile Attendee Card Preview */}
-          <section className="bg-[#F5F5F7] rounded-3xl p-6 space-y-3.5">
+          {/* Live Designer Flyer & OG Share Card Preview */}
+          <section className="bg-[#F5F5F7] rounded-3xl p-5 space-y-3.5">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-[#0B0B0B]">Live Attendee Preview</span>
+              <span className="text-xs font-semibold text-[#0B0B0B]">Live Flyer &amp; Invite Card</span>
               <span className="text-[11px] font-mono text-[#71717A] truncate">/e/{slug}</span>
             </div>
 
-            <div className="bg-white rounded-2xl p-4 shadow-sm space-y-3">
-              <div className="relative w-full aspect-[16/10] rounded-xl overflow-hidden bg-[#EEEEF0]">
-                {!cardFailed ? (
-                  <img
-                    src={flyerUrl !== DEFAULT_FLYER_URL ? flyerUrl : DEFAULT_MOBILE_CARD_URL}
-                    alt="Mobile attendee ticket preview"
-                    referrerPolicy="no-referrer"
-                    onError={() => setCardFailed(true)}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center p-4">
-                    <MonochromePoster variant={artwork} className="w-20 h-20 rounded-xl" />
-                  </div>
-                )}
-                <span className="absolute top-2 right-2 px-2.5 py-0.5 rounded-full bg-white/95 text-[#0B0B0B] text-[11px] font-semibold">
-                  {ticketPrice === 0 ? 'Free Pass' : `$${ticketPrice}`}
+            <EventFlyerCard event={previewEventDraft} compact showActions={false} />
+
+            <div className="bg-white rounded-2xl p-3.5 border border-[#E5E5EA] space-y-1.5">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-semibold text-[#0B0B0B] inline-flex items-center gap-1">
+                  <Link2 className="w-3 h-3" />
+                  Invitation + Auto OG Image
                 </span>
+                <button
+                  type="button"
+                  onClick={handleCopySlug}
+                  className="font-semibold text-[#0B0B0B] underline"
+                >
+                  {copiedSlug ? 'Copied!' : 'Copy URL'}
+                </button>
               </div>
-
-              <div>
-                <div className="flex items-center gap-1.5 text-[11px] text-[#71717A] tabular-nums">
-                  <Calendar className="w-3.5 h-3.5" />
-                  <span>{dateLabel}</span>
-                </div>
-                <h3 className="text-sm font-bold text-[#0B0B0B] mt-1 leading-snug">{title}</h3>
-                <p className="text-[11px] text-[#71717A] mt-0.5 truncate">
-                  {venue} · {city}
-                </p>
-              </div>
-
-              <div className="w-full py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold text-center">
-                {ticketPrice === 0 ? 'Register Free Pass' : `Get Pass ($${ticketPrice})`}
-              </div>
+              <p className="text-[11px] font-mono text-[#71717A] truncate">
+                {buildEventInvitationUrl(slug || 'new-event')}
+              </p>
+              <p className="text-[10px] font-mono text-[#71717A] truncate">
+                og:image → {buildEventOgImageUrl(slug || 'new-event')}
+              </p>
             </div>
           </section>
 

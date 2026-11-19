@@ -149,11 +149,20 @@ create table if not exists public.events (
   venue_format text default 'in-person' check (venue_format in ('in-person', 'virtual', 'hybrid')),
   sender_id text,
   qr_pass_published boolean not null default false,
+  design_theme text,
+  validation_config jsonb,
+  extra_data_config jsonb,
   created_at timestamptz not null default now()
 );
 
 alter table public.events
   add column if not exists qr_pass_published boolean not null default false;
+alter table public.events
+  add column if not exists design_theme text;
+alter table public.events
+  add column if not exists validation_config jsonb;
+alter table public.events
+  add column if not exists extra_data_config jsonb;
 
 create index if not exists idx_events_organizer on public.events(organizer_id);
 create index if not exists idx_events_status on public.events(status);
@@ -172,9 +181,18 @@ create table if not exists public.attendees (
   ticket_code text not null,
   sms_status text not null default 'Arkesel Sent' check (sms_status in ('Arkesel Sent', 'Resend Delivered', 'Pending')),
   payment_status text not null default 'paid' check (payment_status in ('paid', 'failed')),
+  validation_group text,
+  invite_code_used text,
+  gift_entry jsonb,
+  custom_responses jsonb,
   created_at timestamptz not null default now(),
   unique (event_id, phone)
 );
+
+alter table public.attendees add column if not exists validation_group text;
+alter table public.attendees add column if not exists invite_code_used text;
+alter table public.attendees add column if not exists gift_entry jsonb;
+alter table public.attendees add column if not exists custom_responses jsonb;
 
 create index if not exists idx_attendees_event on public.attendees(event_id);
 
@@ -379,7 +397,11 @@ create or replace function public.register_public_attendee(
   p_phone text,
   p_organization text default 'Fast Pass Attendee',
   p_tier text default 'General',
-  p_ticket_code text default '#EVT-2026-0001'
+  p_ticket_code text default '#EVT-2026-0001',
+  p_validation_group text default null,
+  p_invite_code_used text default null,
+  p_gift_entry jsonb default null,
+  p_custom_responses jsonb default null
 )
 returns jsonb
 language plpgsql
@@ -403,9 +425,9 @@ begin
   end if;
 
   insert into public.attendees (
-    id, event_id, name, email, phone, organization, tier, checked_in, ticket_code, sms_status, payment_status
+    id, event_id, name, email, phone, organization, tier, checked_in, ticket_code, sms_status, payment_status, validation_group, invite_code_used, gift_entry, custom_responses
   ) values (
-    p_id, p_event_id, p_name, p_email, p_phone, coalesce(nullif(p_organization, ''), 'Fast Pass Attendee'), p_tier, false, p_ticket_code, 'Arkesel Sent', 'paid'
+    p_id, p_event_id, p_name, p_email, p_phone, coalesce(nullif(p_organization, ''), 'Fast Pass Attendee'), p_tier, false, p_ticket_code, 'Arkesel Sent', 'paid', p_validation_group, p_invite_code_used, p_gift_entry, p_custom_responses
   )
   returning * into v_attendee;
 
@@ -424,7 +446,7 @@ begin
 end;
 $$;
 
-grant execute on function public.register_public_attendee(text, text, text, text, text, text, text, text) to anon, authenticated;
+grant execute on function public.register_public_attendee(text, text, text, text, text, text, text, text, text, text, jsonb, jsonb) to anon, authenticated;
 
 -- 8. Apps Creator Console — Registered Apps & API Clients
 create table if not exists public.creator_apps (

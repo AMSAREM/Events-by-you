@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Check, Download, Plus, QrCode, Send, UserPlus, X } from 'lucide-react';
+import { AlertCircle, Check, Download, Gift, Plus, QrCode, Send, UserPlus, X } from 'lucide-react';
 import {
   Attendee,
   AttendeeTier,
@@ -7,7 +7,7 @@ import {
   OrganizerProfile,
   SystemAlert,
 } from '../types/events';
-import { normalizePhoneE164 } from '../data/initialData';
+import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
 import { CircularGauge } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
 
@@ -86,6 +86,21 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
   }, [events]);
 
   const selectedWalkInEvent = eventMap.get(walkInEventId || events[0]?.id || '');
+  const walkInCircles = useMemo<string[]>(() => {
+    if (!selectedWalkInEvent) return ['Invited Guest'];
+    return (
+      selectedWalkInEvent.validationConfig?.options ??
+      getCategoryPreset(selectedWalkInEvent.category).validationConfig.options
+    );
+  }, [selectedWalkInEvent]);
+  const [walkInValidationGroup, setWalkInValidationGroup] = useState<string>(
+    walkInCircles[0] ?? 'Invited Guest'
+  );
+  useEffect(() => {
+    if (walkInCircles.length > 0 && !walkInCircles.includes(walkInValidationGroup)) {
+      setWalkInValidationGroup(walkInCircles[0]);
+    }
+  }, [walkInCircles, walkInValidationGroup]);
   const walkInQrPublished = selectedWalkInEvent ? selectedWalkInEvent.qrPassPublished !== false : false;
 
   const filtered = useMemo(() => {
@@ -99,7 +114,9 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
         att.email.toLowerCase().includes(q) ||
         att.phone.toLowerCase().includes(q) ||
         att.organization.toLowerCase().includes(q) ||
-        att.ticketCode.toLowerCase().includes(q);
+        att.ticketCode.toLowerCase().includes(q) ||
+        (att.validationGroup?.toLowerCase().includes(q) ?? false) ||
+        (att.giftEntry?.registryItem?.toLowerCase().includes(q) ?? false);
       return matchesEvent && matchesTier && matchesQuery;
     });
   }, [attendees, eventFilter, tierFilter, searchQuery]);
@@ -142,6 +159,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
       checkedInAt: walkInCheckedIn ? nowTime : undefined,
       paymentStatus: 'paid',
       smsStatus: 'Arkesel Sent',
+      validationGroup: walkInValidationGroup || walkInCircles[0],
     });
 
     setWalkInName('');
@@ -153,15 +171,42 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
   };
 
   const handleExportCsv = () => {
-    const headers = ['Name', 'Organization', 'Email', 'Phone', 'Production', 'Tier', 'PassCode', 'CheckedIn'];
+    const headers = [
+      'Name',
+      'Organization',
+      'ValidationCircle',
+      'Email',
+      'Phone',
+      'Production',
+      'Tier',
+      'PassCode',
+      'GiftPledge',
+      'CustomData',
+      'CheckedIn',
+    ];
     const rows = filtered.map((a) => [
       a.name,
       a.organization,
+      a.validationGroup ?? '',
       a.email,
       a.phone,
       eventMap.get(a.eventId)?.title ?? 'Event',
       a.tier,
       a.ticketCode,
+      a.giftEntry
+        ? [
+            a.giftEntry.amount ? `${a.giftEntry.currency || 'GHS'} ${a.giftEntry.amount}` : '',
+            a.giftEntry.registryItem || '',
+            a.giftEntry.message || '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : '',
+      a.customResponses
+        ? Object.entries(a.customResponses)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join('; ')
+        : '',
       a.checkedIn ? `Yes (${a.checkedInAt ?? 'Today'})` : 'No',
     ]);
     const csv = [headers.join(','), ...rows.map((r) => r.map((c) => `"${c}"`).join(','))].join('\n');
@@ -398,6 +443,34 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                         <p className="text-[11px] font-mono text-[#0B0B0B] mt-0.5 tabular-nums">
                           {att.phone}
                         </p>
+                        {(att.validationGroup || att.giftEntry || (att.customResponses && Object.keys(att.customResponses).length > 0)) && (
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            {att.validationGroup && (
+                              <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[10px] font-semibold text-[#0B0B0B]">
+                                {att.validationGroup}
+                              </span>
+                            )}
+                            {att.giftEntry && (
+                              <span className="px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-[10px] font-semibold text-amber-800 inline-flex items-center gap-1">
+                                <Gift className="w-2.5 h-2.5" />
+                                {att.giftEntry.amount
+                                  ? `${att.giftEntry.currency || 'GHS'} ${att.giftEntry.amount}`
+                                  : att.giftEntry.registryItem || 'Gift Pledged'}
+                              </span>
+                            )}
+                            {att.customResponses &&
+                              Object.entries(att.customResponses)
+                                .slice(0, 2)
+                                .map(([key, val]) => (
+                                  <span
+                                    key={key}
+                                    className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[10px] text-[#444748]"
+                                  >
+                                    {val}
+                                  </span>
+                                ))}
+                          </div>
+                        )}
                       </td>
                       <td className="py-3.5 px-4 text-xs text-[#0B0B0B]">
                         {evt ? (
@@ -580,6 +653,23 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                     <option value="Press">Press</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
+                  Validation Circle
+                </label>
+                <select
+                  value={walkInValidationGroup}
+                  onChange={(e) => setWalkInValidationGroup(e.target.value)}
+                  className="w-full h-10 px-3 rounded-2xl bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] focus:outline-none"
+                >
+                  {walkInCircles.map((circle: string) => (
+                    <option key={circle} value={circle}>
+                      {circle}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <label className="flex items-center gap-2.5 pt-1 cursor-pointer select-none">

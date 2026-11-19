@@ -359,6 +359,9 @@ export const api = {
   public: {
     getEvents: () => request<{ events: EventItem[] }>('/api/public/events'),
 
+    getEventBySlugOrId: (slugOrId: string) =>
+      request<{ event: EventItem }>(`/api/public/events/${encodeURIComponent(slugOrId)}`),
+
     registerAttendee: (
       eventId: string,
       payload: {
@@ -368,6 +371,10 @@ export const api = {
         organization?: string;
         tier?: Attendee['tier'];
         ticketCode?: string;
+        validationGroup?: string;
+        inviteCodeUsed?: string;
+        giftEntry?: Attendee['giftEntry'];
+        customResponses?: Record<string, string>;
       }
     ) =>
       request<{ attendee: Attendee; event: EventItem }>(

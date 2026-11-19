@@ -576,6 +576,14 @@ export function createMemoryRouter() {
     return res.json({ events: memoryStore.getPublicEvents() });
   });
 
+  router.get('/public/events/:slugOrId', (req, res) => {
+    const evt = memoryStore.getPublicEventBySlugOrId(req.params.slugOrId);
+    if (!evt) {
+      return res.status(404).json({ error: 'Event invitation not found or no longer active.' });
+    }
+    return res.json({ event: evt });
+  });
+
   router.post('/public/events/:eventId/register', async (req, res) => {
     const { eventId } = req.params;
     if (
@@ -587,13 +595,28 @@ export function createMemoryRouter() {
       });
     }
 
-    const { name, email, phone, organization, tier, ticketCode } = req.body as {
+    const {
+      name,
+      email,
+      phone,
+      organization,
+      tier,
+      ticketCode,
+      validationGroup,
+      inviteCodeUsed,
+      giftEntry,
+      customResponses,
+    } = req.body as {
       name?: string;
       email?: string;
       phone?: string;
       organization?: string;
       tier?: Attendee['tier'];
       ticketCode?: string;
+      validationGroup?: string;
+      inviteCodeUsed?: string;
+      giftEntry?: Attendee['giftEntry'];
+      customResponses?: Record<string, string>;
     };
 
     if (!name?.trim() || !email?.trim() || !phone?.trim()) {
@@ -645,6 +668,10 @@ export function createMemoryRouter() {
         tier,
         ticketCode: finalCode,
         smsStatus: finalDeliveryStatus,
+        validationGroup,
+        inviteCodeUsed,
+        giftEntry,
+        customResponses,
       });
       return res.status(201).json(result);
     } catch (err) {
@@ -652,6 +679,11 @@ export function createMemoryRouter() {
       if (msg.includes('QR_PASS_NOT_PUBLISHED:')) {
         return res.status(403).json({
           error: 'Check-in QR passes have not been published by the event creator yet.',
+        });
+      }
+      if (msg.includes('INVALID_INVITE_CODE:')) {
+        return res.status(403).json({
+          error: msg.split('INVALID_INVITE_CODE:')[1],
         });
       }
       if (msg.includes('DUPLICATE_PHONE:')) {

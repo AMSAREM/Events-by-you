@@ -12,7 +12,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Layers,
-  Lock,
   Mail,
   MapPin,
   MessageSquare,
@@ -28,7 +27,9 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { Attendee, EventItem } from '../types/events';
-import { EVENT_CATEGORIES } from '../data/initialData';
+import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
+import { DeterministicQrSvg, buildEventInvitationUrl } from '../lib/qr';
+import { EventFlyerCard } from './EventFlyerCard';
 
 interface LandingScreenProps {
   featuredEvent: EventItem;
@@ -39,7 +40,7 @@ interface LandingScreenProps {
   onNavigateSignIn: (prefillEmail?: string) => void;
   onNavigateSignUp: (prefillEmail?: string) => void;
   onCreateEvent?: () => void;
-  onNavigateDemoEvent: (eventId?: string, focusSection?: 'top' | 'register') => void;
+  onNavigateDemoEvent: (eventId?: string, focusSection?: 'top' | 'register' | 'checkin') => void;
   onNavigateStudio: () => void;
   onSignOut?: () => void;
   onOpenQrScanner?: (eventId?: string) => void;
@@ -54,10 +55,10 @@ const SHOWCASE_CARDS = [
     city: 'Accra · 250 Guests',
     title: 'Mensah & Boateng Royal Wedding',
     desc: 'Sent 250 personalized family table & gate QR passes via MTN Ghana SMS with zero uninvited gate congestion.',
-    metaLeft: 'Wedding & Reception · 100% SMS',
-    metaRight: 'Nov 2025',
-    img: 'https://lh3.googleusercontent.com/aida-public/AB6AXuBqdQMrDffGOyHEwpnKTm-3CbnTfnwQ_1ITZ74OxiMLqu8JwWar2YqO4QncyEjv5ZyPsNPqDHZ_dX-w8eVj1MJsZp84O8t7CUChBDWIuLvJ0s4WcybODsEi5dYZxOOmQ1U8sqqzk5K44ARXT7iJ7c-WDhED5izHuSkK3rZgmpbaHmZ-9wvLoDbmOFHDB74SgnKWxjZJxmpUgN7-SfM61Gg7uoOLPpMOuj2tWFeV39I',
-    alt: 'A formal wedding and corporate celebration auditorium in Accra Ghana.',
+    metaLeft: 'Wedding & Gift Table · 100% SMS',
+    metaRight: 'Nov 2026',
+    img: '/src/assets/images/flyer_wedding_royal_1795075790983.jpg',
+    alt: 'Mensah and Boateng royal wedding reception in Accra Ghana.',
   },
   {
     city: 'Accra · 1,200 Members',
@@ -65,7 +66,7 @@ const SHOWCASE_CARDS = [
     desc: 'Offline-first church gate check-in scanned 1,100+ congregation passes smoothly even during sanctuary bandwidth dips.',
     metaLeft: 'Church & Memorial · Offline PWA',
     metaRight: 'Jan 2026',
-    img: 'https://lh3.googleusercontent.com/aida-public/AB6AXuAuUW0cp_miKU3K9RaPob6LVYjfeEMZ7jl6RGfZICcCIcRGAG3EGfeE8QBrn3EQKKy6YCdIoSp_V-pBojAtVXCWDfKHuBcZCZBKdpPVDeOjRRdei5uncIeq4z-_ztXiB370d_Z2Kt_eHrSECOwc3y68KLjd7fv5kL9o4UIkABEIgKk33erh20uCBbs9UeRx_suFVEvm_2VV7n6Yx72zGHHB4sQYMVyLtMF7-SViuAc',
+    img: '/src/assets/images/flyer_church_revival_1795075792994.jpg',
     alt: 'A large church convention and musical stage hall.',
   },
   {
@@ -74,13 +75,12 @@ const SHOWCASE_CARDS = [
     desc: 'Handled VIP concert tables, executive corporate badges, and post-event thank-you SMS blasts in a single workspace.',
     metaLeft: 'Musical · Corporate · Tech',
     metaRight: 'Feb 2026',
-    img: 'https://lh3.googleusercontent.com/aida-public/AB6AXuDKaMIegmFvTXWyiQBkM5sHw0txMLUSGU5xQHo4EFrekKXUUrVsAg7EFUlwoTq17diFtM6Ye6hbK2tcvDNgrvnnVqVPoM7vGLbfC5NYdmetke6gXtvGnvWVIvKt-CSUM8PkHElalrcBnC5y0fMttGmMppswQ8E2oD4v_I5XyMR02m-d8rvbp0cC3C79DdkLxHD-E0Kz-WnTNSBU7WbiP35G78U9HQBD4RuBYS5GJ04',
-    alt: 'A stylish monochrome musical and corporate event showcase gallery.',
+    img: '/src/assets/images/flyer_musical_live_1795075793134.jpg',
+    alt: 'Stylish monochrome musical concert and corporate event showcase.',
   },
 ];
 
-const HERO_BACKDROP_IMG =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuA2B37ASDLzQJlTEgxHjO5HiKbfdUBIQ5QUuvv6wzTLOe1EUrMjwlof1Sm6J9tf96MOXiGJo_fEcySLmoUMa-2BZVEv0S4Rho53cHQBMESnSfw-d1Rk6w73AQnrI19P7QhX27KkxVnI8H8fOaTE-xOCkZVJqrlOZz66QL_jcBEhbyqtGxB8IFRoFtdbuOUjfxznKUXZosWukNQnqlOkBDdPh1VZSXIbyHCGznja8tw';
+const HERO_BACKDROP_IMG = '/src/assets/images/flyer_corporate_gala_1795075792816.jpg';
 
 export const LandingScreen: React.FC<LandingScreenProps> = ({
   featuredEvent,
@@ -133,7 +133,16 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
   }, [allEvents, finderCategory, finderCity, finderQuery]);
 
   const topMatchedEvent = matchingEvents[0] ?? featuredEvent;
-  const checkInRegistrationAvailable = isSignedIn && hasSetEvent;
+
+  const publishedEvents = useMemo(() => {
+    const active = allEvents.filter((evt) => evt.status !== 'draft');
+    const sorted = [...active].sort((a, b) => {
+      const aCustom = a.flyerUrl?.startsWith('data:') ? 1 : 0;
+      const bCustom = b.flyerUrl?.startsWith('data:') ? 1 : 0;
+      return bCustom - aCustom;
+    });
+    return sorted.slice(0, 9);
+  }, [allEvents]);
 
   useEffect(() => {
     if (sliderPaused) return;
@@ -317,54 +326,35 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   <div className="mt-7 sm:mt-8 flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-3.5">
                     <button
                       type="button"
-                      onClick={() =>
-                        onOpenQrScanner ? onOpenQrScanner(topMatchedEvent.id) : onNavigateStudio()
-                      }
+                      onClick={() => onNavigateDemoEvent(topMatchedEvent.id, 'checkin')}
                       className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white text-[#0B0B0B] text-xs font-bold px-5 sm:px-6 py-3.5 rounded-full shadow-lg hover:bg-neutral-200 transition-all hover:-translate-y-0.5 whitespace-nowrap shrink-0"
                     >
                       <QrCode className="w-4 h-4" />
-                      <span>Open QR Code Scanner</span>
+                      <span>Check-In &amp; QR Screen</span>
                     </button>
                     <button
                       type="button"
-                      title={
-                        !isSignedIn
-                          ? 'Sign in to open Check-In Registration'
-                          : !hasSetEvent
-                            ? 'Create or set an event first to enable Check-In Registration'
-                            : 'Open Check-In Registration'
-                      }
-                      onClick={() => {
-                        if (!isSignedIn) {
-                          onNavigateSignIn();
-                          return;
-                        }
-                        onNavigateDemoEvent(topMatchedEvent.id, 'register');
-                      }}
-                      className={`w-full sm:w-auto inline-flex items-center justify-center gap-2 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border backdrop-blur-md transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-                        checkInRegistrationAvailable
-                          ? 'bg-white/15 text-white hover:bg-white/25 border-white/20'
-                          : 'bg-white/5 text-white/45 border-white/10'
-                      }`}
+                      onClick={() => onNavigateDemoEvent(topMatchedEvent.id, 'register')}
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/15 text-white hover:bg-white/25 border-white/20 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border backdrop-blur-md transition-all whitespace-nowrap shrink-0 cursor-pointer"
                     >
-                      {checkInRegistrationAvailable ? (
-                        <UserPlus className="w-4 h-4" />
-                      ) : (
-                        <Lock className="w-3.5 h-3.5" />
-                      )}
-                      <span>
-                        {!checkInRegistrationAvailable
-                          ? 'Check-In Registration'
-                          : topMatchedEvent.qrPassPublished === false
-                            ? 'Check-In Registration (Pending)'
-                            : 'Check-In Registration'}
-                      </span>
+                      <UserPlus className="w-4 h-4" />
+                      <span>RSVP &amp; Guest Validation</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpenQrScanner ? onOpenQrScanner(topMatchedEvent.id) : onNavigateStudio()
+                      }
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/10 text-white hover:bg-white/20 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border border-white/15 backdrop-blur-md transition-all whitespace-nowrap shrink-0"
+                    >
+                      <Shield className="w-4 h-4" />
+                      <span>Gate Scanner</span>
                     </button>
                     {onOpenDisposableCamera && (
                       <button
                         type="button"
                         onClick={() => onOpenDisposableCamera(topMatchedEvent.id)}
-                        className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/15 text-white hover:bg-white/25 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border border-white/20 backdrop-blur-md transition-all whitespace-nowrap shrink-0"
+                        className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/10 text-white hover:bg-white/20 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border border-white/15 backdrop-blur-md transition-all whitespace-nowrap shrink-0"
                       >
                         <Camera className="w-4 h-4" />
                         <span>Disposable Camera</span>
@@ -383,7 +373,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   </div>
                   {!isSignedIn && (
                     <p className="mt-3 text-[11px] text-white/60">
-                      Individuals &amp; event teams can sign up free in seconds to create events &amp; programs, run QR Gate Scanner &amp; Disposable Camera.
+                      Open any invitation link to validate your circle &amp; claim a QR pass — or sign up free in seconds to host events.
                     </p>
                   )}
                 </div>
@@ -558,29 +548,36 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <QrCode className="w-5 h-5 sm:w-6 sm:h-6" />
                   </div>
                   <span className="text-[11px] font-mono text-emerald-400 bg-white/10 px-3 py-1 rounded-full whitespace-nowrap">
-                    0.3s Camera Verify
+                    0.3s Camera &amp; Kiosk QR
                   </span>
                 </div>
                 <div>
                   <h2 className="font-display text-lg sm:text-xl lg:text-2xl font-bold tracking-tight">
-                    Live QR Code Gate Scanner
+                    Prominent Check-In &amp; QR Pass Screen
                   </h2>
                   <p className="text-xs sm:text-sm text-zinc-300 mt-1.5 leading-relaxed">
-                    Launch the camera QR scanner or enter any guest pass code at the door. Blocks
-                    duplicate scans automatically and syncs gate turnout in real time.
+                    Display the fullscreen guest Check-In QR Pass screen at the venue entrance or
+                    launch the volunteer gate scanner to block duplicate entries in real time.
                   </p>
                 </div>
                 <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 pt-1">
                   <button
                     type="button"
-                    onClick={() =>
-                      onOpenQrScanner ? onOpenQrScanner(topMatchedEvent.id) : onNavigateStudio()
-                    }
+                    onClick={() => onNavigateDemoEvent(topMatchedEvent.id, 'checkin')}
                     className="w-full sm:w-auto justify-center px-5 py-2.5 rounded-full bg-white text-[#0B0B0B] text-xs font-bold hover:bg-zinc-200 transition-colors inline-flex items-center gap-2 whitespace-nowrap"
                   >
                     <QrCode className="w-4 h-4" />
-                    <span>Launch QR Scanner Now</span>
+                    <span>Open Check-In &amp; QR Screen</span>
                     <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenQrScanner ? onOpenQrScanner(topMatchedEvent.id) : onNavigateStudio()
+                    }
+                    className="w-full sm:w-auto justify-center px-4 py-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition-colors whitespace-nowrap"
+                  >
+                    Gate Scanner
                   </button>
                 </div>
               </div>
@@ -591,38 +588,70 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <UserPlus className="w-5 h-5 sm:w-6 sm:h-6" />
                   </div>
                   <span className="text-[11px] font-mono text-[#0B0B0B] bg-[#F5F5F7] px-3 py-1 rounded-full whitespace-nowrap">
-                    Walk-In &amp; RSVP Passes
+                    Validation · Gift Table · RSVP
                   </span>
                 </div>
                 <div>
                   <h2 className="font-display text-lg sm:text-xl lg:text-2xl font-bold tracking-tight">
-                    Instant Check-In Registration
+                    Guest Validation, Gift Table &amp; RSVP
                   </h2>
                   <p className="text-xs sm:text-sm text-[#71717A] mt-1.5 leading-relaxed">
-                    Collect guest details in seconds for weddings, church services, funerals,
-                    concerts, or summits—delivering a scannable QR gate pass via Arkesel SMS.
+                    Every invitation includes an event-specific validation form (Family, Friends,
+                    VIP), Wedding Gift Table MoMo &amp; registry forms, and custom attendee fields.
                   </p>
                 </div>
                 <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 pt-1">
                   <button
                     type="button"
-                    onClick={() => onNavigateDemoEvent(topMatchedEvent.id)}
+                    onClick={() => onNavigateDemoEvent(topMatchedEvent.id, 'register')}
                     className="w-full sm:w-auto justify-center px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-bold hover:bg-neutral-800 transition-colors inline-flex items-center gap-2 whitespace-nowrap"
                   >
                     <UserPlus className="w-4 h-4" />
-                    <span>Open Registration Form</span>
+                    <span>Open Registration &amp; Validation</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                   <button
                     type="button"
-                    onClick={() =>
-                      onOpenQrScanner ? onOpenQrScanner(topMatchedEvent.id) : onNavigateStudio()
-                    }
+                    onClick={() => onNavigateDemoEvent(topMatchedEvent.id, 'top')}
                     className="w-full sm:w-auto justify-center px-4 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-[#0B0B0B] text-xs font-semibold transition-colors whitespace-nowrap"
                   >
-                    Walk-In Gate Desk
+                    View Invite Flyer
                   </button>
                 </div>
+              </div>
+            </div>
+
+            {/* PUBLISHED EVENTS & DESIGNER INVITATION FLYERS GALLERY */}
+            <div className="mt-10 sm:mt-14 max-w-6xl mx-auto">
+              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-6">
+                <div>
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-[#71717A]">
+                    Published Events · Direct /e/slug Invitations &amp; OG Previews
+                  </span>
+                  <h2 className="mt-1 font-display text-[24px] sm:text-[30px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.02em]">
+                    Designer Event Flyers Ready for Sharing
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignUp()
+                  }
+                  className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors self-start sm:self-auto whitespace-nowrap"
+                >
+                  Publish Your Event
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {publishedEvents.map((evt) => (
+                  <EventFlyerCard
+                    key={evt.id}
+                    event={evt}
+                    onOpenInvite={(target) => onNavigateDemoEvent(target.id, 'top')}
+                    onOpenCheckIn={(target) => onNavigateDemoEvent(target.id, 'checkin')}
+                  />
+                ))}
               </div>
             </div>
 
@@ -782,13 +811,23 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                           </div>
 
                           <div className="p-3 bg-[#F5F5F7] rounded-xl border border-dashed border-[#C4C7C7] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <span className="text-xs font-semibold text-[#0B0B0B] block">
-                                Hero Flyer Optimized (1920 × 1080 WebP)
-                              </span>
-                              <span className="text-[11px] text-[#71717A] block">
-                                {featuredEvent.venue} · Ready for instant edge deploy
-                              </span>
+                            <div className="flex items-center gap-3 min-w-0">
+                              <img
+                                src={
+                                  featuredEvent.flyerUrl ||
+                                  getCategoryPreset(featuredEvent.category).flyerUrl
+                                }
+                                alt={`${featuredEvent.title} hero flyer`}
+                                className="w-12 h-10 rounded-lg object-cover border border-[#E5E5EA] shrink-0"
+                              />
+                              <div className="min-w-0">
+                                <span className="text-xs font-semibold text-[#0B0B0B] block truncate">
+                                  Hero Flyer Active · {featuredEvent.title}
+                                </span>
+                                <span className="text-[11px] text-[#71717A] block truncate">
+                                  {featuredEvent.venue} · Ready for instant edge deploy
+                                </span>
+                              </div>
                             </div>
                             <button
                               type="button"
@@ -1145,28 +1184,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
 
                         <div className="mt-5 bg-white p-5 rounded-2xl text-[#0B0B0B] flex flex-col items-center relative">
                           <div className="w-32 h-32 bg-[#EEEEF0] flex items-center justify-center rounded-xl p-2 relative">
-                            <svg
-                              className="w-28 h-28 text-[#0B0B0B] fill-current"
-                              viewBox="0 0 100 100"
-                              aria-hidden="true"
-                            >
-                              <path d="M0,0 h30 v30 h-30 z M5,5 v20 h20 v-20 z M10,10 h10 v10 h-10 z" />
-                              <path d="M70,0 h30 v30 h-30 z M75,5 v20 h20 v-20 z M80,10 h10 v10 h-10 z" />
-                              <path d="M0,70 h30 v30 h-30 z M5,75 v20 h20 v-20 z M10,80 h10 v10 h-10 z" />
-                              <rect height="10" width="20" x="40" y="5" />
-                              <rect height="15" width="10" x="40" y="25" />
-                              <rect height="20" width="5" x="60" y="20" />
-                              <rect height="10" width="15" x="5" y="40" />
-                              <rect height="10" width="15" x="25" y="45" />
-                              <rect height="10" width="25" x="50" y="45" />
-                              <rect height="15" width="15" x="80" y="40" />
-                              <rect height="15" width="15" x="40" y="65" />
-                              <rect height="15" width="10" x="65" y="65" />
-                              <rect height="25" width="15" x="80" y="70" />
-                              <rect height="10" width="25" x="45" y="85" />
-                            </svg>
-                            <div className="w-9 h-9 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-lg absolute">
-                              <Check className="w-5 h-5" />
+                            <DeterministicQrSvg
+                              value={buildEventInvitationUrl(featuredEvent.slug || featuredEvent.id, 'checkin')}
+                              size={112}
+                              className="rounded-lg"
+                            />
+                            <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-lg absolute">
+                              <Check className="w-4 h-4" />
                             </div>
                           </div>
                           <span className="mt-3 font-mono text-[13px] font-bold tracking-widest text-[#0B0B0B]">

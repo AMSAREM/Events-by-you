@@ -57,6 +57,31 @@ const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_WARNING_MS = 60 * 1000;
 const LAST_ACTIVITY_KEY = 'eventsapp_last_activity_v1';
 
+function parseInvitationFromLocation(): {
+  slugOrId?: string;
+  focus?: 'top' | 'register' | 'checkin';
+} {
+  if (typeof window === 'undefined') return {};
+  const pathname = window.location.pathname;
+  const match = pathname.match(/^\/e\/([^/]+)\/?$/i);
+  const params = new URLSearchParams(window.location.search);
+  const tab = (params.get('tab') || '').toLowerCase();
+  const focus: 'top' | 'register' | 'checkin' =
+    tab === 'checkin' || tab === 'qr'
+      ? 'checkin'
+      : tab === 'register'
+        ? 'register'
+        : 'top';
+  if (match && match[1]) {
+    return { slugOrId: decodeURIComponent(match[1]), focus };
+  }
+  const eventQuery = params.get('event')?.trim();
+  if (eventQuery) {
+    return { slugOrId: eventQuery, focus };
+  }
+  return {};
+}
+
 function getInitialRouteFromPathname(): AppRoute {
   if (typeof window === 'undefined') return 'home';
   const path = window.location.pathname.toLowerCase();
@@ -64,6 +89,7 @@ function getInitialRouteFromPathname(): AppRoute {
   if (path === '/privacy') return 'privacy';
   if (path === '/signin') return 'signin';
   if (path === '/signup') return 'signup';
+  if (parseInvitationFromLocation().slugOrId) return 'demo-event';
   return 'home';
 }
 
@@ -136,8 +162,12 @@ export default function App() {
   const [cameraReturnRoute, setCameraReturnRoute] = useState<'home' | 'demo-event'>('home');
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [workspaceEventId, setWorkspaceEventId] = useState<string | null>(null);
-  const [publicPreviewEventId, setPublicPreviewEventId] = useState<string | undefined>(undefined);
-  const [publicPreviewFocus, setPublicPreviewFocus] = useState<'top' | 'register'>('top');
+  const [publicPreviewEventId, setPublicPreviewEventId] = useState<string | undefined>(
+    () => parseInvitationFromLocation().slugOrId
+  );
+  const [publicPreviewFocus, setPublicPreviewFocus] = useState<'top' | 'register' | 'checkin'>(
+    () => parseInvitationFromLocation().focus || 'top'
+  );
   const [publicEventsLoading, setPublicEventsLoading] = useState<boolean>(true);
 
   const notifyError = useCallback((err: unknown, fallback: string) => {
@@ -297,7 +327,8 @@ export default function App() {
 
   const syncBrowserPath = useCallback((nextPath: string) => {
     if (typeof window === 'undefined') return;
-    if (window.location.pathname !== nextPath) {
+    const currentFull = `${window.location.pathname}${window.location.search}`;
+    if (currentFull !== nextPath) {
       window.history.pushState(null, '', nextPath);
     }
   }, []);
@@ -317,12 +348,45 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [syncBrowserPath]);
 
+  const openEventInvitation = useCallback(
+    (evtOrSlug?: EventItem | string, focus: 'top' | 'register' | 'checkin' = 'top') => {
+      const slugOrId =
+        typeof evtOrSlug === 'string'
+          ? evtOrSlug
+          : evtOrSlug?.slug || evtOrSlug?.id || 'tech-leaders-summit-2026';
+      const targetId =
+        typeof evtOrSlug === 'string' ? evtOrSlug : evtOrSlug?.id || slugOrId;
+      setPublicPreviewEventId(targetId);
+      setPublicPreviewFocus(focus);
+      setRoute('demo-event');
+      const query = focus === 'checkin' ? '?tab=checkin' : focus === 'register' ? '?tab=register' : '';
+      syncBrowserPath(`/e/${encodeURIComponent(slugOrId)}${query}`);
+      if (focus === 'top') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    },
+    [syncBrowserPath]
+  );
+
   useEffect(() => {
     const handlePopState = () => {
+      const invite = parseInvitationFromLocation();
+      if (invite.slugOrId) {
+        setPublicPreviewEventId(invite.slugOrId);
+        setPublicPreviewFocus(invite.focus || 'top');
+        setRoute('demo-event');
+        return;
+      }
       const pathRoute = getInitialRouteFromPathname();
       setRoute((prev) => {
         if (pathRoute !== 'home') return pathRoute;
-        if (prev === 'terms' || prev === 'privacy' || prev === 'signin' || prev === 'signup') {
+        if (
+          prev === 'terms' ||
+          prev === 'privacy' ||
+          prev === 'signin' ||
+          prev === 'signup' ||
+          prev === 'demo-event'
+        ) {
           return 'home';
         }
         return prev;
@@ -791,6 +855,10 @@ export default function App() {
       organization: attendee.organization,
       tier: attendee.tier,
       ticketCode: attendee.ticketCode,
+      validationGroup: attendee.validationGroup,
+      inviteCodeUsed: attendee.inviteCodeUsed,
+      giftEntry: attendee.giftEntry,
+      customResponses: attendee.customResponses,
     });
     setPublicEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
     if (isSignedIn) {
@@ -1058,7 +1126,83 @@ export default function App() {
       : safePublicEvents.length > 0
         ? safePublicEvents
         : safeEvents;
-  const featuredEvent = landingEvents[0] ?? INITIAL_EVENTS[0];
+  const featuredEvent =
+    landingEvents.find((e) => e.status !== 'draft' && e.flyerUrl?.startsWith('data:')) ??
+    landingEvents[0] ??
+    INITIAL_EVENTS[0];
+
+  useEffect(() => {
+    if (route !== 'demo-event' || !publicPreviewEventId) return;
+    const pool = [...safeEvents, ...safePublicEvents];
+    const targetLower = publicPreviewEventId.toLowerCase();
+    const matched = pool.find(
+      (e) => e.id.toLowerCase() === targetLower || e.slug.toLowerCase() === targetLower
+    );
+    if (!matched) {
+      let cancelled = false;
+      api.public
+        .getEventBySlugOrId(publicPreviewEventId)
+        .then((res) => {
+          if (cancelled || !res?.event) return;
+          setPublicEvents((prev) =>
+            prev.some((e) => e.id === res.event.id) ? prev : [res.event, ...prev]
+          );
+          setPublicPreviewEventId(res.event.id);
+        })
+        .catch(() => {
+          // Non-fatal fallback handled by PublicEventScreen
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [route, publicPreviewEventId, safeEvents, safePublicEvents]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const setMeta = (attr: 'property' | 'name', key: string, value: string) => {
+      let el = document.querySelector(`meta[${attr}="${key}"]`) as HTMLMetaElement | null;
+      if (!el) {
+        el = document.createElement('meta');
+        el.setAttribute(attr, key);
+        document.head.appendChild(el);
+      }
+      el.setAttribute('content', value);
+    };
+
+    if (route === 'demo-event') {
+      const pool = [...safeEvents, ...safePublicEvents];
+      const targetLower = (publicPreviewEventId || '').toLowerCase();
+      const active =
+        pool.find((e) => e.id.toLowerCase() === targetLower || e.slug.toLowerCase() === targetLower) ??
+        featuredEvent;
+      if (active) {
+        const cleanSlug = encodeURIComponent(active.slug || active.id);
+        const origin = window.location.origin;
+        const inviteUrl = `${origin}/e/${cleanSlug}`;
+        const ogImg = `${origin}/api/og/event/${cleanSlug}`;
+        const title = `${active.title} — ${active.date} · ${active.city} | Events App`;
+        const desc = `${active.organizer} invites you to ${active.title} on ${active.date} at ${active.venue}, ${active.city}.`;
+        document.title = title;
+        setMeta('name', 'description', desc);
+        setMeta('property', 'og:title', title);
+        setMeta('property', 'og:description', desc);
+        setMeta('property', 'og:url', inviteUrl);
+        setMeta('property', 'og:image', ogImg);
+        setMeta('name', 'twitter:title', title);
+        setMeta('name', 'twitter:description', desc);
+        setMeta('name', 'twitter:image', ogImg);
+        return;
+      }
+    }
+
+    document.title = 'Events App — Event Registration & SMS Ticketing';
+    const defaultOg = `${window.location.origin}/api/og/event/${encodeURIComponent(
+      featuredEvent.slug || featuredEvent.id
+    )}`;
+    setMeta('property', 'og:image', defaultOg);
+    setMeta('name', 'twitter:image', defaultOg);
+  }, [route, publicPreviewEventId, safeEvents, safePublicEvents, featuredEvent]);
 
   const sessionTimeoutModal =
     isSignedIn && sessionWarningSecondsLeft !== null ? (
@@ -1193,32 +1337,10 @@ export default function App() {
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           onNavigateDemoEvent={(eventId, focusSection = 'top') => {
-            if (focusSection === 'register') {
-              if (!isSignedIn) {
-                setPendingTarget({
-                  route: 'studio',
-                  screen: 'events',
-                  subScreen: 'create-event',
-                  label: 'Check-In Registration',
-                });
-                setSessionTimeoutNotice(null);
-                setRoute('signup');
-                syncBrowserPath('/signup');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-                return;
-              }
-              if (!hasSetEvent) {
-                setApiBannerError('Set up an event first to unlock Check-In Registration.');
-                openCreateWizard();
-                return;
-              }
-            }
-            setPublicPreviewEventId(eventId || featuredEvent.id);
-            setPublicPreviewFocus(focusSection);
-            setRoute('demo-event');
-            if (focusSection !== 'register') {
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }
+            const pool = landingEvents.length > 0 ? landingEvents : safePublicEvents;
+            const matched =
+              pool.find((e) => e.id === eventId || e.slug === eventId) ?? featuredEvent;
+            openEventInvitation(matched, focusSection);
           }}
           onNavigateStudio={() =>
             requireSignedIn({
@@ -1361,16 +1483,16 @@ export default function App() {
   }
 
   if (route === 'demo-event') {
+    const demoEventsPool =
+      isSignedIn && safeEvents.length > 0
+        ? safeEvents
+        : safePublicEvents.length > 0
+          ? safePublicEvents
+          : safeEvents;
     return (
       <>
         <PublicEventScreen
-          events={
-            isSignedIn && safeEvents.length > 0
-              ? safeEvents
-              : safePublicEvents.length > 0
-                ? safePublicEvents
-                : safeEvents
-          }
+          events={demoEventsPool}
           attendees={safeAttendees}
           initialEventId={publicPreviewEventId}
           initialFocus={publicPreviewFocus}
@@ -1378,6 +1500,10 @@ export default function App() {
           isSignedIn={isSignedIn}
           hasSetEvent={hasSetEvent}
           onBackHome={navigateHome}
+          onSelectEvent={(evt) => {
+            setPublicPreviewEventId(evt.id);
+            syncBrowserPath(`/e/${encodeURIComponent(evt.slug || evt.id)}`);
+          }}
           onOpenStudio={() =>
             requireSignedIn({
               route: 'studio',
@@ -1390,7 +1516,7 @@ export default function App() {
               route: 'studio',
               screen: 'events',
               subScreen: 'create-event',
-              label: 'Check-In Registration',
+              label: 'Create Event',
             });
             setSessionTimeoutNotice(null);
             setRoute('signup');
@@ -1536,6 +1662,8 @@ export default function App() {
           }}
           onBackToPublicHome={() => {
             setRoute('home');
+            syncBrowserPath('/');
+            void loadPublicEvents();
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           onSignOut={handleSignOut}
@@ -1642,11 +1770,10 @@ export default function App() {
                 setActiveScreen('events');
               }}
               onOpenEditModal={(evt) => setSelectedEventId(evt.id)}
+              onUpdateEvent={handleUpdateEvent}
               onOpenPlans={openBillingScreen}
-              onPreviewPublicEvent={() => {
-                setPublicPreviewEventId(workspaceEvent.id);
-                setRoute('demo-event');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+              onPreviewPublicEvent={(focus?: 'top' | 'checkin') => {
+                openEventInvitation(workspaceEvent, focus ?? 'top');
               }}
               onToggleCheckIn={handleToggleCheckIn}
               onRegisterAttendee={handleStudioRegisterAttendee}
@@ -1676,6 +1803,8 @@ export default function App() {
                   onSearchChange={setOverviewSearch}
                   onOpenCreateModal={openCreateWizard}
                   onManageEvent={handleOpenWorkspace}
+                  onEditEventModal={(evt) => setSelectedEventId(evt.id)}
+                  onUpdateEvent={handleUpdateEvent}
                   onNavigateAttendees={handleNavigateAttendees}
                   onOpenQrScanner={(evtId, code) => openQrScanner(evtId, code)}
                   onNavigateEvents={() => setActiveScreen('events')}
@@ -1733,6 +1862,7 @@ export default function App() {
                   onManageEvent={handleOpenWorkspace}
                   onNavigateAttendees={handleNavigateAttendees}
                   onOpenQrScanner={(evtId) => openQrScanner(evtId)}
+                  onOpenInvitation={(evt) => openEventInvitation(evt, 'top')}
                   onNavigateSettings={() => setActiveScreen('settings')}
                   onResolveAlert={handleResolveAlert}
                 />

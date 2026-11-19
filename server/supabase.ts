@@ -139,6 +139,7 @@ export function mapEventRow(row: Record<string, unknown>): EventItem {
     revenue: Number(row.revenue ?? 0),
     organizer: String(row.organizer ?? 'Organiser'),
     artwork: (row.artwork as EventItem['artwork']) || 'architecture',
+    designTheme: (row.design_theme as EventItem['designTheme']) || undefined,
     broadcastError: row.broadcast_error != null ? String(row.broadcast_error) : undefined,
     flyerUrl: row.flyer_url != null ? String(row.flyer_url) : undefined,
     venueFormat:
@@ -148,6 +149,14 @@ export function mapEventRow(row: Record<string, unknown>): EventItem {
       row.qr_pass_published !== undefined
         ? Boolean(row.qr_pass_published)
         : (row.status as EventItem['status']) !== 'draft',
+    validationConfig:
+      row.validation_config && typeof row.validation_config === 'object'
+        ? (row.validation_config as EventItem['validationConfig'])
+        : undefined,
+    extraDataConfig:
+      row.extra_data_config && typeof row.extra_data_config === 'object'
+        ? (row.extra_data_config as EventItem['extraDataConfig'])
+        : undefined,
   };
 }
 
@@ -165,6 +174,16 @@ export function mapAttendeeRow(row: Record<string, unknown>): Attendee {
     ticketCode: String(row.ticket_code),
     smsStatus: (row.sms_status as Attendee['smsStatus']) || 'Arkesel Sent',
     paymentStatus: (row.payment_status as Attendee['paymentStatus']) || 'paid',
+    validationGroup: row.validation_group != null ? String(row.validation_group) : undefined,
+    inviteCodeUsed: row.invite_code_used != null ? String(row.invite_code_used) : undefined,
+    giftEntry:
+      row.gift_entry && typeof row.gift_entry === 'object'
+        ? (row.gift_entry as Attendee['giftEntry'])
+        : undefined,
+    customResponses:
+      row.custom_responses && typeof row.custom_responses === 'object'
+        ? (row.custom_responses as Record<string, string>)
+        : undefined,
   };
 }
 

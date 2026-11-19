@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { AlertCircle, LayoutGrid, List, MapPin, Plus, QrCode } from 'lucide-react';
+import { Check, Copy, ExternalLink, LayoutGrid, List, Plus, QrCode } from 'lucide-react';
 import { EventItem, EventStatus, OrganizerProfile, SystemAlert } from '../types/events';
-import { EVENT_CATEGORIES } from '../data/initialData';
-import { CircularGauge, MonochromePoster } from './MonochromeArtwork';
+import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
+import { buildEventInvitationUrl } from '../lib/qr';
+import { EventFlyerCard } from './EventFlyerCard';
+import { MonochromePoster } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
 
 interface EventsScreenProps {
@@ -15,6 +17,7 @@ interface EventsScreenProps {
   onManageEvent: (event: EventItem) => void;
   onNavigateAttendees: (eventId: string) => void;
   onOpenQrScanner?: (eventId: string) => void;
+  onOpenInvitation?: (event: EventItem) => void;
   onNavigateSettings: () => void;
   onResolveAlert: (id: string) => void;
 }
@@ -29,6 +32,7 @@ export const EventsScreen: React.FC<EventsScreenProps> = ({
   onManageEvent,
   onNavigateAttendees,
   onOpenQrScanner,
+  onOpenInvitation,
   onNavigateSettings,
   onResolveAlert,
 }) => {
@@ -36,6 +40,7 @@ export const EventsScreen: React.FC<EventsScreenProps> = ({
   const [statusFilter, setStatusFilter] = useState<'all' | EventStatus>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -194,125 +199,63 @@ export const EventsScreen: React.FC<EventsScreenProps> = ({
           )}
         </div>
       ) : viewMode === 'grid' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-          {filtered.map((evt) => {
-            const pct = Math.round((evt.registered / Math.max(1, evt.capacity)) * 100);
-            const isCeiling = pct >= profile.capacityAlertThreshold;
-            return (
-              <article
-                key={evt.id}
-                className="p-6 rounded-3xl bg-[#F5F5F7] border border-transparent hover:bg-white hover:border-[#E5E5EA] hover:-translate-y-0.5 transition-all duration-150 flex flex-col justify-between gap-5"
-              >
-                <div>
-                  <div className="flex items-start justify-between gap-3">
-                    <MonochromePoster variant={evt.artwork} className="w-16 h-16 rounded-2xl" />
-                    <CircularGauge
-                      value={pct}
-                      size={46}
-                      strokeWidth={4}
-                      alertThreshold={profile.capacityAlertThreshold}
-                    />
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-[#71717A] mt-4">
-                    <span className="capitalize font-medium text-[#0B0B0B]">{evt.status}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{evt.category}</span>
-                    <span aria-hidden="true">·</span>
-                    <span className="tabular-nums">{evt.date}</span>
-                    {evt.qrPassPublished === false && (
-                      <>
-                        <span aria-hidden="true">·</span>
-                        <span className="font-semibold text-[#0B0B0B]">QR Pass Unpublished</span>
-                      </>
-                    )}
-                  </div>
-
-                  <h2 className="text-lg font-bold tracking-tight text-[#0B0B0B] mt-1">
-                    {evt.title}
-                  </h2>
-                  <p className="text-xs text-[#71717A] mt-1 line-clamp-2 leading-relaxed">
-                    {evt.subtitle}
-                  </p>
-
-                  <p className="text-xs text-[#71717A] mt-3 inline-flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 shrink-0" />
-                    {evt.venue} · {evt.city}
-                  </p>
-
-                  {(isCeiling || evt.broadcastError) && (
-                    <p className="text-xs font-semibold text-[#EF4444] mt-2 inline-flex items-center gap-1.5">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      {isCeiling ? `Capacity ceiling (${pct}%)` : evt.broadcastError}
-                    </p>
-                  )}
-                </div>
-
-                <div className="pt-4 border-t border-[#E5E5EA] flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-semibold text-[#0B0B0B] tabular-nums">
-                      {evt.registered} / {evt.capacity} seats
-                    </p>
-                    <p className="text-[11px] text-[#71717A] tabular-nums">
-                      ${evt.revenue.toLocaleString()} gross
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    {onOpenQrScanner && (
-                      <button
-                        type="button"
-                        onClick={() => onOpenQrScanner(evt.id)}
-                        title="Open QR Code Scanner"
-                        className="px-3 py-2 rounded-full bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1 whitespace-nowrap shrink-0"
-                      >
-                        <QrCode className="w-3.5 h-3.5" />
-                        QR
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => onNavigateAttendees(evt.id)}
-                      className="px-3 py-2 rounded-full bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] hover:border-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
-                    >
-                      Guests
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onManageEvent(evt)}
-                      className="px-3.5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0"
-                    >
-                      Manage
-                    </button>
-                  </div>
-                </div>
-              </article>
-            );
-          })}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+          {filtered.map((evt) => (
+            <div key={evt.id} className="flex flex-col gap-2">
+              <EventFlyerCard
+                event={evt}
+                onOpenInvite={onOpenInvitation}
+                onOpenCheckIn={onOpenQrScanner ? () => onOpenQrScanner(evt.id) : undefined}
+                onManage={onManageEvent}
+              />
+              <div className="px-2 flex items-center justify-between text-[11px] text-[#71717A]">
+                <span className="font-mono tabular-nums">
+                  {evt.registered}/{evt.capacity} seats · ${evt.revenue.toLocaleString()} gross
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onNavigateAttendees(evt.id)}
+                  className="font-semibold text-[#0B0B0B] hover:underline"
+                >
+                  Guest Roster →
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       ) : (
         <div className="space-y-3">
           {filtered.map((evt) => {
             const pct = Math.round((evt.registered / Math.max(1, evt.capacity)) * 100);
             const isCeiling = pct >= profile.capacityAlertThreshold;
+            const flyerSrc = evt.flyerUrl || getCategoryPreset(evt.category).flyerUrl;
+            const inviteUrl = buildEventInvitationUrl(evt.slug || evt.id);
             return (
               <div
                 key={evt.id}
                 className="p-4 rounded-2xl bg-[#F5F5F7] border border-transparent hover:bg-white hover:border-[#E5E5EA] transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
               >
                 <div className="flex items-center gap-4 min-w-0">
-                  <MonochromePoster variant={evt.artwork} className="w-14 h-14 rounded-xl" />
+                  {flyerSrc ? (
+                    <img
+                      src={flyerSrc}
+                      alt={evt.title}
+                      className="w-20 h-14 rounded-xl object-cover shrink-0 border border-[#E5E5EA]"
+                    />
+                  ) : (
+                    <MonochromePoster variant={evt.artwork} className="w-14 h-14 rounded-xl" />
+                  )}
                   <div className="min-w-0">
                     <h2 className="text-sm font-bold text-[#0B0B0B] truncate">{evt.title}</h2>
                     <p className="text-xs text-[#71717A] mt-0.5 truncate">
                       <span className="capitalize text-[#0B0B0B] font-medium">{evt.status}</span> ·{' '}
-                      {evt.date} · {evt.venue}, {evt.city}
-                      {evt.qrPassPublished === false ? ' · QR Pass Unpublished' : ''}
+                      {evt.category} · {evt.date} · {evt.venue}, {evt.city}
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between md:justify-end gap-6 shrink-0">
-                  <div className="w-32">
+                <div className="flex items-center justify-between md:justify-end gap-4 shrink-0">
+                  <div className="w-28">
                     <div className="flex justify-between text-[11px] tabular-nums mb-1">
                       <span className={isCeiling ? 'text-[#EF4444] font-semibold' : 'text-[#71717A]'}>
                         {pct}% filled
@@ -331,19 +274,48 @@ export const EventsScreen: React.FC<EventsScreenProps> = ({
                     </div>
                   </div>
 
-                  <span className="text-xs font-semibold text-[#0B0B0B] tabular-nums w-20 text-right">
-                    ${evt.revenue.toLocaleString()}
-                  </span>
-
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (navigator.clipboard?.writeText) {
+                          navigator.clipboard.writeText(inviteUrl).catch(() => {});
+                        }
+                        setCopiedId(evt.id);
+                        setTimeout(() => setCopiedId(null), 1800);
+                      }}
+                      className="px-3 py-2 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1.5 whitespace-nowrap"
+                    >
+                      {copiedId === evt.id ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Invite</span>
+                        </>
+                      )}
+                    </button>
+                    {onOpenInvitation && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenInvitation(evt)}
+                        className="px-3 py-2 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1 whitespace-nowrap"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Open
+                      </button>
+                    )}
                     {onOpenQrScanner && (
                       <button
                         type="button"
                         onClick={() => onOpenQrScanner(evt.id)}
-                        className="px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                        className="px-3 py-2 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1 whitespace-nowrap"
                       >
                         <QrCode className="w-3.5 h-3.5" />
-                        QR Scan
+                        QR
                       </button>
                     )}
                     <button

@@ -45,7 +45,7 @@ interface SignUpScreenProps {
 }
 
 const KOJO_THUMBNAIL =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuA00DjztMRXqTK41BdBhA2YBRO1ZP0ESlcY8X6YwEfvvOaGvAz_upchslXzopVaz3_iZFet8b_X6zQyhV8ZxpNHNZRf_-pKYHNRF_KtlUsua3NGoypcf4dRT96wnNfUA3SxoiT7jTDHUYbGNRS4LR1bezIIe_zuPWJJIko483feSrZMPTdCkL7i6J6jUHvrEfk3ZS34nVuTi7jVOlRVUwa614CdblsYD-rvh-TTfvaDZgmuZRgNjnh9';
+  '/src/assets/images/dispo_summit_networking_1795017070315.jpg';
 
 export const SignUpScreen: React.FC<SignUpScreenProps> = ({
   initialEmail = '',

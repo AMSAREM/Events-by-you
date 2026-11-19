@@ -1,8 +1,11 @@
 import type {
   Attendee,
+  DesignTheme,
   DisposableRollSettings,
   DisposableShot,
+  EventExtraDataConfig,
   EventItem,
+  EventValidationConfig,
   OrganizerProfile,
   ScheduleBlock,
   SystemAlert,
@@ -20,6 +23,309 @@ export const EVENT_CATEGORIES = [
   'Corporate',
   'Tech',
 ] as const;
+
+export interface CategoryDesignPreset {
+  flyerUrl: string;
+  designTheme: DesignTheme;
+  validationConfig: EventValidationConfig;
+  extraDataConfig: EventExtraDataConfig;
+}
+
+export const CATEGORY_DESIGN_PRESETS: Record<string, CategoryDesignPreset> = {
+  Wedding: {
+    flyerUrl: '/src/assets/images/flyer_wedding_royal_1795075790983.jpg',
+    designTheme: 'editorial-ivory',
+    validationConfig: {
+      enabled: true,
+      label: 'Guest Circle & Table Validation',
+      options: [
+        "Bride's Family",
+        "Groom's Family",
+        'Mutual Friends',
+        'Bridal Party',
+        'Church & Community',
+        'VIP Elders',
+      ],
+      requireInviteCode: false,
+      inviteCode: 'ROYAL2026',
+    },
+    extraDataConfig: {
+      enableGiftTable: true,
+      giftTitle: 'Couple Gift Table & Cash Envelope Registry',
+      momoNumber: '+233 24 559 8104',
+      momoName: 'Boateng-Mensah Wedding Registry',
+      giftRegistryItems: [
+        'Cash Envelope / MoMo Blessing',
+        'Luxury Espresso Machine Set',
+        'Bridal Linen & Bedding Suite',
+        'Fine Dining Glassware (12-Piece)',
+        'Honeymoon Travel Fund Contribution',
+      ],
+      customFields: [
+        {
+          id: 'dietary_note',
+          label: 'Dietary / Allergy Preference',
+          type: 'select',
+          required: false,
+          options: ['Standard Banquet', 'Vegetarian', 'Halal', 'No Nuts / Gluten-Free'],
+        },
+        {
+          id: 'plus_one',
+          label: 'Seat Reservation / Plus-One Name',
+          type: 'text',
+          required: false,
+          placeholder: 'Optional spouse or partner full name',
+        },
+      ],
+    },
+  },
+  Tech: {
+    flyerUrl: '/src/assets/images/flyer_tech_summit_1795075791295.jpg',
+    designTheme: 'swiss-grid',
+    validationConfig: {
+      enabled: true,
+      label: 'Delegate Role Verification',
+      options: [
+        'Engineer / Architect',
+        'Founder / Executive',
+        'Investor / Partner',
+        'Speaker / Panelist',
+        'Community Builder',
+        'Press & Media',
+      ],
+      requireInviteCode: false,
+      inviteCode: 'BUILD2026',
+    },
+    extraDataConfig: {
+      enableGiftTable: false,
+      customFields: [
+        {
+          id: 'workshop_track',
+          label: 'Primary Breakout Track',
+          type: 'select',
+          required: true,
+          options: ['Distributed Systems & Infra', 'FinTech & Payments', 'Applied AI & Products', 'Founder Office Hours'],
+        },
+        {
+          id: 'badge_size',
+          label: 'Summit T-Shirt / Merch Size',
+          type: 'select',
+          required: false,
+          options: ['S', 'M', 'L', 'XL', 'XXL'],
+        },
+        {
+          id: 'linkedin_github',
+          label: 'GitHub or LinkedIn Handle',
+          type: 'text',
+          required: false,
+          placeholder: '@handle or profile URL',
+        },
+      ],
+    },
+  },
+  Church: {
+    flyerUrl: '/src/assets/images/flyer_church_revival_1795075792994.jpg',
+    designTheme: 'obsidian-gold',
+    validationConfig: {
+      enabled: true,
+      label: 'Congregation & Fellowship Group',
+      options: [
+        'Church Member',
+        'First-Time Guest',
+        'Choir / Workforce',
+        'Youth & Campus Fellowship',
+        'Pastoral & Visiting Clergy',
+      ],
+      requireInviteCode: false,
+    },
+    extraDataConfig: {
+      enableGiftTable: false,
+      customFields: [
+        {
+          id: 'home_parish',
+          label: 'Home Parish / Branch',
+          type: 'text',
+          required: false,
+          placeholder: 'e.g. Accra Central Assembly',
+        },
+        {
+          id: 'prayer_request',
+          label: 'Prayer Request / Counseling Focus',
+          type: 'textarea',
+          required: false,
+          placeholder: 'Optional note for the pastoral altar team',
+        },
+      ],
+    },
+  },
+  Musical: {
+    flyerUrl: '/src/assets/images/flyer_musical_live_1795075793134.jpg',
+    designTheme: 'obsidian-gold',
+    validationConfig: {
+      enabled: true,
+      label: 'Pass Enclosure & Section',
+      options: [
+        'Frontline Pit / Standing',
+        'VIP Table Lounge',
+        'Early Bird General',
+        'Artist Guestlist',
+        'Backstage & Media',
+      ],
+      requireInviteCode: false,
+    },
+    extraDataConfig: {
+      enableGiftTable: false,
+      customFields: [
+        {
+          id: 'arrival_wave',
+          label: 'Planned Gate Arrival Window',
+          type: 'select',
+          required: false,
+          options: ['06:00 PM (Opening Acoustic)', '07:30 PM (Main Ensemble)', '09:00 PM (Headliner Set)'],
+        },
+        {
+          id: 'song_request',
+          label: 'Encore Song Request / Shoutout',
+          type: 'text',
+          required: false,
+          placeholder: 'Which track should the live band play?',
+        },
+      ],
+    },
+  },
+  Corporate: {
+    flyerUrl: '/src/assets/images/flyer_corporate_gala_1795075792816.jpg',
+    designTheme: 'obsidian-gold',
+    validationConfig: {
+      enabled: true,
+      label: 'Corporate Accreditation',
+      options: [
+        'Board & C-Suite',
+        'Corporate Delegate',
+        'Institutional Sponsor',
+        'Keynote & Honoree',
+        'Financial Press',
+      ],
+      requireInviteCode: false,
+    },
+    extraDataConfig: {
+      enableGiftTable: false,
+      customFields: [
+        {
+          id: 'job_title',
+          label: 'Official Title & Department',
+          type: 'text',
+          required: false,
+          placeholder: 'e.g. VP Treasury Operations',
+        },
+        {
+          id: 'dinner_course',
+          label: 'Gala Dinner Entree Selection',
+          type: 'select',
+          required: true,
+          options: ['Herb-Crusted Red Snapper', 'Braised Beef Medallion', 'Plant-Based Chef Tasting'],
+        },
+      ],
+    },
+  },
+  Funeral: {
+    flyerUrl: '/src/assets/images/flyer_funeral_memorial_1795075793453.jpg',
+    designTheme: 'warm-monochrome',
+    validationConfig: {
+      enabled: true,
+      label: 'Family & Sympathizer Delegation',
+      options: [
+        'Royal Clan / Immediate Family',
+        'Church & Clergy Delegation',
+        'Friends & Old Students',
+        'Workplace & Association',
+        'Community Sympathizer',
+      ],
+      requireInviteCode: false,
+    },
+    extraDataConfig: {
+      enableGiftTable: false,
+      customFields: [
+        {
+          id: 'sympathy_pledge',
+          label: 'Family Wreath / Commemoration Pledge (Optional)',
+          type: 'text',
+          required: false,
+          placeholder: 'e.g. GHS 200 Family Support or Floral Wreath',
+        },
+        {
+          id: 'condolence_tribute',
+          label: 'Condolence Book Tribute Note',
+          type: 'textarea',
+          required: false,
+          placeholder: 'Share a brief tribute memory for the printed family keepsake',
+        },
+      ],
+    },
+  },
+  Program: {
+    flyerUrl: '/src/assets/images/flyer_corporate_gala_1795075792816.jpg',
+    designTheme: 'swiss-grid',
+    validationConfig: {
+      enabled: true,
+      label: 'Program Cohort Validation',
+      options: [
+        'Full Program Fellow',
+        'Workshop Participant',
+        'Mentor & Facilitator',
+        'Invited Observer',
+      ],
+      requireInviteCode: false,
+    },
+    extraDataConfig: {
+      enableGiftTable: false,
+      customFields: [
+        {
+          id: 'session_focus',
+          label: 'Session Objective / Question',
+          type: 'textarea',
+          required: false,
+          placeholder: 'What outcome would you like from this program?',
+        },
+      ],
+    },
+  },
+  Events: {
+    flyerUrl: '/src/assets/images/flyer_musical_live_1795075793134.jpg',
+    designTheme: 'warm-monochrome',
+    validationConfig: {
+      enabled: true,
+      label: 'Guest Relation & Access Tier',
+      options: [
+        'Host & Family Circle',
+        'Invited Guest',
+        'Community & Friends',
+        'VIP & Partners',
+      ],
+      requireInviteCode: false,
+    },
+    extraDataConfig: {
+      enableGiftTable: false,
+      customFields: [
+        {
+          id: 'guest_note',
+          label: 'Special Accommodation or Note',
+          type: 'text',
+          required: false,
+          placeholder: 'Accessibility, seating, or arrival notes',
+        },
+      ],
+    },
+  },
+};
+
+export function getCategoryPreset(category?: string): CategoryDesignPreset {
+  if (!category) return CATEGORY_DESIGN_PRESETS.Events;
+  const matchedKey = Object.keys(CATEGORY_DESIGN_PRESETS).find(
+    (key) => key.toLowerCase() === category.trim().toLowerCase()
+  );
+  return matchedKey ? CATEGORY_DESIGN_PRESETS[matchedKey] : CATEGORY_DESIGN_PRESETS.Events;
+}
 
 export const INITIAL_PROFILE: OrganizerProfile = {
   name: 'Josh Mensah',
@@ -54,7 +360,11 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 0,
     organizer: 'Josh Mensah',
     artwork: 'architecture',
+    designTheme: CATEGORY_DESIGN_PRESETS.Tech.designTheme,
+    flyerUrl: CATEGORY_DESIGN_PRESETS.Tech.flyerUrl,
     qrPassPublished: true,
+    validationConfig: CATEGORY_DESIGN_PRESETS.Tech.validationConfig,
+    extraDataConfig: CATEGORY_DESIGN_PRESETS.Tech.extraDataConfig,
   },
   {
     id: 'evt-wedding-mensah',
@@ -77,7 +387,11 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 0,
     organizer: 'Boateng Family Planners',
     artwork: 'spatial',
+    designTheme: CATEGORY_DESIGN_PRESETS.Wedding.designTheme,
+    flyerUrl: CATEGORY_DESIGN_PRESETS.Wedding.flyerUrl,
     qrPassPublished: true,
+    validationConfig: CATEGORY_DESIGN_PRESETS.Wedding.validationConfig,
+    extraDataConfig: CATEGORY_DESIGN_PRESETS.Wedding.extraDataConfig,
   },
   {
     id: 'evt-church-revival',
@@ -100,7 +414,11 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 0,
     organizer: 'Grace Chapel Ministry',
     artwork: 'forum',
+    designTheme: CATEGORY_DESIGN_PRESETS.Church.designTheme,
+    flyerUrl: CATEGORY_DESIGN_PRESETS.Church.flyerUrl,
     qrPassPublished: true,
+    validationConfig: CATEGORY_DESIGN_PRESETS.Church.validationConfig,
+    extraDataConfig: CATEGORY_DESIGN_PRESETS.Church.extraDataConfig,
   },
   {
     id: 'evt-musical-accra',
@@ -123,8 +441,12 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 17100,
     organizer: 'GoldCoast Live Music',
     artwork: 'sound',
+    designTheme: CATEGORY_DESIGN_PRESETS.Musical.designTheme,
+    flyerUrl: CATEGORY_DESIGN_PRESETS.Musical.flyerUrl,
     broadcastError: '2 Telco DLR retries pending',
     qrPassPublished: true,
+    validationConfig: CATEGORY_DESIGN_PRESETS.Musical.validationConfig,
+    extraDataConfig: CATEGORY_DESIGN_PRESETS.Musical.extraDataConfig,
   },
   {
     id: 'evt-funeral-memorial',
@@ -147,7 +469,11 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 0,
     organizer: 'Osei Tutu Royal Family',
     artwork: 'typography',
+    designTheme: CATEGORY_DESIGN_PRESETS.Funeral.designTheme,
+    flyerUrl: CATEGORY_DESIGN_PRESETS.Funeral.flyerUrl,
     qrPassPublished: true,
+    validationConfig: CATEGORY_DESIGN_PRESETS.Funeral.validationConfig,
+    extraDataConfig: CATEGORY_DESIGN_PRESETS.Funeral.extraDataConfig,
   },
   {
     id: 'evt-corporate-gala',
@@ -170,7 +496,11 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 26700,
     organizer: 'Meridian Corporate Group',
     artwork: 'hardware',
+    designTheme: CATEGORY_DESIGN_PRESETS.Corporate.designTheme,
+    flyerUrl: CATEGORY_DESIGN_PRESETS.Corporate.flyerUrl,
     qrPassPublished: true,
+    validationConfig: CATEGORY_DESIGN_PRESETS.Corporate.validationConfig,
+    extraDataConfig: CATEGORY_DESIGN_PRESETS.Corporate.extraDataConfig,
   },
   {
     id: 'evt-cultural-lagos',
@@ -193,7 +523,11 @@ export const INITIAL_EVENTS: EventItem[] = [
     revenue: 0,
     organizer: 'Josh Mensah',
     artwork: 'forum',
+    designTheme: CATEGORY_DESIGN_PRESETS.Events.designTheme,
+    flyerUrl: CATEGORY_DESIGN_PRESETS.Events.flyerUrl,
     qrPassPublished: false,
+    validationConfig: CATEGORY_DESIGN_PRESETS.Events.validationConfig,
+    extraDataConfig: CATEGORY_DESIGN_PRESETS.Events.extraDataConfig,
   },
 ];
 
@@ -211,6 +545,12 @@ export const INITIAL_ATTENDEES: Attendee[] = [
     ticketCode: 'TLS-2026-0811',
     smsStatus: 'Arkesel Sent',
     paymentStatus: 'paid',
+    validationGroup: 'Founder / Executive',
+    customResponses: {
+      workshop_track: 'Distributed Systems & Infra',
+      badge_size: 'L',
+      linkedin_github: '@kofiannan-dev',
+    },
   },
   {
     id: 'att-tls-2',
@@ -224,6 +564,11 @@ export const INITIAL_ATTENDEES: Attendee[] = [
     ticketCode: 'TLS-2026-0819',
     smsStatus: 'Arkesel Sent',
     paymentStatus: 'paid',
+    validationGroup: 'Engineer / Architect',
+    customResponses: {
+      workshop_track: 'FinTech & Payments',
+      badge_size: 'M',
+    },
   },
   {
     id: 'att-tls-3',
@@ -238,6 +583,11 @@ export const INITIAL_ATTENDEES: Attendee[] = [
     ticketCode: 'TLS-2026-0827',
     smsStatus: 'Resend Delivered',
     paymentStatus: 'paid',
+    validationGroup: 'Investor / Partner',
+    customResponses: {
+      workshop_track: 'Founder Office Hours',
+      badge_size: 'XL',
+    },
   },
   {
     id: 'att-tls-4',
@@ -251,6 +601,11 @@ export const INITIAL_ATTENDEES: Attendee[] = [
     ticketCode: 'TLS-2026-0835',
     smsStatus: 'Arkesel Sent',
     paymentStatus: 'paid',
+    validationGroup: 'Community Builder',
+    customResponses: {
+      workshop_track: 'Applied AI & Products',
+      badge_size: 'S',
+    },
   },
   {
     id: 'att-101',
@@ -265,6 +620,18 @@ export const INITIAL_ATTENDEES: Attendee[] = [
     ticketCode: 'WED-26-8891-VIP',
     smsStatus: 'Arkesel Sent',
     paymentStatus: 'paid',
+    validationGroup: "Bride's Family",
+    giftEntry: {
+      giftType: 'cash-momo',
+      amount: 1500,
+      currency: 'GHS',
+      side: "Bride's Family",
+      message: 'Wishing Kofi & Ama an eternal covenant of joy and peace!',
+    },
+    customResponses: {
+      dietary_note: 'Standard Banquet',
+      plus_one: 'Uncle Yaw Boateng',
+    },
   },
   {
     id: 'att-102',
@@ -279,6 +646,11 @@ export const INITIAL_ATTENDEES: Attendee[] = [
     ticketCode: 'CHU-26-8892-SPK',
     smsStatus: 'Resend Delivered',
     paymentStatus: 'paid',
+    validationGroup: 'Pastoral & Visiting Clergy',
+    customResponses: {
+      home_parish: 'Grace Chapel Cathedral',
+      prayer_request: 'Open heavens over the youth revival choir',
+    },
   },
   {
     id: 'att-103',
@@ -292,6 +664,11 @@ export const INITIAL_ATTENDEES: Attendee[] = [
     ticketCode: 'CRP-26-8898-VIP',
     smsStatus: 'Arkesel Sent',
     paymentStatus: 'paid',
+    validationGroup: 'Board & C-Suite',
+    customResponses: {
+      job_title: 'Managing Partner',
+      dinner_course: 'Herb-Crusted Red Snapper',
+    },
   },
   {
     id: 'att-104',
@@ -305,6 +682,11 @@ export const INITIAL_ATTENDEES: Attendee[] = [
     ticketCode: 'MUS-26-4401-VIP',
     smsStatus: 'Arkesel Sent',
     paymentStatus: 'failed',
+    validationGroup: 'Backstage & Media',
+    customResponses: {
+      arrival_wave: '06:00 PM (Opening Acoustic)',
+      song_request: 'Highlife Medley in D Major',
+    },
   },
   {
     id: 'att-105',
@@ -319,6 +701,11 @@ export const INITIAL_ATTENDEES: Attendee[] = [
     ticketCode: 'FUN-26-2109-VIP',
     smsStatus: 'Resend Delivered',
     paymentStatus: 'paid',
+    validationGroup: 'Royal Clan / Immediate Family',
+    customResponses: {
+      sympathy_pledge: 'GHS 500 Royal Family Support',
+      condolence_tribute: 'Forever remembered for wisdom, kindness, and service to Kumasi.',
+    },
   },
   {
     id: 'att-106',
@@ -332,6 +719,11 @@ export const INITIAL_ATTENDEES: Attendee[] = [
     ticketCode: 'CRP-26-3302-SPK',
     smsStatus: 'Arkesel Sent',
     paymentStatus: 'paid',
+    validationGroup: 'Keynote & Honoree',
+    customResponses: {
+      job_title: 'Group Head of Strategy',
+      dinner_course: 'Braised Beef Medallion',
+    },
   },
   {
     id: 'att-107',
@@ -346,6 +738,10 @@ export const INITIAL_ATTENDEES: Attendee[] = [
     ticketCode: 'CHU-26-1044-GEN',
     smsStatus: 'Arkesel Sent',
     paymentStatus: 'paid',
+    validationGroup: 'Choir / Workforce',
+    customResponses: {
+      home_parish: 'Cantonments Sanctuary',
+    },
   },
   {
     id: 'att-108',
@@ -359,6 +755,10 @@ export const INITIAL_ATTENDEES: Attendee[] = [
     ticketCode: 'MUS-26-8904-PRS',
     smsStatus: 'Resend Delivered',
     paymentStatus: 'paid',
+    validationGroup: 'Backstage & Media',
+    customResponses: {
+      arrival_wave: '07:30 PM (Main Ensemble)',
+    },
   },
 ];
 

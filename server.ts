@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
@@ -57,6 +58,7 @@ import {
   signCreatorSessionToken,
   type AuthedRequest,
 } from './server/helpers.ts';
+import { buildEventOgSvg, injectEventMetaTags } from './server/ogImage.ts';
 import {
   isResendConfigured,
   sendAuthOtpEmail,
@@ -396,8 +398,57 @@ async function createAppServer() {
     res
       .type('application/xml; charset=utf-8')
       .send(
-        `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urlEntries.join('\n')}\n</urlset>\n`
+        `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.w3.org/2000/svg" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n${urlEntries.join('\n')}\n</urlset>\n`.replace('xmlns="http://www.w3.org/2000/svg" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"', 'xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"')
       );
+  });
+
+  const resolveEventForPublicOrOg = async (slugOrId: string): Promise<EventItem | null> => {
+    const target = slugOrId.trim();
+    if (!target) return null;
+    if (!isSupabaseConfigured()) {
+      return (
+        memoryStore.getAnyEventBySlugOrId(target) ??
+        INITIAL_EVENTS.find(
+          (e) =>
+            e.id.toLowerCase() === target.toLowerCase() ||
+            e.slug.toLowerCase() === target.toLowerCase()
+        ) ??
+        null
+      );
+    }
+    try {
+      const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
+      const { data: bySlug } = await supabase
+        .from('events')
+        .select('*')
+        .eq('slug', target)
+        .maybeSingle();
+      if (bySlug) return mapEventRow(bySlug as Record<string, unknown>);
+      const { data: byId } = await supabase
+        .from('events')
+        .select('*')
+        .eq('id', target)
+        .maybeSingle();
+      if (byId) return mapEventRow(byId as Record<string, unknown>);
+    } catch {
+      // Fallback to seeded data below
+    }
+    return (
+      INITIAL_EVENTS.find(
+        (e) =>
+          e.id.toLowerCase() === target.toLowerCase() ||
+          e.slug.toLowerCase() === target.toLowerCase()
+      ) ?? null
+    );
+  };
+
+  app.get('/api/og/event/:slugOrId', async (req, res) => {
+    const evt = (await resolveEventForPublicOrOg(req.params.slugOrId)) ?? INITIAL_EVENTS[0];
+    const baseUrl = resolveBaseUrl(req);
+    const svg = buildEventOgSvg(evt, baseUrl);
+    res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    return res.send(svg);
   });
 
   app.get('/api/health', (_req, res) => {
@@ -1535,6 +1586,20 @@ async function createAppServer() {
     }
   });
 
+  app.get('/api/public/events/:slugOrId', async (req, res) => {
+    if (!isSupabaseConfigured()) {
+      return res.status(503).json({
+        error:
+          'Supabase is not configured on this server. Set SUPABASE_URL and SUPABASE_ANON_KEY in your environment.',
+      });
+    }
+    const evt = await resolveEventForPublicOrOg(req.params.slugOrId);
+    if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
+      return res.status(404).json({ error: 'Event invitation not found or no longer active.' });
+    }
+    return res.json({ event: evt });
+  });
+
   app.post(
     '/api/public/events/:eventId/register',
     requireSupabaseConfiguredMiddleware,
@@ -1548,13 +1613,28 @@ async function createAppServer() {
           error: 'Public registration for this event is temporarily paused by the organizer.',
         });
       }
-      const { name, email, phone, organization, tier, ticketCode } = req.body as {
+      const {
+        name,
+        email,
+        phone,
+        organization,
+        tier,
+        ticketCode,
+        validationGroup,
+        inviteCodeUsed,
+        giftEntry,
+        customResponses,
+      } = req.body as {
         name?: string;
         email?: string;
         phone?: string;
         organization?: string;
         tier?: Attendee['tier'];
         ticketCode?: string;
+        validationGroup?: string;
+        inviteCodeUsed?: string;
+        giftEntry?: Attendee['giftEntry'];
+        customResponses?: Record<string, string>;
       };
 
       if (!name?.trim() || !email?.trim() || !phone?.trim()) {
@@ -1568,7 +1648,22 @@ async function createAppServer() {
       try {
         const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
 
-        const { data: rpcData, error: rpcErr } = await supabase.rpc('register_public_attendee', {
+        // Enforce invite code if configured on event
+        const { data: evtMeta } = await supabase
+          .from('events')
+          .select('validation_config')
+          .eq('id', eventId)
+          .maybeSingle();
+        const valCfg = (evtMeta as Record<string, unknown> | null)?.validation_config as
+          | EventItem['validationConfig']
+          | undefined;
+        if (valCfg?.requireInviteCode && valCfg.inviteCode?.trim()) {
+          if ((inviteCodeUsed || '').trim().toLowerCase() !== valCfg.inviteCode.trim().toLowerCase()) {
+            return res.status(403).json({ error: 'Invalid invitation passcode for this event.' });
+          }
+        }
+
+        let { data: rpcData, error: rpcErr } = await supabase.rpc('register_public_attendee', {
           p_id: attendeeId,
           p_event_id: eventId,
           p_name: name.trim(),
@@ -1577,7 +1672,27 @@ async function createAppServer() {
           p_organization: organization?.trim() || 'Fast Pass Attendee',
           p_tier: tier || 'General',
           p_ticket_code: finalCode,
+          p_validation_group: validationGroup ?? null,
+          p_invite_code_used: inviteCodeUsed ?? null,
+          p_gift_entry: giftEntry ?? null,
+          p_custom_responses: customResponses ?? null,
         });
+
+        // Graceful fallback if remote RPC hasn't added the extended params yet
+        if (rpcErr && rpcErr.message?.toLowerCase().includes('register_public_attendee')) {
+          const fallbackRpc = await supabase.rpc('register_public_attendee', {
+            p_id: attendeeId,
+            p_event_id: eventId,
+            p_name: name.trim(),
+            p_email: email.trim(),
+            p_phone: normalizedPhone,
+            p_organization: organization?.trim() || 'Fast Pass Attendee',
+            p_tier: tier || 'General',
+            p_ticket_code: finalCode,
+          });
+          rpcData = fallbackRpc.data;
+          rpcErr = fallbackRpc.error;
+        }
 
         if (rpcErr) {
           if (rpcErr.message.includes('QR_PASS_NOT_PUBLISHED:')) {
@@ -1654,6 +1769,10 @@ async function createAppServer() {
         const attendee = mapAttendeeRow({
           ...payload.attendee,
           sms_status: finalDeliveryStatus,
+          validation_group: payload.attendee.validation_group ?? validationGroup ?? null,
+          invite_code_used: payload.attendee.invite_code_used ?? inviteCodeUsed ?? null,
+          gift_entry: payload.attendee.gift_entry ?? giftEntry ?? null,
+          custom_responses: payload.attendee.custom_responses ?? customResponses ?? null,
         });
 
         return res.status(201).json({ attendee, event });
@@ -1731,6 +1850,9 @@ async function createAppServer() {
           venue_format: evt.venueFormat ?? 'in-person',
           sender_id: evt.senderId ?? null,
           qr_pass_published: evt.qrPassPublished ?? evt.status !== 'draft',
+          design_theme: evt.designTheme ?? 'editorial-ivory',
+          validation_config: evt.validationConfig ?? null,
+          extra_data_config: evt.extraDataConfig ?? null,
         }));
 
       let idSuffix = user.id.slice(0, 6);
@@ -1975,18 +2097,32 @@ async function createAppServer() {
         revenue: event.revenue,
         organizer: event.organizer,
         artwork: event.artwork,
+        design_theme: event.designTheme ?? null,
         broadcast_error: event.broadcastError ?? null,
         flyer_url: event.flyerUrl ?? null,
         venue_format: event.venueFormat ?? 'in-person',
         sender_id: event.senderId ?? null,
         qr_pass_published: event.status === 'draft' ? false : Boolean(event.qrPassPublished),
+        validation_config: event.validationConfig ?? null,
+        extra_data_config: event.extraDataConfig ?? null,
       };
 
-      const { data: createdEvt, error: evtErr } = await client
+      let { data: createdEvt, error: evtErr } = await client
         .from('events')
         .insert(eventRow)
         .select('*')
         .single();
+      if (evtErr && evtErr.message?.includes('column')) {
+        const {
+          design_theme: _d,
+          validation_config: _v,
+          extra_data_config: _e,
+          ...legacyRow
+        } = eventRow;
+        const retry = await client.from('events').insert(legacyRow).select('*').single();
+        createdEvt = retry.data;
+        evtErr = retry.error;
+      }
       if (evtErr) return res.status(400).json({ error: evtErr.message });
 
       let createdBlocks: ScheduleBlock[] = [];
@@ -2038,10 +2174,13 @@ async function createAppServer() {
         ticket_price: updated.ticketPrice,
         organizer: updated.organizer,
         artwork: updated.artwork,
+        design_theme: updated.designTheme ?? null,
         broadcast_error: updated.broadcastError ?? null,
         flyer_url: updated.flyerUrl ?? null,
         venue_format: updated.venueFormat ?? 'in-person',
         sender_id: updated.senderId ?? null,
+        validation_config: updated.validationConfig ?? null,
+        extra_data_config: updated.extraDataConfig ?? null,
       };
       if (updated.status === 'draft') {
         updatePayload.qr_pass_published = false;
@@ -2049,13 +2188,30 @@ async function createAppServer() {
         updatePayload.qr_pass_published = Boolean(updated.qrPassPublished);
       }
 
-      const { data, error } = await req
+      let { data, error } = await req
         .supabase!.from('events')
         .update(updatePayload)
         .eq('id', req.params.id)
         .eq('organizer_id', req.user!.id)
         .select('*')
         .single();
+      if (error && error.message?.includes('column')) {
+        const {
+          design_theme: _d,
+          validation_config: _v,
+          extra_data_config: _e,
+          ...legacyUpdate
+        } = updatePayload;
+        const retry = await req
+          .supabase!.from('events')
+          .update(legacyUpdate)
+          .eq('id', req.params.id)
+          .eq('organizer_id', req.user!.id)
+          .select('*')
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
       if (error) return res.status(400).json({ error: error.message });
       return res.json({ event: mapEventRow(data as Record<string, unknown>) });
     } catch (err) {
@@ -2187,24 +2343,42 @@ async function createAppServer() {
           ? 'Resend Delivered'
           : attendee.smsStatus || smsDelivery;
 
-      const { data: inserted, error: attErr } = await client
+      const attInsertPayload: Record<string, unknown> = {
+        id: attendee.id,
+        event_id: eventId,
+        name: attendee.name,
+        email: attendee.email,
+        phone: normalizedPhone,
+        organization: attendee.organization || 'General Guest',
+        tier: attendee.tier || 'General',
+        checked_in: Boolean(attendee.checkedIn),
+        checked_in_at: attendee.checkedInAt ?? null,
+        ticket_code: attendee.ticketCode,
+        sms_status: resolvedSmsStatus,
+        payment_status: attendee.paymentStatus || 'paid',
+        validation_group: attendee.validationGroup ?? null,
+        invite_code_used: attendee.inviteCodeUsed ?? null,
+        gift_entry: attendee.giftEntry ?? null,
+        custom_responses: attendee.customResponses ?? null,
+      };
+
+      let { data: inserted, error: attErr } = await client
         .from('attendees')
-        .insert({
-          id: attendee.id,
-          event_id: eventId,
-          name: attendee.name,
-          email: attendee.email,
-          phone: normalizedPhone,
-          organization: attendee.organization || 'General Guest',
-          tier: attendee.tier || 'General',
-          checked_in: Boolean(attendee.checkedIn),
-          checked_in_at: attendee.checkedInAt ?? null,
-          ticket_code: attendee.ticketCode,
-          sms_status: resolvedSmsStatus,
-          payment_status: attendee.paymentStatus || 'paid',
-        })
+        .insert(attInsertPayload)
         .select('*')
         .single();
+      if (attErr && attErr.message?.includes('column')) {
+        const {
+          validation_group: _vg,
+          invite_code_used: _ic,
+          gift_entry: _ge,
+          custom_responses: _cr,
+          ...legacyAtt
+        } = attInsertPayload;
+        const retryAtt = await client.from('attendees').insert(legacyAtt).select('*').single();
+        inserted = retryAtt.data;
+        attErr = retryAtt.error;
+      }
 
       if (attErr) {
         if (attErr.code === '23505') {
@@ -3013,7 +3187,7 @@ async function createAppServer() {
   });
 
   // =========================================================================
-  // VITE DEV MIDDLEWARE / PRODUCTION STATIC ASSETS
+  // VITE DEV MIDDLEWARE / PRODUCTION STATIC ASSETS WITH SSR OG INJECTION
   // =========================================================================
 
   const isProd = process.env.NODE_ENV === 'production';
@@ -3023,12 +3197,44 @@ async function createAppServer() {
       server: { middlewareMode: true },
       appType: 'spa',
     });
+
+    app.get(['/e/:slug', '/'], async (req, res, next) => {
+      const slugOrId =
+        req.params.slug ||
+        (typeof req.query.event === 'string' ? req.query.event.trim() : '');
+      if (!slugOrId) return next();
+      const evt = await resolveEventForPublicOrOg(slugOrId);
+      if (!evt) return next();
+      try {
+        const indexPath = path.resolve(__dirname, 'index.html');
+        const rawHtml = fs.readFileSync(indexPath, 'utf-8');
+        const transformed = await vite.transformIndexHtml(req.originalUrl, rawHtml);
+        const withOg = injectEventMetaTags(transformed, evt, resolveBaseUrl(req));
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(withOg);
+      } catch (err) {
+        next(err);
+      }
+    });
+
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(__dirname, 'dist');
-    app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distDir, 'index.html'));
+    app.use(express.static(distDir, { index: false }));
+    app.get('*', async (req, res) => {
+      const indexPath = path.join(distDir, 'index.html');
+      const slugMatch = req.path.match(/^\/e\/([^/]+)$/);
+      const slugOrId =
+        (slugMatch ? decodeURIComponent(slugMatch[1]) : '') ||
+        (typeof req.query.event === 'string' ? req.query.event.trim() : '');
+      if (slugOrId) {
+        const evt = await resolveEventForPublicOrOg(slugOrId);
+        if (evt && fs.existsSync(indexPath)) {
+          const rawHtml = fs.readFileSync(indexPath, 'utf-8');
+          const withOg = injectEventMetaTags(rawHtml, evt, resolveBaseUrl(req));
+          return res.status(200).set({ 'Content-Type': 'text/html' }).send(withOg);
+        }
+      }
+      return res.sendFile(indexPath);
     });
   }
 

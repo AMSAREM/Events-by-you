@@ -68,6 +68,47 @@ export interface ScheduleBlock {
   day: 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat';
 }
 
+export type DesignTheme =
+  | 'editorial-ivory'
+  | 'obsidian-gold'
+  | 'swiss-grid'
+  | 'warm-monochrome';
+
+export interface EventValidationConfig {
+  enabled: boolean;
+  label: string;
+  options: string[];
+  requireInviteCode?: boolean;
+  inviteCode?: string;
+}
+
+export interface CustomFormField {
+  id: string;
+  label: string;
+  type: 'text' | 'select' | 'textarea';
+  required?: boolean;
+  placeholder?: string;
+  options?: string[];
+}
+
+export interface EventExtraDataConfig {
+  enableGiftTable: boolean;
+  giftTitle?: string;
+  momoNumber?: string;
+  momoName?: string;
+  giftRegistryItems?: string[];
+  customFields: CustomFormField[];
+}
+
+export interface AttendeeGiftEntry {
+  giftType: 'cash-momo' | 'registry-item' | 'blessing-only';
+  amount?: number;
+  currency?: 'GHS' | 'USD';
+  registryItem?: string;
+  side?: string;
+  message?: string;
+}
+
 export interface EventItem {
   id: string;
   slug: string;
@@ -88,11 +129,14 @@ export interface EventItem {
   revenue: number;
   organizer: string;
   artwork: ArtworkVariant;
+  designTheme?: DesignTheme;
   broadcastError?: string;
   flyerUrl?: string;
   venueFormat?: 'in-person' | 'virtual' | 'hybrid';
   senderId?: string;
   qrPassPublished?: boolean;
+  validationConfig?: EventValidationConfig;
+  extraDataConfig?: EventExtraDataConfig;
 }
 
 export type AttendeeTier = 'VIP' | 'General' | 'Speaker' | 'Press';
@@ -110,6 +154,10 @@ export interface Attendee {
   ticketCode: string;
   smsStatus: 'Arkesel Sent' | 'Resend Delivered' | 'Pending';
   paymentStatus: 'paid' | 'failed';
+  validationGroup?: string;
+  inviteCodeUsed?: string;
+  giftEntry?: AttendeeGiftEntry;
+  customResponses?: Record<string, string>;
 }
 
 export interface SystemAlert {

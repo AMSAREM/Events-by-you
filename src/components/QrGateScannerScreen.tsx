@@ -5,6 +5,8 @@ import {
   CameraOff,
   Check,
   CheckCircle2,
+  Download,
+  Gift,
   QrCode,
   RotateCcw,
   Search,
@@ -22,7 +24,8 @@ import {
   OrganizerProfile,
   SystemAlert,
 } from '../types/events';
-import { normalizePhoneE164 } from '../data/initialData';
+import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
+import { DeterministicQrSvg, downloadQrSvg } from '../lib/qr';
 import { CircularGauge } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
 
@@ -112,14 +115,40 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [detectorSupported, setDetectorSupported] = useState(false);
 
+  const activeValidationCircles = useMemo<string[]>(() => {
+    if (!selectedEvent) return ['Invited Guest'];
+    return (
+      selectedEvent.validationConfig?.options ??
+      getCategoryPreset(selectedEvent.category).validationConfig.options
+    );
+  }, [selectedEvent]);
+
   // Walk-In Gate Registration Form state
+  const walkInSectionRef = useRef<HTMLElement | null>(null);
+  const walkInNameInputRef = useRef<HTMLInputElement | null>(null);
   const [walkInName, setWalkInName] = useState('');
   const [walkInPhone, setWalkInPhone] = useState('');
   const [walkInEmail, setWalkInEmail] = useState('');
   const [walkInOrg, setWalkInOrg] = useState('');
   const [walkInTier, setWalkInTier] = useState<AttendeeTier>('General');
+  const [walkInValidationGroup, setWalkInValidationGroup] = useState<string>(
+    activeValidationCircles[0] ?? 'Invited Guest'
+  );
   const [walkInAutoCheckIn, setWalkInAutoCheckIn] = useState(true);
   const [walkInSuccess, setWalkInSuccess] = useState<Attendee | null>(null);
+
+  const focusWalkInRegistration = () => {
+    walkInSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    window.setTimeout(() => {
+      walkInNameInputRef.current?.focus();
+    }, 220);
+  };
+
+  useEffect(() => {
+    if (activeValidationCircles.length > 0 && !activeValidationCircles.includes(walkInValidationGroup)) {
+      setWalkInValidationGroup(activeValidationCircles[0]);
+    }
+  }, [activeValidationCircles, walkInValidationGroup]);
 
   // QR Preview Modal for an attendee
   const [previewPass, setPreviewPass] = useState<Attendee | null>(null);
@@ -358,6 +387,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       checkedInAt: walkInAutoCheckIn ? nowTime : undefined,
       paymentStatus: 'paid',
       smsStatus: 'Arkesel Sent',
+      validationGroup: walkInValidationGroup || activeValidationCircles[0],
     };
 
     onRegisterAttendee(selectedEvent.id, created);
@@ -453,6 +483,14 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={focusWalkInRegistration}
+                className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white hover:bg-zinc-800 text-xs font-bold inline-flex items-center gap-1.5 shadow-sm transition-colors whitespace-nowrap shrink-0"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                Walk-In Check-In Registration
+              </button>
               <span
                 className={`px-3 py-1.5 rounded-full text-[11px] font-semibold border whitespace-nowrap ${
                   isQrPassPublished
@@ -477,7 +515,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               <button
                 type="button"
                 onClick={() => onManageEvent(selectedEvent)}
-                className="px-4 py-2.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
+                className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
               >
                 Open Event Workspace
               </button>
@@ -486,10 +524,10 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
         </section>
       )}
 
-      {/* MAIN COMMAND SPLIT: QR CODE SCANNER (Left 7 cols) + CHECK-IN REGISTRATION (Right 5 cols) */}
+      {/* MAIN COMMAND SPLIT: QR CODE SCANNER (Left 6 cols) + WALK-IN CHECK-IN REGISTRATION (Right 6 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-        {/* LEFT 7 COLS: QR Code Scanner & Instant Pass Verification */}
-        <section className="lg:col-span-7 bg-[#0B0B0B] text-white rounded-3xl p-6 sm:p-7 flex flex-col justify-between gap-5">
+        {/* LEFT 6 COLS: QR Code Scanner & Instant Pass Verification */}
+        <section className="lg:col-span-6 bg-[#0B0B0B] text-white rounded-3xl p-6 sm:p-7 flex flex-col justify-between gap-5">
           <div>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
@@ -644,10 +682,27 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                   </p>
                   <p className="text-xs text-zinc-200 mt-0.5">{lastOutcome.message}</p>
                   {'attendee' in lastOutcome && (
-                    <p className="text-[11px] font-mono text-zinc-300 mt-1 tabular-nums">
-                      {lastOutcome.attendee.tier} · {lastOutcome.attendee.phone} ·{' '}
-                      {lastOutcome.eventTitle} · {lastOutcome.timestamp}
-                    </p>
+                    <div className="mt-1.5 space-y-1">
+                      <p className="text-[11px] font-mono text-zinc-300 tabular-nums">
+                        {lastOutcome.attendee.tier} · {lastOutcome.attendee.phone} ·{' '}
+                        {lastOutcome.eventTitle} · {lastOutcome.timestamp}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {lastOutcome.attendee.validationGroup && (
+                          <span className="px-2 py-0.5 rounded-full bg-white/15 text-[10px] font-semibold text-white">
+                            Circle: {lastOutcome.attendee.validationGroup}
+                          </span>
+                        )}
+                        {lastOutcome.attendee.giftEntry && (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-[10px] font-semibold text-amber-200 inline-flex items-center gap-1">
+                            <Gift className="w-3 h-3" />
+                            {lastOutcome.attendee.giftEntry.amount
+                              ? `${lastOutcome.attendee.giftEntry.currency || 'GHS'} ${lastOutcome.attendee.giftEntry.amount}`
+                              : lastOutcome.attendee.giftEntry.registryItem || 'Gift Pledged'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>
@@ -669,25 +724,36 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
           )}
         </section>
 
-        {/* RIGHT 5 COLS: Walk-In Check-In Registration Desk */}
-        <section className="lg:col-span-5 bg-[#F5F5F7] rounded-3xl p-6 sm:p-7 flex flex-col justify-between">
+        {/* RIGHT 6 COLS: Prominent Walk-In Check-In Registration Desk */}
+        <section
+          id="walk-in-registration"
+          ref={walkInSectionRef}
+          className="lg:col-span-6 bg-white rounded-3xl border-2 border-[#0B0B0B]/15 shadow-sm p-6 sm:p-7 flex flex-col justify-between"
+        >
           <div>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
-                <UserPlus className="w-5 h-5" />
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-4 border-b border-[#E5E5EA]">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
+                  <UserPlus className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="font-display text-lg sm:text-xl font-bold tracking-tight text-[#0B0B0B]">
+                      Walk-In Check-In Registration
+                    </h2>
+                  </div>
+                  <p className="text-xs text-[#71717A]">
+                    Register on-site walk-in guests, assign validation circle &amp; issue instant SMS QR passes
+                  </p>
+                </div>
               </div>
-              <div>
-                <h2 className="font-display text-lg sm:text-xl font-bold tracking-tight text-[#0B0B0B]">
-                  Check-In Registration
-                </h2>
-                <p className="text-xs text-[#71717A]">
-                  Register walk-in guests &amp; issue instant SMS QR passes
-                </p>
-              </div>
+              <span className="px-2.5 py-1 rounded-full bg-[#0B0B0B] text-white text-[10px] font-bold tracking-wider uppercase whitespace-nowrap">
+                Walk-In Desk
+              </span>
             </div>
 
             {!isEventCreator ? (
-              <div className="p-5 rounded-2xl bg-white border border-[#E5E5EA] space-y-2">
+              <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2">
                 <p className="text-xs font-bold text-[#0B0B0B]">
                   Creator-Only QR Pass Publishing
                 </p>
@@ -698,7 +764,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
             ) : (
               <>
                 {selectedEvent && !isQrPassPublished && (
-                  <div className="mb-4 p-4 rounded-2xl bg-white border border-[#E5E5EA] space-y-2.5">
+                  <div className="mb-4 p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2.5">
                     <p className="text-xs font-semibold text-[#0B0B0B]">
                       Check-In QR Passes Unpublished
                     </p>
@@ -723,16 +789,17 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                 <form onSubmit={handleWalkInSubmit} className="space-y-3.5">
                   <div>
                     <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
-                      Guest Full Name
+                      Walk-In Guest Full Name
                     </label>
                     <input
+                      ref={walkInNameInputRef}
                       type="text"
                       required
                       disabled={!isQrPassPublished}
                       value={walkInName}
                       onChange={(e) => setWalkInName(e.target.value)}
                       placeholder="e.g. Efua Mensah"
-                      className="w-full h-10 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-sm text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none disabled:opacity-50"
+                      className="w-full h-10 px-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] text-sm text-[#0B0B0B] focus:bg-white focus:border-[#0B0B0B] focus:outline-none disabled:opacity-50"
                     />
                   </div>
 
@@ -790,18 +857,37 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
-                      Group / Family / Organization
-                    </label>
-                    <input
-                      type="text"
-                      disabled={!isQrPassPublished}
-                      value={walkInOrg}
-                      onChange={(e) => setWalkInOrg(e.target.value)}
-                      placeholder="e.g. Bride Family Table 4 / Accra Tech Hub"
-                      className="w-full h-10 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none disabled:opacity-50"
-                    />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
+                        Validation Circle
+                      </label>
+                      <select
+                        disabled={!isQrPassPublished}
+                        value={walkInValidationGroup}
+                        onChange={(e) => setWalkInValidationGroup(e.target.value)}
+                        className="w-full h-10 px-3 rounded-2xl bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none cursor-pointer disabled:opacity-50"
+                      >
+                        {activeValidationCircles.map((circle: string) => (
+                          <option key={circle} value={circle}>
+                            {circle}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
+                        Group / Family / Organization
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!isQrPassPublished}
+                        value={walkInOrg}
+                        onChange={(e) => setWalkInOrg(e.target.value)}
+                        placeholder="e.g. Table 4 / Accra Tech"
+                        className="w-full h-10 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none disabled:opacity-50"
+                      />
+                    </div>
                   </div>
 
                   <label className="flex items-center gap-2.5 pt-1 cursor-pointer select-none">
@@ -820,10 +906,10 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                   <button
                     type="submit"
                     disabled={!isQrPassPublished}
-                    className="w-full h-11 rounded-full bg-[#0B0B0B] text-white text-xs font-bold hover:bg-zinc-800 transition-colors inline-flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="w-full h-11 rounded-full bg-[#0B0B0B] text-white text-xs font-bold hover:bg-zinc-800 transition-colors inline-flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
                   >
                     <Sparkles className="w-4 h-4" />
-                    <span>Register &amp; Issue QR Pass</span>
+                    <span>Complete Walk-In Check-In &amp; Issue QR Pass</span>
                   </button>
                 </form>
               </>
@@ -831,7 +917,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
           </div>
 
           {walkInSuccess && isEventCreator && (
-            <div className="mt-4 p-4 rounded-2xl bg-white border border-[#E5E5EA] flex items-center justify-between gap-3">
+            <div className="mt-4 p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-xs font-bold text-[#0B0B0B] flex items-center gap-1.5">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -923,6 +1009,19 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                       <span className="text-xs font-mono text-[#0B0B0B] tabular-nums">
                         · {att.ticketCode}
                       </span>
+                      {att.validationGroup && (
+                        <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[10px] font-semibold text-[#0B0B0B] border border-[#E5E5EA]">
+                          {att.validationGroup}
+                        </span>
+                      )}
+                      {att.giftEntry && (
+                        <span className="px-2 py-0.5 rounded-full bg-amber-50 text-[10px] font-semibold text-amber-800 border border-amber-200 inline-flex items-center gap-1">
+                          <Gift className="w-3 h-3" />
+                          {att.giftEntry.amount
+                            ? `${att.giftEntry.currency || 'GHS'} ${att.giftEntry.amount}`
+                            : att.giftEntry.registryItem || 'Gift Pledge'}
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-[#71717A] mt-0.5 truncate">
                       {att.organization} · {att.phone}
@@ -1040,28 +1139,32 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
             </div>
 
             <div className="p-5 bg-[#F5F5F7] rounded-2xl flex flex-col items-center">
-              <svg viewBox="0 0 100 100" className="w-36 h-36 text-[#0B0B0B] fill-current">
-                <path d="M8 8 h24 v24 h-24 z M13 13 v14 h14 v-14 z M17 17 h6 v6 h-6 z" />
-                <path d="M68 8 h24 v24 h-24 z M73 13 v14 h14 v-14 z M77 17 h6 v6 h-6 z" />
-                <path d="M8 68 h24 v24 h-24 z M13 73 v14 h14 v-14 z M17 77 h6 v6 h-6 z" />
-                <rect x="40" y="10" width="8" height="8" />
-                <rect x="52" y="10" width="8" height="8" />
-                <rect x="44" y="24" width="12" height="6" />
-                <rect x="10" y="42" width="14" height="6" />
-                <rect x="30" y="40" width="8" height="12" />
-                <rect x="44" y="42" width="14" height="8" />
-                <rect x="64" y="40" width="10" height="8" />
-                <rect x="80" y="44" width="12" height="10" />
-                <rect x="40" y="60" width="8" height="10" />
-                <rect x="54" y="62" width="14" height="6" />
-                <rect x="72" y="64" width="18" height="8" />
-                <rect x="40" y="78" width="14" height="12" />
-                <rect x="62" y="76" width="10" height="14" />
-                <rect x="78" y="80" width="14" height="12" />
-              </svg>
+              <div className="p-3 bg-white rounded-2xl border border-[#E5E5EA]">
+                <DeterministicQrSvg
+                  value={`${previewPass.ticketCode}|${selectedEvent?.slug ?? previewPass.eventId}|${previewPass.phone}`}
+                  size={156}
+                />
+              </div>
               <span className="mt-3 font-mono text-sm font-bold tracking-widest text-[#0B0B0B] tabular-nums">
                 {previewPass.ticketCode}
               </span>
+              {(previewPass.validationGroup || previewPass.giftEntry) && (
+                <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+                  {previewPass.validationGroup && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-white text-[11px] font-semibold text-[#0B0B0B] border border-[#E5E5EA]">
+                      {previewPass.validationGroup}
+                    </span>
+                  )}
+                  {previewPass.giftEntry && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-50 text-[11px] font-semibold text-amber-800 border border-amber-200 inline-flex items-center gap-1">
+                      <Gift className="w-3 h-3" />
+                      {previewPass.giftEntry.amount
+                        ? `${previewPass.giftEntry.currency || 'GHS'} ${previewPass.giftEntry.amount}`
+                        : previewPass.giftEntry.registryItem || 'Gift Registered'}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
@@ -1074,6 +1177,20 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                 className="flex-1 h-10 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
               >
                 {previewPass.checkedIn ? 'Verify Status' : 'Scan & Check In'}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  downloadQrSvg(
+                    `${previewPass.ticketCode}|${selectedEvent?.slug ?? previewPass.eventId}|${previewPass.phone}`,
+                    `${previewPass.ticketCode.toLowerCase()}-pass.svg`
+                  )
+                }
+                aria-label="Download QR SVG"
+                className="px-3.5 h-10 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
+              >
+                <Download className="w-3.5 h-3.5" />
+                SVG
               </button>
               <button
                 type="button"

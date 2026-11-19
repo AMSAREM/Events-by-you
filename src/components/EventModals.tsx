@@ -1,12 +1,30 @@
-import React, { useState } from 'react';
-import { AlertCircle, ArrowUpRight, Check, MapPin, Trash2, Users, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  ArrowUpRight,
+  Check,
+  Copy,
+  Gift,
+  ImagePlus,
+  Link2,
+  MapPin,
+  Share2,
+  ShieldCheck,
+  Trash2,
+  Users,
+  X,
+} from 'lucide-react';
 import {
   ArtworkVariant,
+  DesignTheme,
   EventItem,
   EventStatus,
   OrganizerProfile,
   ScheduleBlock,
 } from '../types/events';
+import { getCategoryPreset } from '../data/initialData';
+import { STUDIO_FLYER_PRESETS, compressFlyerImageFile } from '../lib/flyerUpload';
+import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
 import { CircularGauge, MonochromePoster } from './MonochromeArtwork';
 
 interface CreateEventModalProps {
@@ -41,6 +59,8 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const [status, setStatus] = useState<EventStatus>('upcoming');
   const [publishQrPass, setPublishQrPass] = useState(true);
   const [artwork, setArtwork] = useState<ArtworkVariant>('architecture');
+  const [customFlyerUrl, setCustomFlyerUrl] = useState<string>('');
+  const createFlyerInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,6 +79,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
         .replace(/^-|-$/g, '') || `event-${Date.now()}`;
 
     const initialReg = status === 'draft' ? 0 : Math.min(24, Math.max(10, Number(capacity) || 100));
+    const preset = getCategoryPreset(category);
 
     const newEvent: EventItem = {
       id: `evt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
@@ -80,6 +101,10 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       revenue: status === 'draft' ? 0 : initialReg * (Number(ticketPrice) || 0),
       organizer: organizerName,
       artwork,
+      flyerUrl: customFlyerUrl || preset.flyerUrl,
+      designTheme: preset.designTheme,
+      validationConfig: preset.validationConfig,
+      extraDataConfig: preset.extraDataConfig,
       qrPassPublished: status === 'draft' ? false : publishQrPass,
     };
     onCreate(newEvent);
@@ -249,9 +274,50 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-[#0B0B0B] mb-2">
-              Monochrome Poster Motif
-            </label>
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-xs font-semibold text-[#0B0B0B]">
+                Event Flyer Banner &amp; Motif
+              </label>
+              <button
+                type="button"
+                onClick={() => createFlyerInputRef.current?.click()}
+                className="px-3 py-1 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors"
+              >
+                <ImagePlus className="w-3.5 h-3.5" />
+                <span>{customFlyerUrl ? 'Change Picture' : 'Upload Flyer Picture'}</span>
+              </button>
+              <input
+                ref={createFlyerInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (!file) return;
+                  const compressed = await compressFlyerImageFile(file);
+                  setCustomFlyerUrl(compressed);
+                }}
+              />
+            </div>
+
+            {customFlyerUrl && (
+              <div className="mb-3 relative rounded-2xl overflow-hidden border border-[#E5E5EA] aspect-[16/7] bg-[#0B0B0B]">
+                <img
+                  src={customFlyerUrl}
+                  alt="Custom event flyer preview"
+                  className="w-full h-full object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => setCustomFlyerUrl('')}
+                  className="absolute top-2 right-2 px-2.5 py-1 rounded-full bg-black/75 text-white text-[10px] font-semibold"
+                >
+                  Use Preset
+                </button>
+              </div>
+            )}
+
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
               {ARTWORK_OPTIONS.map((opt) => (
                 <button
@@ -340,11 +406,34 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   onDeleteEvent,
   onOpenAttendees,
 }) => {
+  const preset = getCategoryPreset(event.category);
   const [capacityDraft, setCapacityDraft] = useState(event.capacity);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [copiedInvite, setCopiedInvite] = useState(false);
+  const [shareFeedback, setShareFeedback] = useState<string | null>(null);
+  const [validationInput, setValidationInput] = useState(
+    (event.validationConfig?.options ?? preset.validationConfig.options).join(', ')
+  );
+  const [momoDraft, setMomoDraft] = useState(
+    event.extraDataConfig?.momoNumber ?? preset.extraDataConfig.momoNumber ?? ''
+  );
+  const [designDraft, setDesignDraft] = useState<DesignTheme>(
+    event.designTheme ?? preset.designTheme
+  );
+  const [flyerDraft, setFlyerDraft] = useState<string>(event.flyerUrl || preset.flyerUrl);
+  const [flyerSavedToast, setFlyerSavedToast] = useState(false);
+  const detailFlyerInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setFlyerDraft(event.flyerUrl || preset.flyerUrl);
+  }, [event.id, event.flyerUrl, preset.flyerUrl]);
+
   const pct = Math.round((event.registered / Math.max(1, event.capacity)) * 100);
   const isAtCeiling = pct >= capacityThreshold;
   const eventSessions = scheduleBlocks.filter((b) => b.eventId === event.id);
+  const inviteUrl = buildEventInvitationUrl(event.slug || event.id);
+  const ogUrl = buildEventOgImageUrl(event.slug || event.id);
+  const flyerSrc = flyerDraft || preset.flyerUrl;
 
   const handleStatusChange = (newStatus: EventStatus) => {
     onUpdateEvent({ ...event, status: newStatus });
@@ -354,6 +443,93 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     const nextCap = Math.max(event.registered || 10, capacityDraft);
     setCapacityDraft(nextCap);
     onUpdateEvent({ ...event, capacity: nextCap });
+  };
+
+  const handleCopyShareLink = async () => {
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(inviteUrl);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+
+    if (!copied && typeof document !== 'undefined') {
+      try {
+        const tempInput = document.createElement('input');
+        tempInput.value = inviteUrl;
+        document.body.appendChild(tempInput);
+        tempInput.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempInput);
+        copied = true;
+      } catch {
+        // Ignore clipboard fallback failures
+      }
+    }
+
+    setCopiedInvite(true);
+    window.setTimeout(() => setCopiedInvite(false), 2000);
+
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share({
+          title: event.title,
+          text: `${event.title} · ${event.date} at ${event.venue}. Register & get your QR pass:`,
+          url: inviteUrl,
+        });
+        setShareFeedback('Link Copied & Shared!');
+      } catch (err) {
+        if ((err as Error)?.name === 'AbortError') {
+          setShareFeedback('Link Copied!');
+        } else {
+          setShareFeedback('Share Link Copied!');
+        }
+      }
+    } else {
+      setShareFeedback('Share Link Copied!');
+    }
+
+    window.setTimeout(() => setShareFeedback(null), 2400);
+  };
+
+  const handleApplyFlyer = (nextFlyerUrl: string) => {
+    setFlyerDraft(nextFlyerUrl);
+    onUpdateEvent({
+      ...event,
+      designTheme: designDraft,
+      flyerUrl: nextFlyerUrl,
+    });
+    setFlyerSavedToast(true);
+    setTimeout(() => setFlyerSavedToast(false), 2200);
+  };
+
+  const handleSaveFormsAndTheme = () => {
+    const parsedOptions = validationInput
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    onUpdateEvent({
+      ...event,
+      designTheme: designDraft,
+      flyerUrl: flyerSrc,
+      validationConfig: {
+        ...(event.validationConfig ?? preset.validationConfig),
+        enabled: true,
+        options:
+          parsedOptions.length > 0
+            ? parsedOptions
+            : preset.validationConfig.options,
+      },
+      extraDataConfig: {
+        ...(event.extraDataConfig ?? preset.extraDataConfig),
+        momoNumber: momoDraft.trim() || undefined,
+      },
+    });
+    setFlyerSavedToast(true);
+    setTimeout(() => setFlyerSavedToast(false), 2200);
   };
 
   return (
@@ -366,7 +542,25 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
       <div className="bg-white w-full max-w-2xl rounded-3xl border border-[#E5E5EA] p-6 sm:p-8 max-h-[90vh] overflow-y-auto soft-popover-shadow">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-4">
-            <MonochromePoster variant={event.artwork} className="w-16 h-16 rounded-2xl" />
+            <button
+              type="button"
+              onClick={() => detailFlyerInputRef.current?.click()}
+              title="Click to upload or edit event flyer picture"
+              className="relative group w-20 h-16 rounded-2xl overflow-hidden border border-[#E5E5EA] shrink-0 bg-[#0B0B0B]"
+            >
+              {flyerSrc ? (
+                <img
+                  src={flyerSrc}
+                  alt={event.title}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <MonochromePoster variant={event.artwork} className="w-full h-full rounded-2xl" />
+              )}
+              <span className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                <ImagePlus className="w-4 h-4" />
+              </span>
+            </button>
             <div>
               <div className="flex items-center gap-2 text-xs text-[#71717A]">
                 <span>{event.category}</span>
@@ -389,6 +583,135 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
           >
             <X className="w-4 h-4" />
           </button>
+        </div>
+
+        {/* Direct Event Flyer Picture Uploader & Preset Switcher */}
+        <div className="mt-5 p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-3">
+          <input
+            ref={detailFlyerInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (!file) return;
+              const compressed = await compressFlyerImageFile(file);
+              handleApplyFlyer(compressed);
+            }}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5">
+                <ImagePlus className="w-3.5 h-3.5" />
+                Event Flyer &amp; Picture Editor
+              </p>
+              <p className="text-[11px] text-[#71717A]">
+                Uploaded flyers show immediately on Home, Studio, and Invitation links.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {flyerSavedToast && (
+                <span className="text-[11px] font-semibold text-emerald-600 inline-flex items-center gap-1">
+                  <Check className="w-3.5 h-3.5" />
+                  Synced to Home
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => detailFlyerInputRef.current?.click()}
+                className="px-3.5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors inline-flex items-center gap-1.5"
+              >
+                <ImagePlus className="w-3.5 h-3.5" />
+                <span>Upload / Edit Picture</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center">
+            <div className="sm:col-span-5 rounded-xl overflow-hidden border border-[#E5E5EA] aspect-[16/10] bg-[#0B0B0B]">
+              {flyerSrc ? (
+                <img
+                  src={flyerSrc}
+                  alt={`${event.title} active flyer`}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <MonochromePoster variant={event.artwork} className="w-full h-full" />
+              )}
+            </div>
+            <div className="sm:col-span-7 grid grid-cols-3 gap-2">
+              {STUDIO_FLYER_PRESETS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleApplyFlyer(item.url)}
+                  className={`rounded-xl overflow-hidden border-2 transition-all bg-white ${
+                    flyerSrc === item.url
+                      ? 'border-[#0B0B0B] ring-1 ring-[#0B0B0B]/20'
+                      : 'border-transparent hover:border-[#71717A]'
+                  }`}
+                >
+                  <img
+                    src={item.url}
+                    alt={item.label}
+                    className="w-full h-11 object-cover"
+                  />
+                  <span className="block text-[10px] font-semibold text-[#0B0B0B] py-0.5 truncate px-1">
+                    {item.label}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Invitation Link & OG Social Image Card */}
+        <div className="mt-5 p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold text-[#71717A] flex items-center gap-1">
+                <Link2 className="w-3 h-3 text-[#0B0B0B]" />
+                Shareable Invitation Link (with dynamic og:image)
+              </p>
+              <p className="text-xs font-mono font-semibold text-[#0B0B0B] truncate mt-0.5">
+                {inviteUrl}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => void handleCopyShareLink()}
+                className="px-4 py-2 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shrink-0"
+              >
+                {shareFeedback || copiedInvite ? (
+                  <Check className="w-3.5 h-3.5" />
+                ) : (
+                  <Share2 className="w-3.5 h-3.5" />
+                )}
+                <span>{shareFeedback || 'Copy Share Link'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(inviteUrl).catch(() => {});
+                  }
+                  setCopiedInvite(true);
+                  window.setTimeout(() => setCopiedInvite(false), 1800);
+                }}
+                className="px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shrink-0"
+              >
+                {copiedInvite ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedInvite ? 'Copied' : 'Copy Only'}</span>
+              </button>
+            </div>
+          </div>
+          <img
+            src={ogUrl}
+            alt="OG social share preview"
+            className="w-full rounded-xl aspect-[1200/630] object-cover border border-[#E5E5EA] bg-[#0B0B0B]"
+          />
         </div>
 
         {(isAtCeiling || event.broadcastError) && (
@@ -499,6 +822,68 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
               </button>
             </div>
           </div>
+        </div>
+
+        {/* Poster Theme, Validation Form Circles & Wedding Gift Table Editor */}
+        <div className="mt-4 p-4 rounded-2xl bg-[#F5F5F7] space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              Poster Style, Validation Circles &amp; Gift Table
+            </span>
+            <button
+              type="button"
+              onClick={handleSaveFormsAndTheme}
+              className="px-3.5 py-1.5 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold"
+            >
+              Save Form Config
+            </button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+            {(['editorial-ivory', 'obsidian-gold', 'swiss-grid', 'warm-monochrome'] as DesignTheme[]).map(
+              (themeId) => (
+                <button
+                  key={themeId}
+                  type="button"
+                  onClick={() => setDesignDraft(themeId)}
+                  className={`py-1.5 px-2.5 rounded-full text-[11px] font-semibold border capitalize ${
+                    designDraft === themeId
+                      ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                      : 'bg-white text-[#0B0B0B] border-[#E5E5EA]'
+                  }`}
+                >
+                  {themeId.replace('-', ' ')}
+                </button>
+              )
+            )}
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+              Guest Validation Circles (comma separated)
+            </label>
+            <input
+              type="text"
+              value={validationInput}
+              onChange={(e) => setValidationInput(e.target.value)}
+              placeholder="Bride's Family, Groom's Family, Mutual Friends"
+              className="w-full h-9 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
+            />
+          </div>
+          {(event.category === 'Wedding' || event.extraDataConfig?.enableGiftTable) && (
+            <div>
+              <label className="text-[11px] font-semibold text-[#0B0B0B] mb-1 flex items-center gap-1">
+                <Gift className="w-3 h-3" />
+                Wedding Gift Table MoMo Receiving Number
+              </label>
+              <input
+                type="text"
+                value={momoDraft}
+                onChange={(e) => setMomoDraft(e.target.value)}
+                placeholder="+233 24 559 8104"
+                className="w-full h-9 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs font-mono text-[#0B0B0B]"
+              />
+            </div>
+          )}
         </div>
 
         {/* Run of Show Preview */}

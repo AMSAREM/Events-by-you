@@ -39,6 +39,11 @@ interface ExportColumn {
     | 'name'
     | 'phone'
     | 'email'
+    | 'validation_group'
+    | 'gift_pledge'
+    | 'gift_item'
+    | 'gift_wishes'
+    | 'custom_responses'
     | 'registered_at'
     | 'is_checked_in'
     | 'checked_in_at'
@@ -56,6 +61,41 @@ const INITIAL_COLUMNS: ExportColumn[] = [
   { key: 'name', label: 'Full Name', code: 'name', hint: 'Primary Attendee Record', enabled: true },
   { key: 'phone', label: 'Normalized Phone', code: 'phone', hint: 'E.164 Standard', enabled: true },
   { key: 'email', label: 'Email Address', code: 'email', hint: 'RFC 5322 Compliant', enabled: true },
+  {
+    key: 'validation_group',
+    label: 'Validation Circle',
+    code: 'validation_group',
+    hint: 'Family / Friends / VIP',
+    enabled: true,
+  },
+  {
+    key: 'gift_pledge',
+    label: 'Gift Table Pledge',
+    code: 'gift_pledge',
+    hint: 'MoMo / Cash Amount',
+    enabled: true,
+  },
+  {
+    key: 'gift_item',
+    label: 'Gift Registry Item',
+    code: 'gift_item',
+    hint: 'Selected Registry Item',
+    enabled: false,
+  },
+  {
+    key: 'gift_wishes',
+    label: 'Well-Wishes Note',
+    code: 'gift_wishes',
+    hint: 'Couple / Host Blessing',
+    enabled: false,
+  },
+  {
+    key: 'custom_responses',
+    label: 'Event Extra Form Data',
+    code: 'custom_responses',
+    hint: 'Dietary / Role / Custom Qs',
+    enabled: true,
+  },
   {
     key: 'registered_at',
     label: 'Registration Timestamp',
@@ -232,6 +272,22 @@ export const CsvExportScreen: React.FC<CsvExportScreenProps> = ({
         return formatPhone(att.phone, phoneFormat, maskPii);
       case 'email':
         return formatEmail(att.email, maskPii);
+      case 'validation_group':
+        return att.validationGroup ?? '';
+      case 'gift_pledge':
+        return att.giftEntry?.amount
+          ? `${att.giftEntry.currency || 'GHS'} ${att.giftEntry.amount} (${att.giftEntry.giftType})`
+          : att.giftEntry?.giftType || '';
+      case 'gift_item':
+        return att.giftEntry?.registryItem ?? '';
+      case 'gift_wishes':
+        return att.giftEntry?.message ?? '';
+      case 'custom_responses':
+        return att.customResponses
+          ? Object.entries(att.customResponses)
+              .map(([k, v]) => `${k}=${v}`)
+              .join('; ')
+          : '';
       case 'registered_at':
         return formatTimestamp(baseIso, undefined, timeFormat, false);
       case 'is_checked_in':
@@ -305,15 +361,15 @@ export const CsvExportScreen: React.FC<CsvExportScreenProps> = ({
       showToast('Applied Minimal Contact preset (4 columns)');
     } else if (preset === 'Full Audit') {
       setColumns((prev) => prev.map((c) => ({ ...c, enabled: true })));
-      showToast('Applied Full Audit preset (all 10 attributes)');
+      showToast('Applied Full Audit preset (all 15 attributes)');
     } else {
       setColumns((prev) =>
         prev.map((c) => ({
           ...c,
-          enabled: !['sms_status', 'ticket_nonce'].includes(c.key),
+          enabled: !['sms_status', 'ticket_nonce', 'gift_item', 'gift_wishes'].includes(c.key),
         }))
       );
-      showToast('Applied Gate Operations preset (8 core attributes)');
+      showToast('Applied Gate Operations preset (11 core attributes)');
     }
   };
 
@@ -741,7 +797,7 @@ export const CsvExportScreen: React.FC<CsvExportScreenProps> = ({
                 <thead>
                   <tr className="text-[11px] font-semibold text-[#71717A] uppercase tracking-wider border-b border-[#E5E5EA]">
                     <th className="py-2 px-3">ID</th>
-                    <th className="py-2 px-3">Name</th>
+                    <th className="py-2 px-3">Name &amp; Circle</th>
                     <th className="py-2 px-3">Phone</th>
                     <th className="py-2 px-3 text-right">Status</th>
                   </tr>
@@ -759,7 +815,21 @@ export const CsvExportScreen: React.FC<CsvExportScreenProps> = ({
                         <td className="py-2.5 px-3 font-mono text-[11px] text-[#0B0B0B] tabular-nums">
                           {att.ticketCode}
                         </td>
-                        <td className="py-2.5 px-3 font-semibold text-[#0B0B0B]">{att.name}</td>
+                        <td className="py-2.5 px-3">
+                          <span className="font-semibold text-[#0B0B0B] block">{att.name}</span>
+                          {(att.validationGroup || att.giftEntry) && (
+                            <span className="text-[10px] text-[#71717A] block">
+                              {[
+                                att.validationGroup,
+                                att.giftEntry?.amount
+                                  ? `${att.giftEntry.currency || 'GHS'} ${att.giftEntry.amount}`
+                                  : att.giftEntry?.registryItem,
+                              ]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </span>
+                          )}
+                        </td>
                         <td className="py-2.5 px-3 font-mono text-[11px] text-[#71717A] tabular-nums">
                           {formatPhone(att.phone, phoneFormat, maskPii)}
                         </td>

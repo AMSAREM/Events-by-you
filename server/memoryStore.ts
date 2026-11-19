@@ -676,7 +676,37 @@ export const memoryStore = {
   getPublicEvents(): EventItem[] {
     return Array.from(db.events.values())
       .filter((e) => e.status === 'live' || e.status === 'upcoming')
-      .map(({ organizerId: _org, ...rest }) => rest);
+      .map(({ organizerId: _org, ...rest }) => rest)
+      .sort((a, b) => {
+        const aCustom = a.flyerUrl?.startsWith('data:') ? 1 : 0;
+        const bCustom = b.flyerUrl?.startsWith('data:') ? 1 : 0;
+        return bCustom - aCustom;
+      });
+  },
+
+  getPublicEventBySlugOrId(slugOrId: string): EventItem | null {
+    const target = slugOrId.trim().toLowerCase();
+    for (const evt of db.events.values()) {
+      if (
+        (evt.status === 'live' || evt.status === 'upcoming') &&
+        (evt.id.toLowerCase() === target || evt.slug.toLowerCase() === target)
+      ) {
+        const { organizerId: _org, ...rest } = evt;
+        return rest;
+      }
+    }
+    return null;
+  },
+
+  getAnyEventBySlugOrId(slugOrId: string): EventItem | null {
+    const target = slugOrId.trim().toLowerCase();
+    for (const evt of db.events.values()) {
+      if (evt.id.toLowerCase() === target || evt.slug.toLowerCase() === target) {
+        const { organizerId: _org, ...rest } = evt;
+        return rest;
+      }
+    }
+    return null;
   },
 
   registerPublicAttendee(payload: {
@@ -689,6 +719,10 @@ export const memoryStore = {
     tier?: Attendee['tier'];
     ticketCode: string;
     smsStatus: Attendee['smsStatus'];
+    validationGroup?: string;
+    inviteCodeUsed?: string;
+    giftEntry?: Attendee['giftEntry'];
+    customResponses?: Record<string, string>;
   }): { attendee: Attendee; event: EventItem } {
     const evt = db.events.get(payload.eventId);
     if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
@@ -696,6 +730,13 @@ export const memoryStore = {
     }
     if (evt.qrPassPublished === false) {
       throw new Error(`QR_PASS_NOT_PUBLISHED:${evt.title}`);
+    }
+    if (evt.validationConfig?.requireInviteCode && evt.validationConfig.inviteCode?.trim()) {
+      const expected = evt.validationConfig.inviteCode.trim().toLowerCase();
+      const given = (payload.inviteCodeUsed || '').trim().toLowerCase();
+      if (given !== expected) {
+        throw new Error('INVALID_INVITE_CODE:Invalid invitation passcode for this event.');
+      }
     }
 
     const normalizedPhone = normalizePhoneE164(payload.phone);
@@ -721,6 +762,10 @@ export const memoryStore = {
       ticketCode: payload.ticketCode,
       smsStatus: payload.smsStatus,
       paymentStatus: 'paid',
+      validationGroup: payload.validationGroup?.trim() || undefined,
+      inviteCodeUsed: payload.inviteCodeUsed?.trim() || undefined,
+      giftEntry: payload.giftEntry,
+      customResponses: payload.customResponses,
     };
     db.attendees.set(attendee.id, attendee);
 

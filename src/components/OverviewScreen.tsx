@@ -1,9 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowUpRight,
+  Check,
   ChevronLeft,
   ChevronRight,
+  ImagePlus,
+  Pencil,
   Plus,
   QrCode,
   UserPlus,
@@ -16,7 +19,8 @@ import {
   SystemAlert,
   TimeRange,
 } from '../types/events';
-import { VELOCITY_SERIES } from '../data/initialData';
+import { VELOCITY_SERIES, getCategoryPreset } from '../data/initialData';
+import { compressFlyerImageFile } from '../lib/flyerUpload';
 import { CircularGauge, MonochromePoster, SplineChart } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
 
@@ -29,6 +33,8 @@ interface OverviewScreenProps {
   onSearchChange: (q: string) => void;
   onOpenCreateModal: () => void;
   onManageEvent: (event: EventItem) => void;
+  onEditEventModal?: (event: EventItem) => void;
+  onUpdateEvent?: (updated: EventItem) => Promise<void> | void;
   onNavigateAttendees: (eventId?: string) => void;
   onOpenQrScanner: (eventId?: string, code?: string) => void;
   onNavigateEvents: () => void;
@@ -46,6 +52,8 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
   onSearchChange,
   onOpenCreateModal,
   onManageEvent,
+  onEditEventModal,
+  onUpdateEvent,
   onNavigateAttendees,
   onOpenQrScanner,
   onNavigateEvents,
@@ -58,6 +66,12 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
   const [highlightIndex, setHighlightIndex] = useState(0);
   const [timeRange, setTimeRange] = useState<TimeRange>('7D');
   const [quickScanCode, setQuickScanCode] = useState('');
+  const [failedFlyerIds, setFailedFlyerIds] = useState<Record<string, boolean>>({});
+  const [uploadingEventId, setUploadingEventId] = useState<string | null>(null);
+  const [savedBannerEventId, setSavedBannerEventId] = useState<string | null>(null);
+  const highlightFileInputRef = useRef<HTMLInputElement | null>(null);
+  const catalogFileInputRef = useRef<HTMLInputElement | null>(null);
+  const catalogUploadTargetRef = useRef<EventItem | null>(null);
 
   const upcomingPool = useMemo(() => {
     const active = events.filter((e) => e.status === 'upcoming' || e.status === 'live');
@@ -66,6 +80,45 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
 
   const safeHighlightIdx = upcomingPool.length > 0 ? highlightIndex % upcomingPool.length : 0;
   const featuredEvent = upcomingPool[safeHighlightIdx];
+  const featuredFlyerSrc = featuredEvent
+    ? featuredEvent.flyerUrl || getCategoryPreset(featuredEvent.category).flyerUrl
+    : '';
+
+  useEffect(() => {
+    if (!featuredEvent?.id) return;
+    setFailedFlyerIds((prev) => {
+      if (!prev[featuredEvent.id]) return prev;
+      const next = { ...prev };
+      delete next[featuredEvent.id];
+      return next;
+    });
+  }, [featuredEvent?.id, featuredEvent?.flyerUrl]);
+
+  const handleFlyerUploadForEvent = async (
+    targetEvent: EventItem | undefined,
+    file: File | undefined
+  ) => {
+    if (!targetEvent || !file || !onUpdateEvent) return;
+    setUploadingEventId(targetEvent.id);
+    try {
+      const compressed = await compressFlyerImageFile(file);
+      setFailedFlyerIds((prev) => {
+        const next = { ...prev };
+        delete next[targetEvent.id];
+        return next;
+      });
+      await onUpdateEvent({
+        ...targetEvent,
+        flyerUrl: compressed,
+      });
+      setSavedBannerEventId(targetEvent.id);
+      setTimeout(() => {
+        setSavedBannerEventId((curr) => (curr === targetEvent.id ? null : curr));
+      }, 2600);
+    } finally {
+      setUploadingEventId(null);
+    }
+  };
 
   const filteredCatalog = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -109,6 +162,19 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_356px] gap-5 lg:gap-6 items-start">
+      <input
+        ref={catalogFileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          const target = catalogUploadTargetRef.current;
+          e.target.value = '';
+          void handleFlyerUploadForEvent(target ?? undefined, file);
+        }}
+      />
+
       {/* CENTER COLUMN: Greeting, Prominent QR & Check-In Bar, Upcoming Highlight, Event Catalog */}
       <div className="space-y-5 lg:space-y-6 min-w-0">
         {/* Personalized Greeting Banner */}
@@ -238,6 +304,12 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                 <span className="text-xs text-[#71717A] tabular-nums">
                   · {safeHighlightIdx + 1} / {upcomingPool.length}
                 </span>
+                {savedBannerEventId === featuredEvent.id && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-semibold">
+                    <Check className="w-3 h-3" />
+                    Flyer live on Home
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -262,11 +334,53 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
-              <div className="flex items-center gap-4 min-w-0">
-                <MonochromePoster
-                  variant={featuredEvent.artwork}
-                  className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl"
-                />
+              <div className="flex flex-col sm:flex-row sm:items-center gap-4 min-w-0">
+                {/* Interactive Event Flyer Upload / Picture Editor Slot */}
+                <div className="relative w-full sm:w-48 h-32 sm:h-28 rounded-2xl overflow-hidden border border-[#E5E5EA] bg-[#0B0B0B] shrink-0 group shadow-sm">
+                  <input
+                    ref={highlightFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    aria-label="Upload or edit event flyer picture"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      void handleFlyerUploadForEvent(featuredEvent, file);
+                    }}
+                  />
+                  {featuredFlyerSrc && !failedFlyerIds[featuredEvent.id] ? (
+                    <img
+                      src={featuredFlyerSrc}
+                      alt={`${featuredEvent.title} flyer`}
+                      onError={() =>
+                        setFailedFlyerIds((prev) => ({ ...prev, [featuredEvent.id]: true }))
+                      }
+                      className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-300"
+                    />
+                  ) : (
+                    <MonochromePoster
+                      variant={featuredEvent.artwork}
+                      className="w-full h-full rounded-none border-0"
+                    />
+                  )}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/15 to-transparent pointer-events-none" />
+                  {isEventCreator && (
+                    <button
+                      type="button"
+                      disabled={uploadingEventId === featuredEvent.id}
+                      onClick={() => highlightFileInputRef.current?.click()}
+                      title="Upload or change event flyer picture (appears on Home page)"
+                      className="absolute inset-x-1.5 bottom-1.5 py-1 px-2 rounded-full bg-white/95 hover:bg-white text-[#0B0B0B] text-[10px] font-bold flex items-center justify-center gap-1 shadow-sm transition-colors cursor-pointer"
+                    >
+                      <ImagePlus className="w-3 h-3 shrink-0" />
+                      <span className="truncate">
+                        {uploadingEventId === featuredEvent.id ? 'Saving...' : 'Upload Flyer'}
+                      </span>
+                    </button>
+                  )}
+                </div>
+
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-[#71717A]">
                     <span className="capitalize font-medium text-[#0B0B0B]">
@@ -283,6 +397,28 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                   <p className="text-xs text-[#71717A] mt-0.5 truncate">
                     {featuredEvent.venue} · {featuredEvent.city}
                   </p>
+                  {isEventCreator && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => highlightFileInputRef.current?.click()}
+                        className="px-2.5 py-1 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1 transition-colors"
+                      >
+                        <ImagePlus className="w-3 h-3" />
+                        <span>Upload Picture</span>
+                      </button>
+                      {onEditEventModal && (
+                        <button
+                          type="button"
+                          onClick={() => onEditEventModal(featuredEvent)}
+                          className="px-2.5 py-1 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1 transition-colors"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Edit Flyer &amp; Theme</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {featuredAlert && (
                     <p className="text-xs font-semibold text-[#EF4444] mt-1.5 inline-flex items-center gap-1.5">
                       <AlertCircle className="w-3.5 h-3.5" />
@@ -382,6 +518,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                 const pct = Math.round((evt.registered / Math.max(1, evt.capacity)) * 100);
                 const hasCapAlert = pct >= profile.capacityAlertThreshold;
                 const hasIssue = hasCapAlert || Boolean(evt.broadcastError);
+                const evtFlyerSrc = evt.flyerUrl || getCategoryPreset(evt.category).flyerUrl;
 
                 return (
                   <div
@@ -389,12 +526,47 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                     className="group p-4 rounded-2xl bg-[#F5F5F7] border border-transparent hover:bg-white hover:border-[#E5E5EA] hover:-translate-y-0.5 transition-all duration-150 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
                   >
                     <div className="flex items-center gap-3.5 min-w-0">
-                      <MonochromePoster variant={evt.artwork} className="w-14 h-14 rounded-xl" />
+                      <div className="relative w-16 h-14 rounded-xl overflow-hidden border border-[#E5E5EA] bg-[#0B0B0B] shrink-0">
+                        {evtFlyerSrc && !failedFlyerIds[evt.id] ? (
+                          <img
+                            src={evtFlyerSrc}
+                            alt={`${evt.title} flyer`}
+                            onError={() =>
+                              setFailedFlyerIds((prev) => ({ ...prev, [evt.id]: true }))
+                            }
+                            className="w-full h-full object-cover object-center"
+                          />
+                        ) : (
+                          <MonochromePoster
+                            variant={evt.artwork}
+                            className="w-full h-full rounded-none border-0"
+                          />
+                        )}
+                        {isEventCreator && onUpdateEvent && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              catalogUploadTargetRef.current = evt;
+                              catalogFileInputRef.current?.click();
+                            }}
+                            title="Upload or change flyer picture"
+                            aria-label={`Upload flyer for ${evt.title}`}
+                            className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity flex items-center justify-center text-white cursor-pointer"
+                          >
+                            <ImagePlus className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <h3 className="text-sm font-semibold text-[#0B0B0B] truncate">
                             {evt.title}
                           </h3>
+                          {savedBannerEventId === evt.id && (
+                            <span className="text-[10px] font-semibold text-emerald-600 shrink-0">
+                              Saved
+                            </span>
+                          )}
                         </div>
                         <div className="flex flex-wrap items-center gap-1.5 text-xs text-[#71717A] mt-1">
                           <span className="font-semibold text-[#0B0B0B]">{evt.category}</span>
@@ -428,8 +600,8 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
-                      <div className="text-left sm:text-right">
+                    <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0">
+                      <div className="text-left sm:text-right mr-1">
                         <p className="text-xs font-semibold text-[#0B0B0B] tabular-nums">
                           ${evt.revenue.toLocaleString()}
                         </p>
@@ -437,6 +609,15 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                           ${evt.ticketPrice} pass
                         </p>
                       </div>
+                      {isEventCreator && onEditEventModal && (
+                        <button
+                          type="button"
+                          onClick={() => onEditEventModal(evt)}
+                          className="px-3 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
+                        >
+                          Edit Flyer
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => onManageEvent(evt)}
