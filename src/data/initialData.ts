@@ -12,6 +12,7 @@ import type {
 
 export const EVENT_CATEGORIES = [
   'Events',
+  'Program',
   'Wedding',
   'Funeral',
   'Church',

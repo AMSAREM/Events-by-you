@@ -84,7 +84,7 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
     if (secondsLeft > 0) return;
     setErrorMsg(null);
     try {
-      await api.auth.resendOtp(email);
+      await api.auth.resendOtp(email, otpType);
       setSecondsLeft(42);
       setFallbackNotice(true);
     } catch (err) {
@@ -233,7 +233,7 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                       Authentication Code
                     </label>
                     <span className="text-[11px] font-medium text-[#71717A]">
-                      Check your Supabase inbox
+                      Check your email inbox (Resend)
                     </span>
                   </div>
                   <div className="grid grid-cols-6 gap-2 sm:gap-3.5">

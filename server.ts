@@ -50,9 +50,39 @@ import {
   signCreatorSessionToken,
   type AuthedRequest,
 } from './server/helpers.ts';
+import {
+  isResendConfigured,
+  sendAuthOtpEmail,
+  sendEventPassEmail,
+} from './server/resend.ts';
 import { createMemoryRouter } from './server/memoryRoutes.ts';
 import { createBuilderRouter } from './server/builderRoutes.ts';
 import { memoryStore, platformRuntime } from './server/memoryStore.ts';
+
+function formatSupabaseEmailError(message: string, hasServiceRole: boolean): { status: number; error: string } {
+  const lower = message.toLowerCase();
+  if (lower.includes('rate limit') || lower.includes('over_email_send_rate_limit')) {
+    if (!isResendConfigured()) {
+      return {
+        status: 429,
+        error:
+          'Supabase email rate limit exceeded (~2 emails/hr on default SMTP). Add RESEND_API_KEY and SUPABASE_SERVICE_ROLE_KEY in environment Secrets (or configure Resend SMTP in Supabase Auth Settings) to send emails via Resend.',
+      };
+    }
+    if (!hasServiceRole) {
+      return {
+        status: 429,
+        error:
+          'Supabase email rate limit exceeded on client-side SMTP. Add SUPABASE_SERVICE_ROLE_KEY to environment Secrets so the server can route auth emails directly through Resend without Supabase limits.',
+      };
+    }
+    return {
+      status: 429,
+      error: 'Email rate limit exceeded. Please wait a moment and try again.',
+    };
+  }
+  return { status: 400, error: message };
+}
 
 function sha256Hex(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -328,6 +358,8 @@ async function createAppServer() {
       ok: true,
       database: configured ? 'supabase' : 'in-memory',
       supabaseConfigured: configured,
+      serviceRoleConfigured: Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()),
+      resendConfigured: isResendConfigured(),
       inMemoryFallback: !configured,
       creatorEmail: creator.email,
       creatorPasswordConfigured: creator.configured,
@@ -505,6 +537,23 @@ async function createAppServer() {
       });
       if (error || !data.session || !data.user) {
         if (error?.message?.toLowerCase().includes('email not confirmed')) {
+          const svc = createServiceSupabaseClient();
+          if (isResendConfigured() && svc) {
+            const linkRes = await svc.auth.admin.generateLink({
+              type: 'magiclink',
+              email: email.trim(),
+            });
+            const otpCode = linkRes.data?.properties?.email_otp;
+            const actionLink = linkRes.data?.properties?.action_link;
+            if (!linkRes.error && (otpCode || actionLink)) {
+              await sendAuthOtpEmail({
+                to: email.trim(),
+                code: otpCode,
+                actionLink,
+                purpose: 'signup',
+              });
+            }
+          }
           return res.json({ requiresOtp: true, email: email.trim(), otpType: 'signup' });
         }
         return res.status(401).json({ error: error?.message || 'Invalid credentials.' });
@@ -543,23 +592,101 @@ async function createAppServer() {
     if (!email || !password || !name) {
       return res.status(400).json({ error: 'Name, email, and password are required.' });
     }
+
+    const trimmedEmail = email.trim();
+    const trimmedName = name.trim();
+    const userMetadata = {
+      name: trimmedName,
+      first_name: trimmedName.split(' ')[0] || 'Organiser',
+      studio: (studio || 'Events Studio').trim(),
+      country_gateway: countryGateway || 'GH',
+      app_role: appRole === 'gate_staff' ? 'gate_staff' : 'organizer',
+    };
+
     try {
+      const svc = createServiceSupabaseClient();
+
+      // Route signup verification directly through Resend when RESEND_API_KEY + Service Role are configured
+      if (isResendConfigured() && svc) {
+        let otpCode: string | undefined;
+        let actionLink: string | undefined;
+
+        const genRes = await svc.auth.admin.generateLink({
+          type: 'signup',
+          email: trimmedEmail,
+          password,
+          options: {
+            data: userMetadata,
+          },
+        });
+
+        if (genRes.error) {
+          const msgLower = genRes.error.message.toLowerCase();
+          if (msgLower.includes('already') || msgLower.includes('registered') || msgLower.includes('exists')) {
+            const { data: listData } = await svc.auth.admin.listUsers({ perPage: 200 });
+            const existingUser = listData?.users?.find(
+              (u) => (u.email || '').trim().toLowerCase() === trimmedEmail.toLowerCase()
+            );
+            if (existingUser && !existingUser.email_confirmed_at) {
+              await svc.auth.admin.updateUserById(existingUser.id, {
+                password,
+                user_metadata: userMetadata,
+              });
+              const magicRes = await svc.auth.admin.generateLink({
+                type: 'magiclink',
+                email: trimmedEmail,
+              });
+              if (magicRes.error) {
+                return res.status(400).json({ error: magicRes.error.message });
+              }
+              otpCode = magicRes.data?.properties?.email_otp;
+              actionLink = magicRes.data?.properties?.action_link;
+            } else {
+              return res.status(400).json({
+                error: 'An account with this email already exists. Please sign in instead.',
+              });
+            }
+          } else {
+            return res.status(400).json({ error: genRes.error.message });
+          }
+        } else {
+          otpCode = genRes.data?.properties?.email_otp;
+          actionLink = genRes.data?.properties?.action_link;
+        }
+
+        const emailDelivery = await sendAuthOtpEmail({
+          to: trimmedEmail,
+          code: otpCode,
+          actionLink,
+          purpose: 'signup',
+          name: trimmedName,
+        });
+
+        if (!emailDelivery.ok) {
+          return res.status(400).json({
+            error: `Resend could not send verification email: ${emailDelivery.error || 'Unknown error'}`,
+          });
+        }
+
+        return res.json({
+          requiresOtp: true,
+          email: trimmedEmail,
+          otpType: 'signup',
+          provider: 'resend',
+        });
+      }
+
       const supabase = createPublicSupabaseClient();
       const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
+        email: trimmedEmail,
         password,
         options: {
-          data: {
-            name: name.trim(),
-            first_name: name.trim().split(' ')[0] || 'Organiser',
-            studio: (studio || 'Events Studio').trim(),
-            country_gateway: countryGateway || 'GH',
-            app_role: appRole === 'gate_staff' ? 'gate_staff' : 'organizer',
-          },
+          data: userMetadata,
         },
       });
       if (error) {
-        return res.status(400).json({ error: error.message });
+        const formatted = formatSupabaseEmailError(error.message, Boolean(svc));
+        return res.status(formatted.status).json({ error: formatted.error });
       }
       if (data.session && data.user) {
         const userClient = createUserSupabaseClient(data.session.access_token);
@@ -576,7 +703,7 @@ async function createAppServer() {
       }
       return res.json({
         requiresOtp: true,
-        email: email.trim(),
+        email: trimmedEmail,
         otpType: 'signup',
       });
     } catch (err) {
@@ -596,18 +723,28 @@ async function createAppServer() {
     }
     try {
       const supabase = createPublicSupabaseClient();
-      const typeToTry = otpType || 'signup';
+      const candidateTypes: Array<'signup' | 'email' | 'magiclink' | 'recovery'> = Array.from(
+        new Set([
+          otpType || 'signup',
+          'email',
+          'magiclink',
+          'signup',
+          'recovery',
+        ])
+      );
+
       let result = await supabase.auth.verifyOtp({
         email: email.trim(),
         token: token.trim(),
-        type: typeToTry,
+        type: candidateTypes[0],
       });
 
-      if (result.error && typeToTry !== 'email') {
+      for (const nextType of candidateTypes.slice(1)) {
+        if (!result.error && result.data.session && result.data.user) break;
         result = await supabase.auth.verifyOtp({
           email: email.trim(),
           token: token.trim(),
-          type: 'email',
+          type: nextType,
         });
       }
 
@@ -638,18 +775,43 @@ async function createAppServer() {
     if (!email?.trim()) {
       return res.status(400).json({ error: 'Email address is required.' });
     }
+    const trimmedEmail = email.trim();
     try {
+      const svc = createServiceSupabaseClient();
+      if (isResendConfigured() && svc) {
+        const genRes = await svc.auth.admin.generateLink({
+          type: 'magiclink',
+          email: trimmedEmail,
+        });
+        if (genRes.error) {
+          return res.status(400).json({ error: genRes.error.message });
+        }
+        const emailDelivery = await sendAuthOtpEmail({
+          to: trimmedEmail,
+          code: genRes.data?.properties?.email_otp,
+          actionLink: genRes.data?.properties?.action_link,
+          purpose: 'login',
+        });
+        if (!emailDelivery.ok) {
+          return res.status(400).json({
+            error: `Resend could not dispatch sign-in code: ${emailDelivery.error || 'Unknown error'}`,
+          });
+        }
+        return res.json({ ok: true, email: trimmedEmail, provider: 'resend' });
+      }
+
       const supabase = createPublicSupabaseClient();
       const { error } = await supabase.auth.signInWithOtp({
-        email: email.trim(),
+        email: trimmedEmail,
         options: {
           shouldCreateUser: true,
         },
       });
       if (error) {
-        return res.status(400).json({ error: error.message });
+        const formatted = formatSupabaseEmailError(error.message, Boolean(svc));
+        return res.status(formatted.status).json({ error: formatted.error });
       }
-      return res.json({ ok: true, email: email.trim() });
+      return res.json({ ok: true, email: trimmedEmail });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not dispatch 6-digit code.';
       return res.status(500).json({ error: message });
@@ -657,20 +819,49 @@ async function createAppServer() {
   });
 
   app.post('/api/auth/resend-otp', requireSupabaseConfiguredMiddleware, async (req, res) => {
-    const { email } = req.body as { email?: string };
-    if (!email) {
+    const { email, otpType } = req.body as {
+      email?: string;
+      otpType?: 'signup' | 'email' | 'recovery';
+    };
+    if (!email?.trim()) {
       return res.status(400).json({ error: 'Email is required.' });
     }
+    const trimmedEmail = email.trim();
     try {
+      const svc = createServiceSupabaseClient();
+      if (isResendConfigured() && svc) {
+        const linkType = otpType === 'recovery' ? 'recovery' : 'magiclink';
+        const genRes = await svc.auth.admin.generateLink({
+          type: linkType,
+          email: trimmedEmail,
+        });
+        if (genRes.error) {
+          return res.status(400).json({ error: genRes.error.message });
+        }
+        const emailDelivery = await sendAuthOtpEmail({
+          to: trimmedEmail,
+          code: genRes.data?.properties?.email_otp,
+          actionLink: genRes.data?.properties?.action_link,
+          purpose: otpType === 'recovery' ? 'recovery' : 'signup',
+        });
+        if (!emailDelivery.ok) {
+          return res.status(400).json({
+            error: `Resend could not resend verification code: ${emailDelivery.error || 'Unknown error'}`,
+          });
+        }
+        return res.json({ ok: true, provider: 'resend' });
+      }
+
       const supabase = createPublicSupabaseClient();
       const { error } = await supabase.auth.resend({
         type: 'signup',
-        email: email.trim(),
+        email: trimmedEmail,
       });
       if (error) {
-        const otpFallback = await supabase.auth.signInWithOtp({ email: email.trim() });
+        const otpFallback = await supabase.auth.signInWithOtp({ email: trimmedEmail });
         if (otpFallback.error) {
-          return res.status(400).json({ error: otpFallback.error.message });
+          const formatted = formatSupabaseEmailError(otpFallback.error.message, Boolean(svc));
+          return res.status(formatted.status).json({ error: formatted.error });
         }
       }
       return res.json({ ok: true });
@@ -682,16 +873,44 @@ async function createAppServer() {
 
   app.post('/api/auth/reset-password', requireSupabaseConfiguredMiddleware, async (req, res) => {
     const { email, redirectTo } = req.body as { email?: string; redirectTo?: string };
-    if (!email) {
+    if (!email?.trim()) {
       return res.status(400).json({ error: 'Email address is required.' });
     }
+    const trimmedEmail = email.trim();
     try {
+      const svc = createServiceSupabaseClient();
+      if (isResendConfigured() && svc) {
+        const genRes = await svc.auth.admin.generateLink({
+          type: 'recovery',
+          email: trimmedEmail,
+          options: {
+            redirectTo: redirectTo || undefined,
+          },
+        });
+        if (genRes.error) {
+          return res.status(400).json({ error: genRes.error.message });
+        }
+        const emailDelivery = await sendAuthOtpEmail({
+          to: trimmedEmail,
+          code: genRes.data?.properties?.email_otp,
+          actionLink: genRes.data?.properties?.action_link,
+          purpose: 'recovery',
+        });
+        if (!emailDelivery.ok) {
+          return res.status(400).json({
+            error: `Resend could not send recovery instructions: ${emailDelivery.error || 'Unknown error'}`,
+          });
+        }
+        return res.json({ ok: true, provider: 'resend' });
+      }
+
       const supabase = createPublicSupabaseClient();
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
         redirectTo: redirectTo || undefined,
       });
       if (error) {
-        return res.status(400).json({ error: error.message });
+        const formatted = formatSupabaseEmailError(error.message, Boolean(svc));
+        return res.status(formatted.status).json({ error: formatted.error });
       }
       return res.json({ ok: true });
     } catch (err) {
@@ -892,16 +1111,60 @@ async function createAppServer() {
           event: Record<string, unknown>;
         };
         const event = mapEventRow(payload.event);
-        const smsDelivery = await dispatchOptionalArkeselSms(
-          normalizedPhone,
-          event.title,
-          finalCode,
-          event.senderId
-        );
+
+        let replyTo: string | undefined;
+        const organizerId = payload.event?.organizer_id ? String(payload.event.organizer_id) : undefined;
+        if (organizerId) {
+          const { data: orgProf } = await supabase
+            .from('profiles')
+            .select('reply_to_email')
+            .eq('id', organizerId)
+            .maybeSingle();
+          if (orgProf && typeof (orgProf as Record<string, unknown>).reply_to_email === 'string') {
+            replyTo = String((orgProf as Record<string, unknown>).reply_to_email);
+          }
+        }
+
+        const [smsDelivery, emailDelivery] = await Promise.all([
+          dispatchOptionalArkeselSms(
+            normalizedPhone,
+            event.title,
+            finalCode,
+            event.senderId
+          ),
+          isResendConfigured()
+            ? sendEventPassEmail({
+                to: email.trim(),
+                attendeeName: name.trim(),
+                eventTitle: event.title,
+                eventDate: event.date,
+                eventTime: event.time,
+                eventVenue: event.venue,
+                eventCity: event.city,
+                ticketCode: finalCode,
+                tier: tier || 'General',
+                organizerName: event.organizer,
+                replyTo,
+              })
+            : Promise.resolve({ ok: false, skipped: true }),
+        ]);
+
+        const hasLiveArkesel = Boolean((process.env.ARKESEL_API_KEY || '').trim()) && platformRuntime.flags.smsMode !== 'sandbox';
+        const finalDeliveryStatus: Attendee['smsStatus'] =
+          emailDelivery.ok && (!hasLiveArkesel || smsDelivery === 'Pending')
+            ? 'Resend Delivered'
+            : smsDelivery;
+
+        if (finalDeliveryStatus !== payload.attendee.sms_status) {
+          await supabase
+            .from('attendees')
+            .update({ sms_status: finalDeliveryStatus })
+            .eq('id', attendeeId);
+        }
 
         const attendee = mapAttendeeRow({
           ...payload.attendee,
-          sms_status: smsDelivery,
+          sms_status: finalDeliveryStatus,
         });
 
         return res.status(201).json({ attendee, event });
@@ -1369,6 +1632,49 @@ async function createAppServer() {
       }
 
       const normalizedPhone = normalizePhoneE164(attendee.phone);
+      const evtMapped = mapEventRow(evtCheckRec);
+      let replyTo: string | undefined;
+      if (isResendConfigured()) {
+        const { data: orgProf } = await client
+          .from('profiles')
+          .select('reply_to_email')
+          .eq('id', req.user!.id)
+          .maybeSingle();
+        if (orgProf && typeof (orgProf as Record<string, unknown>).reply_to_email === 'string') {
+          replyTo = String((orgProf as Record<string, unknown>).reply_to_email);
+        }
+      }
+
+      const [smsDelivery, emailDelivery] = await Promise.all([
+        dispatchOptionalArkeselSms(
+          normalizedPhone,
+          evtMapped.title,
+          attendee.ticketCode,
+          evtMapped.senderId
+        ),
+        isResendConfigured() && attendee.email?.includes('@')
+          ? sendEventPassEmail({
+              to: attendee.email.trim(),
+              attendeeName: attendee.name,
+              eventTitle: evtMapped.title,
+              eventDate: evtMapped.date,
+              eventTime: evtMapped.time,
+              eventVenue: evtMapped.venue,
+              eventCity: evtMapped.city,
+              ticketCode: attendee.ticketCode,
+              tier: attendee.tier || 'General',
+              organizerName: evtMapped.organizer,
+              replyTo,
+            })
+          : Promise.resolve({ ok: false, skipped: true }),
+      ]);
+
+      const hasLiveArkesel = Boolean((process.env.ARKESEL_API_KEY || '').trim()) && platformRuntime.flags.smsMode !== 'sandbox';
+      const resolvedSmsStatus: Attendee['smsStatus'] =
+        emailDelivery.ok && (!hasLiveArkesel || smsDelivery === 'Pending')
+          ? 'Resend Delivered'
+          : attendee.smsStatus || smsDelivery;
+
       const { data: inserted, error: attErr } = await client
         .from('attendees')
         .insert({
@@ -1382,7 +1688,7 @@ async function createAppServer() {
           checked_in: Boolean(attendee.checkedIn),
           checked_in_at: attendee.checkedInAt ?? null,
           ticket_code: attendee.ticketCode,
-          sms_status: attendee.smsStatus || 'Arkesel Sent',
+          sms_status: resolvedSmsStatus,
           payment_status: attendee.paymentStatus || 'paid',
         })
         .select('*')
@@ -2157,6 +2463,11 @@ async function createAppServer() {
       const message = err instanceof Error ? err.message : 'Failed to delete creator app.';
       return res.status(500).json({ error: message });
     }
+  });
+
+  // Unmatched /api/* JSON 404 handler (never fall through to SPA HTML)
+  app.use('/api', (_req, res) => {
+    return res.status(404).json({ error: 'API endpoint not found.' });
   });
 
   // JSON Error Handler for /api routes

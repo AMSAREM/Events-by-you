@@ -242,13 +242,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
             <button
               type="button"
               onClick={() =>
-                onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignIn()
+                onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignUp()
               }
               className="inline-flex items-center justify-center bg-[#0B0B0B] text-white text-xs font-semibold px-3.5 sm:px-4 lg:px-5 py-2 sm:py-2.5 rounded-full hover:bg-neutral-800 transition-colors shadow-[0_12px_32px_-8px_rgba(11,11,11,0.16)] whitespace-nowrap shrink-0"
             >
               <span className="lg:hidden">{isSignedIn ? 'Studio' : 'Create Event'}</span>
               <span className="hidden lg:inline">
-                {isSignedIn ? 'Open Studio' : 'Create Event (Sign In)'}
+                {isSignedIn ? 'Open Studio' : 'Create Event'}
               </span>
             </button>
           </div>
@@ -327,23 +327,24 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     </button>
                     <button
                       type="button"
-                      disabled={!checkInRegistrationAvailable}
-                      aria-disabled={!checkInRegistrationAvailable}
                       title={
                         !isSignedIn
-                          ? 'Sign up and set an event first to enable Check-In Registration'
+                          ? 'Sign in to open Check-In Registration'
                           : !hasSetEvent
                             ? 'Create or set an event first to enable Check-In Registration'
                             : 'Open Check-In Registration'
                       }
                       onClick={() => {
-                        if (!checkInRegistrationAvailable) return;
+                        if (!isSignedIn) {
+                          onNavigateSignIn();
+                          return;
+                        }
                         onNavigateDemoEvent(topMatchedEvent.id, 'register');
                       }}
-                      className={`w-full sm:w-auto inline-flex items-center justify-center gap-2 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border backdrop-blur-md transition-all whitespace-nowrap shrink-0 ${
+                      className={`w-full sm:w-auto inline-flex items-center justify-center gap-2 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border backdrop-blur-md transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                         checkInRegistrationAvailable
-                          ? 'bg-white/15 text-white hover:bg-white/25 border-white/20 cursor-pointer'
-                          : 'bg-white/5 text-white/45 border-white/10 cursor-not-allowed'
+                          ? 'bg-white/15 text-white hover:bg-white/25 border-white/20'
+                          : 'bg-white/5 text-white/45 border-white/10'
                       }`}
                     >
                       {checkInRegistrationAvailable ? (
@@ -382,7 +383,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   </div>
                   {!isSignedIn && (
                     <p className="mt-3 text-[11px] text-white/60">
-                      Creator Studio, QR Gate Scanner &amp; Disposable Camera require an organizer sign-in.
+                      Individuals &amp; event teams can sign up free in seconds to create events &amp; programs, run QR Gate Scanner &amp; Disposable Camera.
                     </p>
                   )}
                 </div>
@@ -531,12 +532,12 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         <button
                           type="button"
                           onClick={() =>
-                            onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignIn()
+                            onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignUp()
                           }
                           className="text-xs text-[#71717A] hover:text-[#0B0B0B] transition-colors inline-flex items-center gap-1"
                         >
-                          <span className="text-[#0B0B0B] font-semibold">Organizing an event?</span>
-                          <span>Sign in to create in 2 minutes</span>
+                          <span className="text-[#0B0B0B] font-semibold">Hosting an event or program?</span>
+                          <span>Sign up free &amp; create in 2 minutes</span>
                           <ArrowRight className="w-3.5 h-3.5" />
                         </button>
                       </div>
@@ -1750,8 +1751,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     required
                     value={quickEmail}
                     onChange={(e) => setQuickEmail(e.target.value)}
-                    placeholder="Enter your organizer email"
-                    aria-label="Enter your organizer email"
+                    placeholder="Enter your email address"
+                    aria-label="Enter your email address"
                     className="w-full bg-transparent px-4 sm:px-5 py-2.5 sm:py-3 text-sm text-[#0B0B0B] placeholder:text-[#71717A] focus:outline-none rounded-xl sm:rounded-full min-w-0"
                   />
                   <button
@@ -1875,7 +1876,14 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                 onClick={() => onNavigateSignIn()}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
-                Organizer Sign In
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigateSignUp()}
+                className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
+              >
+                Create Free Account
               </button>
               <button
                 type="button"

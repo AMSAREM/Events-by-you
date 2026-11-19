@@ -143,6 +143,8 @@ export const platformRuntime = {
       ),
       SUPABASE_SERVICE_ROLE_KEY: Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()),
       ARKESEL_API_KEY: Boolean((process.env.ARKESEL_API_KEY || '').trim()),
+      RESEND_API_KEY: Boolean((process.env.RESEND_API_KEY || '').trim()),
+      RESEND_FROM_EMAIL: Boolean((process.env.RESEND_FROM_EMAIL || '').trim()),
       CREATOR_PASSWORD: Boolean((process.env.CREATOR_PASSWORD || '').trim()),
       CREATOR_EMAIL: (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase(),
     };

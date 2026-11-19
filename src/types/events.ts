@@ -219,6 +219,8 @@ export interface BuilderEnvStatus {
   SUPABASE_ANON_KEY: boolean;
   SUPABASE_SERVICE_ROLE_KEY: boolean;
   ARKESEL_API_KEY: boolean;
+  RESEND_API_KEY: boolean;
+  RESEND_FROM_EMAIL: boolean;
   CREATOR_PASSWORD: boolean;
   CREATOR_EMAIL: string;
 }

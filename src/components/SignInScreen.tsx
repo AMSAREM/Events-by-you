@@ -171,7 +171,14 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
             </button>
           </nav>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => onGoSignUp(email.trim())}
+              className="text-xs font-semibold text-[#0B0B0B] px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] transition-colors whitespace-nowrap"
+            >
+              Sign Up Free
+            </button>
             <div className="w-8 h-8 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center">
               <User className="w-4 h-4" />
             </div>
@@ -204,13 +211,21 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                 {redirectNotice && (
                   <div className="mb-5 p-3.5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-start gap-2.5 text-xs text-[#0B0B0B]">
                     <Lock className="w-4 h-4 shrink-0 mt-0.5 text-[#0B0B0B]" />
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <p className="font-semibold">
-                        Sign in required for {redirectNotice}
+                        Sign in or sign up for {redirectNotice}
                       </p>
                       <p className="text-[11px] text-[#71717A] mt-0.5">
-                        You must be signed in before accessing or creating events. Sign in below to continue directly to {redirectNotice}.
+                        Sign in below or create a free individual/organiser account to continue directly to {redirectNotice}.
                       </p>
+                      <button
+                        type="button"
+                        onClick={() => onGoSignUp(email.trim())}
+                        className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-[#0B0B0B] underline underline-offset-4 hover:opacity-75"
+                      >
+                        <span>New here? Create a free account</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
                     </div>
                   </div>
                 )}
@@ -219,14 +234,14 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                   Sign in to your workspace
                 </h1>
                 <p className="text-sm text-[#71717A] mb-5 leading-relaxed">
-                  Sign in as an organiser, gate staff member, or app creator to manage events, rosters, SMS broadcasts, and builder telemetry.
+                  Sign in as an individual host, organiser, gate staff member, or app creator to manage events, programs, rosters, and SMS passes.
                 </p>
 
                 <form onSubmit={handleSubmit} className="space-y-3.5">
 
                   <div>
                     <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5" htmlFor="email">
-                      Work or Creator Email
+                      Email Address (Personal, Work, or Creator)
                     </label>
                     <div className="relative flex items-center">
                       <Mail className="w-4.5 h-4.5 text-[#71717A] absolute left-4 pointer-events-none" />
@@ -236,7 +251,7 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                         required
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
-                        placeholder="you@organization.com"
+                        placeholder="you@gmail.com"
                         className="w-full bg-[#F5F5F7] rounded-full py-3 pl-11 pr-4 text-sm text-[#0B0B0B] placeholder:text-[#71717A] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#0B0B0B] transition-all"
                       />
                     </div>

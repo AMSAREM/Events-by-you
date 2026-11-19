@@ -1160,14 +1160,35 @@ export default function App() {
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           onNavigateSignUp={(email) => {
-            setPendingTarget(null);
+            setPendingTarget({
+              route: 'studio',
+              screen: 'events',
+              subScreen: 'create-event',
+              label: 'Create Event Wizard',
+            });
             setSessionTimeoutNotice(null);
             setPrefillEmail(email ?? '');
             setRoute('signup');
             syncBrowserPath('/signup');
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
-          onCreateEvent={openCreateWizard}
+          onCreateEvent={() => {
+            if (isSignedIn) {
+              openCreateWizard();
+              return;
+            }
+            setPendingTarget({
+              route: 'studio',
+              screen: 'events',
+              subScreen: 'create-event',
+              label: 'Create Event Wizard',
+            });
+            setSessionTimeoutNotice(null);
+            setPrefillEmail('');
+            setRoute('signup');
+            syncBrowserPath('/signup');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
           onNavigateDemoEvent={(eventId, focusSection = 'top') => {
             if (focusSection === 'register') {
               if (!isSignedIn) {
@@ -1228,8 +1249,8 @@ export default function App() {
               subScreen: 'create-event',
               label: 'Create Event Wizard',
             });
-            setRoute('signin');
-            syncBrowserPath('/signin');
+            setRoute('signup');
+            syncBrowserPath('/signup');
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           onOpenLegal={openLegalRoute}

@@ -110,7 +110,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
       return;
     }
     if (!orgEmail.trim()) {
-      setFormError('Please enter your work or organisation email.');
+      setFormError('Please enter your email address.');
       return;
     }
     if (password.length < 6) {
@@ -124,11 +124,13 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
     setFormError(null);
     setSubmitting(true);
     try {
+      const firstName = fullName.trim().split(' ')[0] || 'My';
+      const defaultStudio = `${firstName}'s Events`;
       const res = await api.auth.signUp({
         email: orgEmail.trim(),
         password,
         name: fullName.trim(),
-        studio: orgName.trim() || 'Events Studio',
+        studio: orgName.trim() || defaultStudio,
         countryGateway,
         appRole: accountRole satisfies AppRole,
       });
@@ -237,7 +239,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
               <div>
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#F5F5F7] text-[#1A1C1D] text-xs font-semibold mb-5">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#0B0B0B]" />
-                  FREE CREATOR ACCOUNT
+                  FREE INDIVIDUAL &amp; ORGANISER ACCOUNT
                 </div>
 
                 {redirectNotice && (
@@ -255,11 +257,11 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                 )}
 
                 <h1 className="font-display text-[28px] sm:text-[36px] leading-tight text-[#0B0B0B] tracking-[-0.03em] mb-2 font-bold">
-                  Start hosting events with high delivery
+                  Start hosting events &amp; programs with high delivery
                 </h1>
                 <p className="text-sm text-[#444748] mb-8 max-w-xl leading-relaxed">
-                  Create your organiser studio account. Get 20 free Arkesel SMS credits instantly
-                  upon sign up with direct carrier fallback.
+                  Create your free individual or organiser account. Get 20 free Arkesel SMS credits
+                  instantly upon sign up for personal programs, weddings, birthdays, or community events.
                 </p>
 
                 <form onSubmit={handleSubmit} className="space-y-5">
@@ -285,7 +287,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
 
                     <div className="flex flex-col gap-1.5">
                       <label className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between">
-                        <span>Work / Organisation Email</span>
+                        <span>Personal or Organisation Email</span>
                         <span className="text-[11px] font-normal text-[#71717A]">Required</span>
                       </label>
                       <div className="relative">
@@ -294,7 +296,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                           required
                           value={orgEmail}
                           onChange={(e) => setOrgEmail(e.target.value)}
-                          placeholder="amoakoimml@gmail.com"
+                          placeholder="you@gmail.com"
                           className="w-full bg-[#F5F5F7] rounded-full px-4 py-3 pr-10 text-sm text-[#0B0B0B] placeholder:text-[#71717A] outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-all"
                         />
                         <AtSign className="w-4 h-4 text-[#71717A] absolute right-3.5 top-3.5 pointer-events-none" />
@@ -305,14 +307,15 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                   {/* Row 2 */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-xs font-semibold text-[#1A1C1D]">
-                        Organisation / Community Name
+                      <label className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between">
+                        <span>Host, Program, or Organisation</span>
+                        <span className="text-[11px] font-normal text-[#71717A]">Optional</span>
                       </label>
                       <input
                         type="text"
                         value={orgName}
                         onChange={(e) => setOrgName(e.target.value)}
-                        placeholder="e.g. Grace Chapel / Royal Events / DevCongress"
+                        placeholder="e.g. Akua's Birthday / Grace Chapel / Royal Events"
                         className="w-full bg-[#F5F5F7] rounded-full px-4 py-3 text-sm text-[#0B0B0B] placeholder:text-[#71717A] outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-all"
                       />
                     </div>
@@ -350,7 +353,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                     <div className="grid grid-cols-2 gap-2">
                       {(
                         [
-                          { id: 'organizer', label: 'Lead Organiser', sub: 'Create events & manage passes' },
+                          { id: 'organizer', label: 'Individual / Event Host', sub: 'Create events, programs & manage passes' },
                           { id: 'gate_staff', label: 'Gate Check-In Staff', sub: 'QR scanner & door check-in only' },
                         ] as const
                       ).map((opt) => (
@@ -478,7 +481,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                     className="w-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-sm font-semibold rounded-full py-3.5 px-6 flex items-center justify-center gap-2 shadow-sm transition-transform active:scale-[0.99] disabled:opacity-60"
                   >
                     <span>
-                      {submitting ? 'Creating Account...' : 'Create Free Organiser Account'}
+                      {submitting ? 'Creating Account...' : 'Create Free Account'}
                     </span>
                     <ArrowRight className="w-4 h-4" />
                   </button>

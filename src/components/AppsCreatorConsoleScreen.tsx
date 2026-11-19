@@ -1678,6 +1678,11 @@ const { attendee, event } = await response.json();`;
                     key: 'SUPABASE_SERVICE_ROLE_KEY',
                     configured: builderOverview.envStatus.SUPABASE_SERVICE_ROLE_KEY,
                   },
+                  { key: 'RESEND_API_KEY', configured: builderOverview.envStatus.RESEND_API_KEY },
+                  {
+                    key: 'RESEND_FROM_EMAIL',
+                    configured: builderOverview.envStatus.RESEND_FROM_EMAIL,
+                  },
                   { key: 'ARKESEL_API_KEY', configured: builderOverview.envStatus.ARKESEL_API_KEY },
                   { key: 'CREATOR_PASSWORD', configured: builderOverview.envStatus.CREATOR_PASSWORD },
                 ] as const

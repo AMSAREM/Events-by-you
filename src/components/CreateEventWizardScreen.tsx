@@ -108,7 +108,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const [newBlockStage, setNewBlockStage] = useState('Workshop Lab');
 
   // Step 3: Telecom & Capacity
-  const [senderId, setSenderId] = useState('TECHLEADERS');
+  const [senderId, setSenderId] = useState(profile.senderId || 'EVENTSAPP');
   const [replyEmail, setReplyEmail] = useState(profile.email);
   const [instantDispatch, setInstantDispatch] = useState(true);
   const [capacity, setCapacity] = useState(profile.plan === 'Starter' ? 50 : 500);
@@ -218,6 +218,17 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
         artwork: 'forum',
         block1: 'Doors Open & Guest Arrival Check-In',
         block2: 'Main Program & Evening Hospitality',
+      },
+      Program: {
+        title: 'Personal Celebration & Community Program 2026',
+        slug: 'personal-program-2026',
+        overview:
+          'Private or community program with tailored guest invitations, instant SMS QR passes, and smooth arrival check-in for family and friends.',
+        tags: ['Program', 'Private Guestlist', 'SMS Pass'],
+        venue: 'East Legon Gardens',
+        artwork: 'typography',
+        block1: 'Guest Arrival, Welcome & Refreshments',
+        block2: 'Main Program, Toasts & Group Photos',
       },
       Wedding: {
         title: 'Mensah & Boateng Royal Wedding Reception',

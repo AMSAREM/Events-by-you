@@ -21,6 +21,11 @@ import {
   signCreatorSessionToken,
   type AuthedRequest,
 } from './helpers.ts';
+import {
+  isResendConfigured,
+  sendAuthOtpEmail,
+  sendEventPassEmail,
+} from './resend.ts';
 import { memoryStore, platformRuntime } from './memoryStore.ts';
 
 function requireMemoryAuth(req: AuthedRequest, res: Response, next: NextFunction) {
@@ -146,26 +151,69 @@ export function createMemoryRouter() {
     }
   });
 
-  router.post('/auth/send-otp', (req, res) => {
+  router.post('/auth/send-otp', async (req, res) => {
     const { email } = req.body as { email?: string };
     if (!email?.trim()) {
       return res.status(400).json({ error: 'Email address is required.' });
     }
-    return res.json({ ok: true, email: email.trim() });
+    const trimmedEmail = email.trim();
+    if (isResendConfigured()) {
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const delivery = await sendAuthOtpEmail({
+        to: trimmedEmail,
+        code,
+        purpose: 'login',
+      });
+      if (!delivery.ok) {
+        return res.status(400).json({
+          error: `Resend could not dispatch sign-in code: ${delivery.error || 'Unknown error'}`,
+        });
+      }
+      return res.json({ ok: true, email: trimmedEmail, provider: 'resend' });
+    }
+    return res.json({ ok: true, email: trimmedEmail });
   });
 
-  router.post('/auth/resend-otp', (req, res) => {
+  router.post('/auth/resend-otp', async (req, res) => {
     const { email } = req.body as { email?: string };
-    if (!email) {
+    if (!email?.trim()) {
       return res.status(400).json({ error: 'Email is required.' });
+    }
+    if (isResendConfigured()) {
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const delivery = await sendAuthOtpEmail({
+        to: email.trim(),
+        code,
+        purpose: 'signup',
+      });
+      if (!delivery.ok) {
+        return res.status(400).json({
+          error: `Resend could not resend verification code: ${delivery.error || 'Unknown error'}`,
+        });
+      }
+      return res.json({ ok: true, provider: 'resend' });
     }
     return res.json({ ok: true });
   });
 
-  router.post('/auth/reset-password', (req, res) => {
+  router.post('/auth/reset-password', async (req, res) => {
     const { email } = req.body as { email?: string };
-    if (!email) {
+    if (!email?.trim()) {
       return res.status(400).json({ error: 'Email address is required.' });
+    }
+    if (isResendConfigured()) {
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const delivery = await sendAuthOtpEmail({
+        to: email.trim(),
+        code,
+        purpose: 'recovery',
+      });
+      if (!delivery.ok) {
+        return res.status(400).json({
+          error: `Resend could not send recovery instructions: ${delivery.error || 'Unknown error'}`,
+        });
+      }
+      return res.json({ ok: true, provider: 'resend' });
     }
     return res.json({ ok: true });
   });
@@ -255,12 +303,34 @@ export function createMemoryRouter() {
     try {
       const publicEvents = memoryStore.getPublicEvents();
       const targetEvent = publicEvents.find((e) => e.id === eventId);
-      const smsDelivery = await dispatchOptionalArkeselSms(
-        normalizedPhone,
-        targetEvent?.title ?? 'Events App',
-        finalCode,
-        targetEvent?.senderId
-      );
+      const [smsDelivery, emailDelivery] = await Promise.all([
+        dispatchOptionalArkeselSms(
+          normalizedPhone,
+          targetEvent?.title ?? 'Events App',
+          finalCode,
+          targetEvent?.senderId
+        ),
+        isResendConfigured() && targetEvent
+          ? sendEventPassEmail({
+              to: email.trim(),
+              attendeeName: name.trim(),
+              eventTitle: targetEvent.title,
+              eventDate: targetEvent.date,
+              eventTime: targetEvent.time,
+              eventVenue: targetEvent.venue,
+              eventCity: targetEvent.city,
+              ticketCode: finalCode,
+              tier: tier || 'General',
+              organizerName: targetEvent.organizer,
+            })
+          : Promise.resolve({ ok: false, skipped: true }),
+      ]);
+      const hasLiveArkesel = Boolean((process.env.ARKESEL_API_KEY || '').trim()) && platformRuntime.flags.smsMode !== 'sandbox';
+      const finalDeliveryStatus: Attendee['smsStatus'] =
+        emailDelivery.ok && (!hasLiveArkesel || smsDelivery === 'Pending')
+          ? 'Resend Delivered'
+          : smsDelivery;
+
       const result = memoryStore.registerPublicAttendee({
         id: attendeeId,
         eventId,
@@ -270,7 +340,7 @@ export function createMemoryRouter() {
         organization,
         tier,
         ticketCode: finalCode,
-        smsStatus: smsDelivery,
+        smsStatus: finalDeliveryStatus,
       });
       return res.status(201).json(result);
     } catch (err) {
@@ -361,13 +431,29 @@ export function createMemoryRouter() {
     }
   });
 
-  router.post('/studio/events/:eventId/attendees', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+  router.post('/studio/events/:eventId/attendees', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
+      const payload = req.body as Attendee;
       const result = memoryStore.registerStudioAttendee(
         req.user!.id,
         req.params.eventId,
-        req.body as Attendee
+        payload
       );
+      if (isResendConfigured() && result.attendee.email?.includes('@')) {
+        await sendEventPassEmail({
+          to: result.attendee.email,
+          attendeeName: result.attendee.name,
+          eventTitle: result.event.title,
+          eventDate: result.event.date,
+          eventTime: result.event.time,
+          eventVenue: result.event.venue,
+          eventCity: result.event.city,
+          ticketCode: result.attendee.ticketCode,
+          tier: result.attendee.tier,
+          organizerName: result.event.organizer,
+          replyTo: req.memoryUser?.profile.replyToEmail,
+        });
+      }
       return res.status(201).json(result);
     } catch (err) {
       const status = (err as Error & { status?: number }).status || 400;

@@ -179,7 +179,10 @@ async function request<T>(
   }
 
   if (!parsed || typeof parsed !== 'object') {
-    throw new Error(`Invalid JSON response from ${url}`);
+    const contentType = resp.headers.get('content-type') || 'unknown';
+    throw new Error(
+      `Invalid JSON response from ${url} (HTTP ${resp.status}, ${contentType})`
+    );
   }
 
   return parsed as T;
@@ -191,6 +194,8 @@ export const api = {
       ok: boolean;
       database: string;
       supabaseConfigured: boolean;
+      serviceRoleConfigured?: boolean;
+      resendConfigured?: boolean;
       inMemoryFallback?: boolean;
       creatorEmail?: string;
       creatorPasswordConfigured?: boolean;
@@ -253,10 +258,10 @@ export const api = {
         body: JSON.stringify({ email }),
       }),
 
-    resendOtp: (email: string) =>
+    resendOtp: (email: string, otpType?: 'signup' | 'email' | 'recovery') =>
       request<{ ok: boolean }>('/api/auth/resend-otp', {
         method: 'POST',
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, otpType }),
       }),
 
     resetPassword: (email: string, redirectTo?: string) =>
