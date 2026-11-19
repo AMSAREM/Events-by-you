@@ -139,6 +139,8 @@ export interface OrganizerProfile {
   role: string;
   appRole?: AppRole;
   email: string;
+  phone?: string;
+  phoneVerified?: boolean;
   studio: string;
   plan: 'Starter' | 'Pro Organizer' | 'Enterprise';
   smsCredits: number;

@@ -1,5 +1,9 @@
 import { platformRuntime } from './memoryStore.ts';
 
+export const DEFAULT_APP_URL = (
+  process.env.APP_URL || 'https://www.eventsbyyou.xyz'
+).replace(/\/+$/, '');
+export const DEFAULT_DOMAIN_FROM = 'Events App <noreply@eventsbyyou.xyz>';
 export const DEFAULT_RESEND_FROM = 'Events App <onboarding@resend.dev>';
 
 const FREE_WEBMAIL_DOMAINS = new Set([
@@ -44,13 +48,13 @@ function isFreeWebmailSender(fromValue: string): boolean {
 export function getResendConfig(): ResendConfig {
   const apiKey = (process.env.RESEND_API_KEY || '').trim();
   const configuredFrom = (process.env.RESEND_FROM_EMAIL || '').trim();
-  const shouldFallback = !configuredFrom || isFreeWebmailSender(configuredFrom);
+  const shouldUseDefaultDomain = !configuredFrom || isFreeWebmailSender(configuredFrom);
 
   return {
     apiKey,
-    fromEmail: shouldFallback ? DEFAULT_RESEND_FROM : configuredFrom,
+    fromEmail: shouldUseDefaultDomain ? DEFAULT_DOMAIN_FROM : configuredFrom,
     configuredFromEmail: configuredFrom,
-    usesFallbackSender: Boolean(configuredFrom && shouldFallback),
+    usesFallbackSender: Boolean(configuredFrom && shouldUseDefaultDomain),
     configured: Boolean(apiKey),
   };
 }
@@ -170,13 +174,13 @@ export async function dispatchResendEmail(
   try {
     let attempt = await sendResendRequest(apiKey, fromEmail, recipients, params, fallbackReplyTo);
 
-    // If a custom domain isn't verified yet in Resend, automatically retry with onboarding@resend.dev
+    // If eventsbyyou.xyz (or a custom RESEND_FROM_EMAIL domain) isn't verified in Resend yet, retry once via onboarding@resend.dev
     if (
       !attempt.ok &&
       fromEmail !== DEFAULT_RESEND_FROM &&
       (attempt.message || '').toLowerCase().includes('domain is not verified')
     ) {
-      const customReplyTo = extractEmailAddress(fromEmail) || undefined;
+      const customReplyTo = fallbackReplyTo || extractEmailAddress(fromEmail) || undefined;
       attempt = await sendResendRequest(
         apiKey,
         DEFAULT_RESEND_FROM,
@@ -193,10 +197,10 @@ export async function dispatchResendEmail(
 
       if (lower.includes('only send testing emails to your own email address')) {
         friendlyReason =
-          'Resend is in testing mode (using onboarding@resend.dev), which only delivers to your own Resend account email. To email other addresses, verify a custom domain at https://resend.com/domains and set RESEND_FROM_EMAIL to an address on that domain (free @gmail.com addresses cannot be verified).';
+          'Resend has not verified eventsbyyou.xyz yet and is falling back to onboarding@resend.dev testing mode (which only delivers to your own Resend account email). Add and verify eventsbyyou.xyz at https://resend.com/domains to email any recipient from noreply@eventsbyyou.xyz.';
       } else if (lower.includes('domain is not verified')) {
         friendlyReason =
-          `${rawReason} Note: free webmail domains like gmail.com cannot be verified—remove RESEND_FROM_EMAIL to test with onboarding@resend.dev, or verify a custom domain at https://resend.com/domains.`;
+          `${rawReason} Add and verify eventsbyyou.xyz at https://resend.com/domains (and optionally set RESEND_FROM_EMAIL=Events App <noreply@eventsbyyou.xyz>).`;
       }
 
       platformRuntime.recordDiagnosticFailure({
@@ -308,7 +312,7 @@ export async function sendAuthOtpEmail(params: {
       ${codeBlockHtml}
       ${actionButtonHtml}
       <p style="margin:24px 0 0 0;padding-top:16px;border-top:1px solid #E5E5EA;font-size:12px;line-height:1.5;color:#71717A;">
-        This code expires in 15 minutes. If you did not request this email, you can safely ignore it.
+        This code expires in 15 minutes. Sent from <a href="${escapeHtml(DEFAULT_APP_URL)}" style="color:#0B0B0B;text-decoration:underline;">www.eventsbyyou.xyz</a>.
       </p>
     </div>
   </body>
@@ -320,7 +324,7 @@ export async function sendAuthOtpEmail(params: {
     intro,
     params.code ? `\nVerification code: ${params.code}` : '',
     params.actionLink ? `\nDirect link: ${params.actionLink}` : '',
-    '\nIf you did not request this email, you can safely ignore it.',
+    `\nSent via ${DEFAULT_APP_URL}`,
   ].filter(Boolean);
 
   return dispatchResendEmail({
@@ -375,7 +379,7 @@ export async function sendEventPassEmail(params: {
         <div><strong>Hosted by:</strong> ${escapeHtml(params.organizerName)}</div>
       </div>
       <p style="margin:20px 0 0 0;padding-top:16px;border-top:1px solid #E5E5EA;font-size:12px;line-height:1.5;color:#71717A;">
-        Need help? Reply to this email to reach ${escapeHtml(params.organizerName)}.
+        Need help? Reply to this email to reach ${escapeHtml(params.organizerName)} · Powered by <a href="${escapeHtml(DEFAULT_APP_URL)}" style="color:#0B0B0B;text-decoration:underline;">www.eventsbyyou.xyz</a>.
       </p>
     </div>
   </body>
@@ -389,6 +393,8 @@ export async function sendEventPassEmail(params: {
     `Date & Time: ${params.eventDate} · ${params.eventTime}`,
     `Venue: ${params.eventVenue}, ${params.eventCity}`,
     `Hosted by: ${params.organizerName}`,
+    ``,
+    `Powered by ${DEFAULT_APP_URL}`,
   ].join('\n');
 
   return dispatchResendEmail({

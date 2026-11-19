@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
+import { normalizePhoneE164 } from '../src/data/initialData.ts';
 import type {
   AppRole,
   Attendee,
@@ -11,6 +12,7 @@ import type {
   ScheduleBlock,
   SystemAlert,
 } from '../src/types/events.ts';
+import { isSyntheticPhoneEmail } from './phoneAuth.ts';
 
 export function getSupabaseConfig() {
   const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
@@ -79,14 +81,21 @@ export function createServiceSupabaseClient(): SupabaseClient | null {
 
 export function mapProfileRow(row: Record<string, unknown>, fallbackEmail = ''): OrganizerProfile {
   const name = String(row.name ?? 'Organiser');
-  const email = String(row.email ?? fallbackEmail);
+  const rawEmail = String(row.email ?? fallbackEmail ?? '');
+  const email = isSyntheticPhoneEmail(rawEmail) ? '' : rawEmail;
+  const phone = row.phone != null && String(row.phone).trim() ? String(row.phone).trim() : undefined;
+  const phoneVerified = Boolean(row.phone_verified ?? false);
   const creatorEmail = (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase();
-  const isCreatorEmail = email.trim().toLowerCase() === creatorEmail;
+  const creatorPhone = (process.env.CREATOR_PHONE || '').trim()
+    ? normalizePhoneE164((process.env.CREATOR_PHONE || '').trim())
+    : '';
+  const isCreatorEmail = Boolean(email) && email.trim().toLowerCase() === creatorEmail;
+  const isCreatorPhone = Boolean(creatorPhone && phone && normalizePhoneE164(phone) === creatorPhone);
   const rawAppRole = row.app_role != null ? String(row.app_role) : undefined;
   const appRole: AppRole =
     rawAppRole === 'creator' || rawAppRole === 'organizer' || rawAppRole === 'gate_staff'
       ? rawAppRole
-      : isCreatorEmail
+      : isCreatorEmail || isCreatorPhone
         ? 'creator'
         : 'organizer';
   return {
@@ -95,6 +104,8 @@ export function mapProfileRow(row: Record<string, unknown>, fallbackEmail = ''):
     role: String(row.role ?? (appRole === 'creator' ? 'Apps Creator' : appRole === 'gate_staff' ? 'Gate Check-In Staff' : 'Lead Organiser')),
     appRole,
     email,
+    phone,
+    phoneVerified,
     studio: String(row.studio ?? 'Events Studio'),
     plan: (row.plan as OrganizerProfile['plan']) || 'Starter',
     smsCredits: Number(row.sms_credits ?? 20),
@@ -255,6 +266,15 @@ export async function ensureProfileRow(
   client: SupabaseClient,
   user: User
 ): Promise<OrganizerProfile> {
+  const rawUserPhone =
+    (typeof user.phone === 'string' && user.phone.trim()) ||
+    (typeof user.user_metadata?.phone === 'string' && user.user_metadata.phone.trim()) ||
+    '';
+  const resolvedPhone = rawUserPhone ? normalizePhoneE164(rawUserPhone) : '';
+  const resolvedPhoneVerified = Boolean(
+    user.phone_confirmed_at || user.user_metadata?.phone_verified
+  );
+
   const { data: existing, error: selectErr } = await client
     .from('profiles')
     .select('*')
@@ -265,16 +285,29 @@ export async function ensureProfileRow(
     throw new Error(selectErr.message);
   }
   if (existing) {
-    return mapProfileRow(existing as Record<string, unknown>, user.email ?? '');
+    const existingRec = existing as Record<string, unknown>;
+    const mapped = mapProfileRow(existingRec, user.email ?? '');
+    if (resolvedPhone && !mapped.phone) {
+      mapped.phone = resolvedPhone;
+    }
+    if (resolvedPhoneVerified && !mapped.phoneVerified) {
+      mapped.phoneVerified = true;
+    }
+    return mapped;
   }
 
   const metaName =
     (typeof user.user_metadata?.name === 'string' && user.user_metadata.name.trim()) ||
     (typeof user.user_metadata?.full_name === 'string' && user.user_metadata.full_name.trim()) ||
-    (user.email ? user.email.split('@')[0] : 'Organiser');
+    (user.email && !isSyntheticPhoneEmail(user.email) ? user.email.split('@')[0] : 'Organiser');
 
   const creatorEmail = (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase();
-  const isPrimaryCreator = (user.email ?? '').trim().toLowerCase() === creatorEmail;
+  const creatorPhone = (process.env.CREATOR_PHONE || '').trim()
+    ? normalizePhoneE164((process.env.CREATOR_PHONE || '').trim())
+    : '';
+  const isPrimaryCreator =
+    (user.email ?? '').trim().toLowerCase() === creatorEmail ||
+    Boolean(creatorPhone && resolvedPhone && resolvedPhone === creatorPhone);
 
   const metaStudio =
     (typeof user.user_metadata?.studio === 'string' && user.user_metadata.studio.trim()) ||
@@ -287,9 +320,11 @@ export async function ensureProfileRow(
         ? 'creator'
         : 'organizer';
 
-  const insertPayload = {
+  const insertPayload: Record<string, unknown> = {
     id: user.id,
     email: user.email ?? '',
+    phone: resolvedPhone || null,
+    phone_verified: resolvedPhoneVerified,
     name: metaName,
     first_name: metaName.split(' ')[0] || 'Creator',
     role:
@@ -311,11 +346,22 @@ export async function ensureProfileRow(
     .select('*')
     .single();
 
-  if (insertErr && insertErr.message?.toLowerCase().includes('app_role')) {
-    const { app_role: _dropRole, ...legacyPayload } = insertPayload;
+  if (
+    insertErr &&
+    (insertErr.message?.toLowerCase().includes('app_role') ||
+      insertErr.message?.toLowerCase().includes('phone'))
+  ) {
+    const fallbackPayload = { ...insertPayload };
+    if (insertErr.message?.toLowerCase().includes('app_role')) {
+      delete fallbackPayload.app_role;
+    }
+    if (insertErr.message?.toLowerCase().includes('phone')) {
+      delete fallbackPayload.phone;
+      delete fallbackPayload.phone_verified;
+    }
     const retry = await client
       .from('profiles')
-      .upsert(legacyPayload, { onConflict: 'id' })
+      .upsert(fallbackPayload, { onConflict: 'id' })
       .select('*')
       .single();
     created = retry.data;
@@ -326,5 +372,69 @@ export async function ensureProfileRow(
     throw new Error(insertErr.message);
   }
 
-  return mapProfileRow(created as Record<string, unknown>, user.email ?? '');
+  const mapped = mapProfileRow(created as Record<string, unknown>, user.email ?? '');
+  if (resolvedPhone && !mapped.phone) mapped.phone = resolvedPhone;
+  if (resolvedPhoneVerified && !mapped.phoneVerified) mapped.phoneVerified = true;
+  return mapped;
+}
+
+export async function findSupabaseUserByPhone(
+  svc: SupabaseClient,
+  normalizedPhone: string
+): Promise<User | null> {
+  try {
+    const { data: prof } = await svc
+      .from('profiles')
+      .select('id')
+      .eq('phone', normalizedPhone)
+      .maybeSingle();
+    const profId = (prof as Record<string, unknown> | null)?.id;
+    if (typeof profId === 'string' && profId) {
+      const { data: userRes } = await svc.auth.admin.getUserById(profId);
+      if (userRes?.user) return userRes.user;
+    }
+  } catch {
+    // Ignore if phone column is not yet present on remote profiles table
+  }
+
+  for (let page = 1; page <= 5; page += 1) {
+    const { data: listData, error } = await svc.auth.admin.listUsers({
+      page,
+      perPage: 200,
+    });
+    if (error || !listData?.users?.length) break;
+    const match = listData.users.find((u) => {
+      const authPhone = u.phone ? normalizePhoneE164(u.phone) : '';
+      const metaPhone =
+        typeof u.user_metadata?.phone === 'string' && u.user_metadata.phone.trim()
+          ? normalizePhoneE164(u.user_metadata.phone)
+          : '';
+      return authPhone === normalizedPhone || metaPhone === normalizedPhone;
+    });
+    if (match) return match;
+    if (listData.users.length < 200) break;
+  }
+
+  return null;
+}
+
+export async function findSupabaseUserByEmail(
+  svc: SupabaseClient,
+  emailInput: string
+): Promise<User | null> {
+  const target = emailInput.trim().toLowerCase();
+  if (!target) return null;
+
+  for (let page = 1; page <= 5; page += 1) {
+    const { data: listData, error } = await svc.auth.admin.listUsers({
+      page,
+      perPage: 200,
+    });
+    if (error || !listData?.users?.length) break;
+    const match = listData.users.find((u) => (u.email || '').trim().toLowerCase() === target);
+    if (match) return match;
+    if (listData.users.length < 200) break;
+  }
+
+  return null;
 }

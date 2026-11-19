@@ -18,17 +18,29 @@ import {
   Zap,
 } from 'lucide-react';
 
+import { AlertCircle } from 'lucide-react';
+import {
+  validateStrictEmail,
+  validateStrictPassword,
+  validateStrictPhoneE164,
+} from '../data/initialData';
 import { api, saveStoredSession, type StoredAuthSession } from '../lib/api';
 import type { AppRole, OrganizerProfile } from '../types/events';
 
 interface SignUpScreenProps {
   initialEmail?: string;
+  initialPhone?: string;
   redirectNotice?: string;
   onBackHome: () => void;
   onGoSignIn: () => void;
   onNavigateDemoEvent: () => void;
   onOpenLegal?: (doc: 'terms' | 'privacy') => void;
-  onRequireOtp: (email: string, otpType: 'signup' | 'email') => void;
+  onRequireOtp: (target: {
+    phone?: string;
+    email?: string;
+    otpType: 'signup' | 'email' | 'sms';
+    countryGateway?: string;
+  }) => void;
   onAuthenticated: (session: StoredAuthSession, profile: OrganizerProfile) => void;
 }
 
@@ -37,6 +49,7 @@ const KOJO_THUMBNAIL =
 
 export const SignUpScreen: React.FC<SignUpScreenProps> = ({
   initialEmail = '',
+  initialPhone = '',
   redirectNotice,
   onBackHome,
   onGoSignIn,
@@ -46,6 +59,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
   onAuthenticated,
 }) => {
   const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState(initialPhone);
   const [orgEmail, setOrgEmail] = useState(initialEmail);
   const [orgName, setOrgName] = useState('');
   const [countryGateway, setCountryGateway] = useState('GH');
@@ -103,42 +117,71 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
     };
   }, [password, strength]);
 
+  const phoneValidation = useMemo(
+    () => (phone.trim() ? validateStrictPhoneE164(phone, countryGateway) : null),
+    [phone, countryGateway]
+  );
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!fullName.trim()) {
-      setFormError('Please enter your full name.');
+    const trimmedName = fullName.trim();
+    if (trimmedName.length < 2) {
+      setFormError('Full name must be at least 2 characters.');
       return;
     }
-    if (!orgEmail.trim()) {
-      setFormError('Please enter your email address.');
+
+    const phoneCheck = validateStrictPhoneE164(phone, countryGateway);
+    if (!phoneCheck.ok) {
+      setFormError(phoneCheck.error);
       return;
     }
-    if (password.length < 6) {
-      setFormError('Password must be at least 6 characters.');
+
+    let cleanEmail: string | undefined;
+    if (orgEmail.trim()) {
+      const emailCheck = validateStrictEmail(orgEmail);
+      if (!emailCheck.ok) {
+        setFormError(emailCheck.error);
+        return;
+      }
+      cleanEmail = emailCheck.normalized;
+    }
+
+    const pwCheck = validateStrictPassword(password);
+    if (!pwCheck.ok) {
+      setFormError(pwCheck.error);
       return;
     }
+
     if (!agreed) {
       setFormError('Please accept the Terms of Service & NCA SMS regulations to continue.');
       return;
     }
+
     setFormError(null);
     setSubmitting(true);
     try {
-      const firstName = fullName.trim().split(' ')[0] || 'My';
+      const firstName = trimmedName.split(' ')[0] || 'My';
       const defaultStudio = `${firstName}'s Events`;
       const res = await api.auth.signUp({
-        email: orgEmail.trim(),
+        phone: phoneCheck.normalized,
+        email: cleanEmail,
         password,
-        name: fullName.trim(),
+        name: trimmedName,
         studio: orgName.trim() || defaultStudio,
         countryGateway,
         appRole: accountRole satisfies AppRole,
+        agreed,
       });
       if (res.session && res.profile) {
         saveStoredSession(res.session);
         onAuthenticated(res.session, res.profile);
       } else {
-        onRequireOtp(res.email || orgEmail.trim(), res.otpType || 'signup');
+        onRequireOtp({
+          phone: res.phone || phoneCheck.normalized,
+          email: res.email || cleanEmail,
+          otpType: res.otpType || 'sms',
+          countryGateway,
+        });
       }
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Unable to create account.');
@@ -265,19 +308,26 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                 </p>
 
                 <form onSubmit={handleSubmit} className="space-y-5">
-                  {/* Row 1 */}
+                  {/* Row 1: Full Name & Mobile Phone Number (Auth & Authorisation) */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between">
+                      <label
+                        htmlFor="signup-name"
+                        className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between"
+                      >
                         <span>Full Name</span>
                         <span className="text-[11px] font-normal text-[#71717A]">Required</span>
                       </label>
                       <div className="relative">
                         <input
+                          id="signup-name"
                           type="text"
                           required
                           value={fullName}
-                          onChange={(e) => setFullName(e.target.value)}
+                          onChange={(e) => {
+                            setFullName(e.target.value);
+                            if (formError) setFormError(null);
+                          }}
                           placeholder="Josh Mensah"
                           className="w-full bg-[#F5F5F7] rounded-full px-4 py-3 pr-10 text-sm text-[#0B0B0B] placeholder:text-[#71717A] outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-all"
                         />
@@ -286,42 +336,73 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                     </div>
 
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between">
-                        <span>Personal or Organisation Email</span>
+                      <label
+                        htmlFor="signup-phone"
+                        className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between"
+                      >
+                        <span>Mobile Phone Number (SMS Auth)</span>
                         <span className="text-[11px] font-normal text-[#71717A]">Required</span>
                       </label>
                       <div className="relative">
                         <input
-                          type="email"
+                          id="signup-phone"
+                          type="tel"
                           required
+                          value={phone}
+                          onChange={(e) => {
+                            setPhone(e.target.value);
+                            if (formError) setFormError(null);
+                          }}
+                          placeholder="+233 24 123 4567"
+                          className="w-full bg-[#F5F5F7] rounded-full px-4 py-3 pr-10 text-sm text-[#0B0B0B] placeholder:text-[#71717A] outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-all tabular-nums"
+                        />
+                        <Smartphone className="w-4 h-4 text-[#71717A] absolute right-3.5 top-3.5 pointer-events-none" />
+                      </div>
+                      {phoneValidation && (
+                        <p
+                          className={`text-[11px] pl-3 ${
+                            phoneValidation.ok ? 'text-emerald-700 font-medium' : 'text-[#EF4444]'
+                          }`}
+                        >
+                          {phoneValidation.ok
+                            ? `Normalized E.164: ${phoneValidation.normalized}`
+                            : phoneValidation.error}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Row 2: Optional Email & Primary Telecom Gateway */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="flex flex-col gap-1.5">
+                      <label
+                        htmlFor="signup-email"
+                        className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between"
+                      >
+                        <span>Personal or Organisation Email</span>
+                        <span className="text-[11px] font-normal text-[#71717A]">Optional</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          id="signup-email"
+                          type="email"
                           value={orgEmail}
-                          onChange={(e) => setOrgEmail(e.target.value)}
-                          placeholder="you@gmail.com"
+                          onChange={(e) => {
+                            setOrgEmail(e.target.value);
+                            if (formError) setFormError(null);
+                          }}
+                          placeholder="you@gmail.com (for backup OTP & receipts)"
                           className="w-full bg-[#F5F5F7] rounded-full px-4 py-3 pr-10 text-sm text-[#0B0B0B] placeholder:text-[#71717A] outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-all"
                         />
                         <AtSign className="w-4 h-4 text-[#71717A] absolute right-3.5 top-3.5 pointer-events-none" />
                       </div>
                     </div>
-                  </div>
-
-                  {/* Row 2 */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between">
-                        <span>Host, Program, or Organisation</span>
-                        <span className="text-[11px] font-normal text-[#71717A]">Optional</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={orgName}
-                        onChange={(e) => setOrgName(e.target.value)}
-                        placeholder="e.g. Akua's Birthday / Grace Chapel / Royal Events"
-                        className="w-full bg-[#F5F5F7] rounded-full px-4 py-3 text-sm text-[#0B0B0B] placeholder:text-[#71717A] outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-all"
-                      />
-                    </div>
 
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between">
+                      <label
+                        htmlFor="signup-gateway"
+                        className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between"
+                      >
                         <span>Primary Telecom Gateway</span>
                         <span className="text-[11px] text-emerald-600 font-semibold">
                           Arkesel v2 Active
@@ -329,6 +410,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                       </label>
                       <div className="relative">
                         <select
+                          id="signup-gateway"
                           value={countryGateway}
                           onChange={(e) => setCountryGateway(e.target.value)}
                           className="w-full appearance-none bg-[#F5F5F7] rounded-full px-4 py-3 pr-10 text-sm text-[#0B0B0B] outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-all cursor-pointer"
@@ -342,6 +424,25 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                         <ChevronDown className="w-4 h-4 text-[#71717A] absolute right-3.5 top-3.5 pointer-events-none" />
                       </div>
                     </div>
+                  </div>
+
+                  {/* Row 3: Host / Organisation Name */}
+                  <div className="flex flex-col gap-1.5">
+                    <label
+                      htmlFor="signup-studio"
+                      className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between"
+                    >
+                      <span>Host, Program, or Organisation</span>
+                      <span className="text-[11px] font-normal text-[#71717A]">Optional</span>
+                    </label>
+                    <input
+                      id="signup-studio"
+                      type="text"
+                      value={orgName}
+                      onChange={(e) => setOrgName(e.target.value)}
+                      placeholder="e.g. Akua's Birthday / Grace Chapel / Royal Events"
+                      className="w-full bg-[#F5F5F7] rounded-full px-4 py-3 text-sm text-[#0B0B0B] placeholder:text-[#71717A] outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-all"
+                    />
                   </div>
 
                   {/* Workspace RBAC Role */}
@@ -472,7 +573,15 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                   </div>
 
                   {formError && (
-                    <p className="text-xs font-semibold text-[#EF4444]">{formError}</p>
+                    <div className="p-3.5 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 flex items-start gap-2.5 text-xs font-medium text-[#0B0B0B]">
+                      <AlertCircle className="w-4 h-4 text-[#EF4444] shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-semibold text-[#EF4444]">{formError}</p>
+                        <p className="text-[11px] text-[#71717A] mt-0.5">
+                          Strict validation active — no account or database record was created.
+                        </p>
+                      </div>
+                    </div>
                   )}
 
                   <button
@@ -481,7 +590,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                     className="w-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-sm font-semibold rounded-full py-3.5 px-6 flex items-center justify-center gap-2 shadow-sm transition-transform active:scale-[0.99] disabled:opacity-60"
                   >
                     <span>
-                      {submitting ? 'Creating Account...' : 'Create Free Account'}
+                      {submitting ? 'Sending SMS Verification...' : 'Verify Phone & Create Account'}
                     </span>
                     <ArrowRight className="w-4 h-4" />
                   </button>

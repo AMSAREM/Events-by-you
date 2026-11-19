@@ -104,8 +104,11 @@ export default function App() {
   const lastActivityRef = useRef<number>(Date.now());
 
   const [prefillEmail, setPrefillEmail] = useState<string>('');
+  const [prefillPhone, setPrefillPhone] = useState<string>('');
   const [authEmail, setAuthEmail] = useState<string>('');
-  const [otpType, setOtpType] = useState<'signup' | 'email' | 'recovery'>('signup');
+  const [authPhone, setAuthPhone] = useState<string>('');
+  const [authCountryGateway, setAuthCountryGateway] = useState<string>('GH');
+  const [otpType, setOtpType] = useState<'signup' | 'email' | 'recovery' | 'sms'>('sms');
   const [pendingTarget, setPendingTarget] = useState<PendingModuleTarget | null>(null);
 
   const [activeScreen, setActiveScreen] = useState<NavScreen>('overview');
@@ -1264,6 +1267,7 @@ export default function App() {
     return (
       <SignUpScreen
         initialEmail={prefillEmail}
+        initialPhone={prefillPhone}
         redirectNotice={pendingTarget?.label}
         onBackHome={() => {
           setPendingTarget(null);
@@ -1281,9 +1285,11 @@ export default function App() {
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onOpenLegal={openLegalRoute}
-        onRequireOtp={(email, nextOtpType) => {
-          setAuthEmail(email);
-          setOtpType(nextOtpType);
+        onRequireOtp={(target) => {
+          setAuthPhone(target.phone || '');
+          setAuthEmail(target.email || '');
+          setAuthCountryGateway(target.countryGateway || 'GH');
+          setOtpType(target.otpType);
           setRoute('verify-otp');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
@@ -1296,6 +1302,8 @@ export default function App() {
     return (
       <ResetPasswordScreen
         initialEmail={authEmail || prefillEmail || profile.email}
+        initialPhone={authPhone || prefillPhone || profile.phone || ''}
+        initialCountryGateway={authCountryGateway}
         onBackHome={() => {
           setPendingTarget(null);
           navigateHome();
@@ -1306,9 +1314,11 @@ export default function App() {
           syncBrowserPath('/signin');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
-        onProceedToOtp={(email) => {
-          setAuthEmail(email);
-          setOtpType('recovery');
+        onProceedToOtp={(target) => {
+          setAuthPhone(target.phone || '');
+          setAuthEmail(target.email || '');
+          setAuthCountryGateway(target.countryGateway || 'GH');
+          setOtpType(target.otpType || (target.phone ? 'sms' : 'recovery'));
           setRoute('verify-otp');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
@@ -1325,7 +1335,9 @@ export default function App() {
   if (route === 'verify-otp') {
     return (
       <VerifyOtpScreen
+        phone={authPhone || prefillPhone || profile.phone || ''}
         email={authEmail || prefillEmail || profile.email}
+        countryGateway={authCountryGateway}
         otpType={otpType}
         onBackHome={() => {
           setPendingTarget(null);
@@ -1413,6 +1425,7 @@ export default function App() {
     return (
       <SignInScreen
         initialEmail={prefillEmail}
+        initialPhone={prefillPhone}
         creatorEmail={creatorEmail}
         sessionTimeoutNotice={sessionTimeoutNotice}
         redirectNotice={
@@ -1435,23 +1448,28 @@ export default function App() {
           syncBrowserPath('/');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
-        onForgotPassword={(email) => {
-          setAuthEmail(email);
+        onForgotPassword={(target) => {
+          setAuthPhone(target.phone || '');
+          setAuthEmail(target.email || '');
+          setAuthCountryGateway(target.countryGateway || 'GH');
           setSessionTimeoutNotice(null);
           setRoute('reset-password');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
-        onGoSignUp={(email) => {
+        onGoSignUp={(email, phone) => {
           setPrefillEmail(email);
+          setPrefillPhone(phone || '');
           setSessionTimeoutNotice(null);
           setRoute('signup');
           syncBrowserPath('/signup');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onOpenLegal={openLegalRoute}
-        onRequireOtp={(email, nextOtpType) => {
-          setAuthEmail(email);
-          setOtpType(nextOtpType);
+        onRequireOtp={(target) => {
+          setAuthPhone(target.phone || '');
+          setAuthEmail(target.email || '');
+          setAuthCountryGateway(target.countryGateway || 'GH');
+          setOtpType(target.otpType);
           setSessionTimeoutNotice(null);
           setRoute('verify-otp');
           window.scrollTo({ top: 0, behavior: 'smooth' });

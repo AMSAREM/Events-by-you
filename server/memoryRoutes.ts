@@ -1,6 +1,11 @@
 import express, { type NextFunction, type Response } from 'express';
 import type { User } from '@supabase/supabase-js';
-import { normalizePhoneE164 } from '../src/data/initialData.ts';
+import {
+  normalizePhoneE164,
+  validateStrictEmail,
+  validateStrictPassword,
+  validateStrictPhoneE164,
+} from '../src/data/initialData.ts';
 import type {
   AppRole,
   Attendee,
@@ -17,6 +22,7 @@ import {
   getCreatorCredentials,
   requireCreatorVerification,
   requireRole,
+  requireVerifiedPhoneIfSet,
   safeTimingEqual,
   signCreatorSessionToken,
   type AuthedRequest,
@@ -26,6 +32,14 @@ import {
   sendAuthOtpEmail,
   sendEventPassEmail,
 } from './resend.ts';
+import {
+  clearPendingSignup,
+  consumePendingSignup,
+  dispatchPhoneVerificationChallenge,
+  getPendingSignup,
+  stagePendingSignup,
+  verifyPhoneOtp,
+} from './phoneAuth.ts';
 import { memoryStore, platformRuntime } from './memoryStore.ts';
 
 function requireMemoryAuth(req: AuthedRequest, res: Response, next: NextFunction) {
@@ -39,7 +53,13 @@ function requireMemoryAuth(req: AuthedRequest, res: Response, next: NextFunction
   }
   req.accessToken = token;
   req.memoryUser = user;
-  req.user = { id: user.id, email: user.email } as User;
+  req.userPhone = user.profile.phone;
+  req.phoneVerified = user.profile.phoneVerified;
+  req.user = {
+    id: user.id,
+    email: user.email,
+    phone: user.profile.phone,
+  } as User;
   return next();
 }
 
@@ -78,7 +98,7 @@ export function createMemoryRouter() {
     }
   });
 
-  router.post('/studio/creator-unlock', requireMemoryAuth, (req: AuthedRequest, res) => {
+  router.post('/studio/creator-unlock', requireMemoryAuth, requireVerifiedPhoneIfSet, (req: AuthedRequest, res) => {
     const creator = getCreatorCredentials();
     if (!creator.configured) {
       const creatorToken = signCreatorSessionToken(req.memoryUser!.email);
@@ -98,13 +118,35 @@ export function createMemoryRouter() {
     return res.json({ unlocked: true, creatorToken });
   });
 
-  router.post('/auth/signin', (req, res) => {
-    const { email, password } = req.body as { email?: string; password?: string };
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required.' });
+  router.post('/auth/signin', async (req, res) => {
+    const { identifier, email, phone, password, countryGateway } = req.body as {
+      identifier?: string;
+      email?: string;
+      phone?: string;
+      password?: string;
+      countryGateway?: string;
+    };
+    const rawIdentifier = (identifier || phone || email || '').trim();
+    if (!rawIdentifier || !password) {
+      return res.status(400).json({ error: 'Mobile phone number (or email) and password are required.' });
     }
     try {
-      const result = memoryStore.signIn(email, password);
+      const result = memoryStore.signIn(rawIdentifier, password, countryGateway || 'GH');
+      if (result.profile.phone && !result.profile.phoneVerified) {
+        await dispatchPhoneVerificationChallenge({
+          phone: result.profile.phone,
+          email: result.profile.email || undefined,
+          purpose: 'login',
+          name: result.profile.name,
+          allowSandboxFallback: true,
+        });
+        return res.json({
+          requiresOtp: true,
+          phone: result.profile.phone,
+          email: result.profile.email || undefined,
+          otpType: 'sms',
+        });
+      }
       return res.json({
         requiresOtp: false,
         session: result.session,
@@ -115,36 +157,140 @@ export function createMemoryRouter() {
     }
   });
 
-  router.post('/auth/signup', (req, res) => {
-    const { email, password, name, studio, appRole } = req.body as {
+  router.post('/auth/signup', async (req, res) => {
+    if (!platformRuntime.flags.signupsEnabled) {
+      return res.status(403).json({
+        error: 'New organiser signups are temporarily paused by platform administrator.',
+      });
+    }
+    const { email, phone, password, name, studio, countryGateway, appRole, agreed } = req.body as {
       email?: string;
+      phone?: string;
       password?: string;
       name?: string;
       studio?: string;
+      countryGateway?: string;
       appRole?: AppRole;
+      agreed?: boolean;
     };
-    if (!email || !password || !name) {
-      return res.status(400).json({ error: 'Name, email, and password are required.' });
+
+    const trimmedName = (name || '').trim();
+    if (trimmedName.length < 2) {
+      return res.status(400).json({ error: 'Full name must be at least 2 characters.' });
     }
-    try {
-      const result = memoryStore.signUp({ email, password, name, studio, appRole });
-      return res.json({
-        requiresOtp: false,
-        session: result.session,
-        profile: result.profile,
+    const gateway = countryGateway || 'GH';
+    const phoneCheck = validateStrictPhoneE164(phone || '', gateway);
+    if (!phoneCheck.ok) {
+      return res.status(400).json({ error: phoneCheck.error });
+    }
+
+    let cleanEmail = '';
+    if (email && email.trim()) {
+      const emailCheck = validateStrictEmail(email);
+      if (!emailCheck.ok) {
+        return res.status(400).json({ error: emailCheck.error });
+      }
+      cleanEmail = emailCheck.normalized;
+    }
+
+    const pwCheck = validateStrictPassword(password || '');
+    if (!pwCheck.ok) {
+      return res.status(400).json({ error: pwCheck.error });
+    }
+
+    if (agreed === false) {
+      return res.status(400).json({
+        error: 'You must agree to the Terms & Conditions and NCA SMS regulations to register.',
       });
-    } catch (err) {
-      return res.status(400).json({ error: err instanceof Error ? err.message : 'Sign-up failed.' });
     }
+
+    if (memoryStore.getUserByPhone(phoneCheck.normalized)) {
+      return res.status(409).json({
+        error: `An account with phone number ${phoneCheck.normalized} already exists. Please sign in instead.`,
+      });
+    }
+    if (cleanEmail && memoryStore.getUserByEmail(cleanEmail)) {
+      return res.status(409).json({
+        error: `An account with email ${cleanEmail} already exists. Please sign in instead.`,
+      });
+    }
+
+    stagePendingSignup({
+      phone: phoneCheck.normalized,
+      email: cleanEmail,
+      password: password!,
+      name: trimmedName,
+      studio: (studio || `${trimmedName.split(' ')[0]}'s Events`).trim(),
+      countryGateway: gateway,
+      appRole: appRole === 'gate_staff' ? 'gate_staff' : 'organizer',
+    });
+
+    const delivery = await dispatchPhoneVerificationChallenge({
+      phone: phoneCheck.normalized,
+      email: cleanEmail || undefined,
+      purpose: 'signup',
+      name: trimmedName,
+      allowSandboxFallback: true,
+    });
+
+    if (!delivery.ok) {
+      clearPendingSignup(phoneCheck.normalized);
+      return res.status(400).json({ error: delivery.error || 'Could not send verification code.' });
+    }
+
+    return res.json({
+      requiresOtp: true,
+      phone: phoneCheck.normalized,
+      email: cleanEmail || undefined,
+      otpType: 'sms',
+      provider: delivery.provider,
+    });
   });
 
   router.post('/auth/verify-otp', (req, res) => {
-    const { email, token } = req.body as { email?: string; token?: string };
-    if (!email || !token) {
-      return res.status(400).json({ error: 'Email and 6-digit verification code are required.' });
+    const { email, phone, token, countryGateway } = req.body as {
+      email?: string;
+      phone?: string;
+      token?: string;
+      countryGateway?: string;
+    };
+    const cleanToken = (token || '').trim();
+    if ((!email && !phone) || !cleanToken) {
+      return res.status(400).json({ error: 'Phone number (or email) and 6-digit verification code are required.' });
     }
     try {
-      const result = memoryStore.verifyOtp(email, token);
+      const normalizedPhone = phone?.trim()
+        ? normalizePhoneE164(phone.trim(), countryGateway || 'GH')
+        : '';
+
+      if (normalizedPhone) {
+        const pending = getPendingSignup(normalizedPhone);
+        const otpRes = verifyPhoneOtp(normalizedPhone, cleanToken);
+        const allowSandboxUnstaged = !pending && !memoryStore.getUserByPhone(normalizedPhone);
+        if (!otpRes.ok) {
+          // Allow existing unverified users or direct OTP verification check
+          if (pending || memoryStore.getUserByPhone(normalizedPhone) || allowSandboxUnstaged) {
+            return res.status(401).json({ error: otpRes.error });
+          }
+        }
+        if (pending) {
+          const created = memoryStore.signUp({
+            email: pending.email,
+            phone: pending.phone,
+            phoneVerified: true,
+            password: pending.password,
+            name: pending.name,
+            studio: pending.studio,
+            appRole: pending.appRole,
+          });
+          consumePendingSignup(normalizedPhone);
+          return res.json(created);
+        }
+        const result = memoryStore.verifyOtp({ phone: normalizedPhone, email }, cleanToken);
+        return res.json(result);
+      }
+
+      const result = memoryStore.verifyOtp({ email }, cleanToken);
       return res.json(result);
     } catch (err) {
       return res.status(401).json({ error: err instanceof Error ? err.message : 'Invalid verification code.' });
@@ -152,11 +298,46 @@ export function createMemoryRouter() {
   });
 
   router.post('/auth/send-otp', async (req, res) => {
-    const { email } = req.body as { email?: string };
-    if (!email?.trim()) {
-      return res.status(400).json({ error: 'Email address is required.' });
+    const { email, phone, identifier, countryGateway } = req.body as {
+      email?: string;
+      phone?: string;
+      identifier?: string;
+      countryGateway?: string;
+    };
+    const target = (phone || identifier || email || '').trim();
+    if (!target) {
+      return res.status(400).json({ error: 'Mobile phone number or email address is required.' });
     }
-    const trimmedEmail = email.trim();
+    if (!target.includes('@')) {
+      const phoneCheck = validateStrictPhoneE164(target, countryGateway || 'GH');
+      if (!phoneCheck.ok) {
+        return res.status(400).json({ error: phoneCheck.error });
+      }
+      const existingUser = memoryStore.getUserByPhone(phoneCheck.normalized);
+      if (!existingUser) {
+        return res.status(404).json({
+          error: `No verified account found for ${phoneCheck.normalized}. Create a free account first.`,
+        });
+      }
+      const delivery = await dispatchPhoneVerificationChallenge({
+        phone: phoneCheck.normalized,
+        email: existingUser.email || undefined,
+        purpose: 'login',
+        name: existingUser.profile.name,
+        allowSandboxFallback: true,
+      });
+      if (!delivery.ok) {
+        return res.status(400).json({ error: delivery.error });
+      }
+      return res.json({
+        ok: true,
+        phone: phoneCheck.normalized,
+        email: existingUser.email || undefined,
+        provider: delivery.provider,
+      });
+    }
+
+    const trimmedEmail = target;
     if (isResendConfigured()) {
       const code = String(Math.floor(100000 + Math.random() * 900000));
       const delivery = await sendAuthOtpEmail({
@@ -175,9 +356,34 @@ export function createMemoryRouter() {
   });
 
   router.post('/auth/resend-otp', async (req, res) => {
-    const { email } = req.body as { email?: string };
+    const { email, phone, countryGateway, otpType } = req.body as {
+      email?: string;
+      phone?: string;
+      countryGateway?: string;
+      otpType?: string;
+    };
+    if (phone?.trim()) {
+      const normalized = normalizePhoneE164(phone.trim(), countryGateway || 'GH');
+      const pending = getPendingSignup(normalized);
+      const existing = memoryStore.getUserByPhone(normalized);
+      if (!pending && !existing) {
+        return res.status(404).json({ error: 'No active verification session for this phone number.' });
+      }
+      const delivery = await dispatchPhoneVerificationChallenge({
+        phone: normalized,
+        email: pending?.email || existing?.email || email?.trim(),
+        purpose: otpType === 'recovery' ? 'recovery' : pending ? 'signup' : 'login',
+        name: pending?.name || existing?.profile.name,
+        allowSandboxFallback: true,
+      });
+      if (!delivery.ok) {
+        return res.status(400).json({ error: delivery.error });
+      }
+      return res.json({ ok: true, phone: normalized, provider: delivery.provider });
+    }
+
     if (!email?.trim()) {
-      return res.status(400).json({ error: 'Email is required.' });
+      return res.status(400).json({ error: 'Phone number or email is required.' });
     }
     if (isResendConfigured()) {
       const code = String(Math.floor(100000 + Math.random() * 900000));
@@ -197,9 +403,37 @@ export function createMemoryRouter() {
   });
 
   router.post('/auth/reset-password', async (req, res) => {
-    const { email } = req.body as { email?: string };
+    const { email, phone, countryGateway } = req.body as {
+      email?: string;
+      phone?: string;
+      countryGateway?: string;
+    };
+    if (phone?.trim()) {
+      const phoneCheck = validateStrictPhoneE164(phone.trim(), countryGateway || 'GH');
+      if (!phoneCheck.ok) {
+        return res.status(400).json({ error: phoneCheck.error });
+      }
+      const existing = memoryStore.getUserByPhone(phoneCheck.normalized);
+      if (!existing) {
+        return res.status(404).json({
+          error: `No account registered with ${phoneCheck.normalized}.`,
+        });
+      }
+      const delivery = await dispatchPhoneVerificationChallenge({
+        phone: phoneCheck.normalized,
+        email: existing.email || undefined,
+        purpose: 'recovery',
+        name: existing.profile.name,
+        allowSandboxFallback: true,
+      });
+      if (!delivery.ok) {
+        return res.status(400).json({ error: delivery.error });
+      }
+      return res.json({ ok: true, phone: phoneCheck.normalized, provider: delivery.provider });
+    }
+
     if (!email?.trim()) {
-      return res.status(400).json({ error: 'Email address is required.' });
+      return res.status(400).json({ error: 'Email address or phone number is required.' });
     }
     if (isResendConfigured()) {
       const code = String(Math.floor(100000 + Math.random() * 900000));
@@ -255,12 +489,13 @@ export function createMemoryRouter() {
     return res.json({ profile: req.memoryUser!.profile });
   });
 
-  router.post('/auth/update-password', requireMemoryAuth, (req: AuthedRequest, res) => {
+  router.post('/auth/update-password', requireMemoryAuth, requireVerifiedPhoneIfSet, (req: AuthedRequest, res) => {
     const { password } = req.body as { password?: string };
-    if (!password || password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    const pwCheck = validateStrictPassword(password || '');
+    if (!pwCheck.ok) {
+      return res.status(400).json({ error: pwCheck.error });
     }
-    memoryStore.updatePassword(req.user!.id, password);
+    memoryStore.updatePassword(req.user!.id, password!);
     return res.json({ ok: true });
   });
 

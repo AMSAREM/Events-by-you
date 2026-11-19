@@ -582,13 +582,22 @@ export const INITIAL_DISPOSABLE_SHOTS: DisposableShot[] = [
   },
 ];
 
+const GATEWAY_DIAL_CODES: Record<string, string> = {
+  GH: '233',
+  NG: '234',
+  KE: '254',
+  RW: '250',
+};
+
 /** Normalizes Ghanaian/African local phone inputs into strict E.164 format */
-export function normalizePhoneE164(raw: string): string {
-  const digits = raw.replace(/[^\d+]/g, '');
-  if (!digits) return '';
-  if (digits.startsWith('+')) {
-    return digits;
+export function normalizePhoneE164(raw: string, countryGateway = 'GH'): string {
+  const cleaned = raw.replace(/[^\d+]/g, '');
+  if (!cleaned) return '';
+  if (cleaned.startsWith('+')) {
+    return `+${cleaned.slice(1).replace(/\D/g, '')}`;
   }
+  const digits = cleaned.replace(/\D/g, '');
+  if (!digits) return '';
   if (
     digits.startsWith('233') ||
     digits.startsWith('234') ||
@@ -597,8 +606,129 @@ export function normalizePhoneE164(raw: string): string {
   ) {
     return `+${digits}`;
   }
-  if (digits.startsWith('0') && digits.length >= 9) {
-    return `+233${digits.slice(1)}`;
+  const dialCode = GATEWAY_DIAL_CODES[countryGateway] || '';
+  if (digits.startsWith('0') && digits.length >= 9 && dialCode) {
+    return `+${dialCode}${digits.slice(1)}`;
   }
-  return `+233${digits}`;
+  if (dialCode) {
+    return `+${dialCode}${digits}`;
+  }
+  return `+${digits}`;
 }
+
+export function isValidE164Phone(phone: string): boolean {
+  return /^\+[1-9]\d{7,14}$/.test(phone.trim());
+}
+
+const DISALLOWED_EMAIL_DOMAINS = new Set([
+  'example.com',
+  'example.org',
+  'example.net',
+  'test.com',
+  'invalid',
+  'localhost',
+  'phone.eventsbyyou.xyz',
+]);
+
+export function validateStrictPhoneE164(
+  raw: string,
+  countryGateway = 'GH'
+): { ok: true; normalized: string } | { ok: false; normalized: string; error: string } {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) {
+    return { ok: false, normalized: '', error: 'Mobile phone number is required.' };
+  }
+  const normalized = normalizePhoneE164(trimmed, countryGateway);
+  if (!isValidE164Phone(normalized)) {
+    return {
+      ok: false,
+      normalized,
+      error: 'Enter a valid mobile phone number in E.164 format (e.g. +233 24 123 4567).',
+    };
+  }
+  const subscriberDigits = normalized.replace(/^\+(233|234|254|250)/, '');
+  if (/^(\d)\1{5,}$/.test(subscriberDigits)) {
+    return {
+      ok: false,
+      normalized,
+      error: 'Please enter your real active mobile number (repeated placeholder digits are not allowed).',
+    };
+  }
+  if (normalized.startsWith('+233')) {
+    if (!/^\+233[235679]\d{8}$/.test(normalized)) {
+      return {
+        ok: false,
+        normalized,
+        error: 'Ghana numbers (+233) must contain 9 digits after +233 (e.g. 024 123 4567 or +233241234567).',
+      };
+    }
+  } else if (normalized.startsWith('+234')) {
+    if (!/^\+234[789][01]\d{8}$/.test(normalized)) {
+      return {
+        ok: false,
+        normalized,
+        error: 'Nigeria numbers (+234) must contain 10 valid subscriber digits after +234 (e.g. 0803 123 4567).',
+      };
+    }
+  } else if (normalized.startsWith('+254')) {
+    if (!/^\+254[17]\d{8}$/.test(normalized)) {
+      return {
+        ok: false,
+        normalized,
+        error: 'Kenya numbers (+254) must contain 9 digits starting with 7 or 1 after +254.',
+      };
+    }
+  } else if (normalized.startsWith('+250')) {
+    if (!/^\+250[27]\d{8}$/.test(normalized)) {
+      return {
+        ok: false,
+        normalized,
+        error: 'Rwanda numbers (+250) must contain 9 digits starting with 7 or 2 after +250.',
+      };
+    }
+  }
+  return { ok: true, normalized };
+}
+
+export function validateStrictEmail(
+  raw: string
+): { ok: true; normalized: string } | { ok: false; normalized: string; error: string } {
+  const normalized = (raw || '').trim().toLowerCase();
+  if (!normalized) {
+    return { ok: false, normalized: '', error: 'Email address is required.' };
+  }
+  if (normalized.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(normalized)) {
+    return { ok: false, normalized, error: 'Enter a valid email address (e.g. name@domain.com).' };
+  }
+  const domain = normalized.split('@')[1] || '';
+  if (DISALLOWED_EMAIL_DOMAINS.has(domain)) {
+    return {
+      ok: false,
+      normalized,
+      error: `Email domain "${domain}" is reserved or invalid. Use a real personal or organisation email.`,
+    };
+  }
+  return { ok: true, normalized };
+}
+
+export function validateStrictPassword(
+  password: string
+): { ok: true } | { ok: false; error: string } {
+  if (!password || typeof password !== 'string') {
+    return { ok: false, error: 'Password is required.' };
+  }
+  if (password.length < 8) {
+    return { ok: false, error: 'Password must be at least 8 characters long.' };
+  }
+  if (password.length > 128) {
+    return { ok: false, error: 'Password must be 128 characters or fewer.' };
+  }
+  if (!/[A-Z]/.test(password)) {
+    return { ok: false, error: 'Password must include at least 1 uppercase letter (A-Z).' };
+  }
+  if (!/[0-9]/.test(password)) {
+    return { ok: false, error: 'Password must include at least 1 number (0-9).' };
+  }
+  return { ok: true };
+}
+

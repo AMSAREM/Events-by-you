@@ -15,27 +15,42 @@ import {
   User,
 } from 'lucide-react';
 
+import { validateStrictEmail, validateStrictPhoneE164 } from '../data/initialData';
 import { api } from '../lib/api';
 
 interface ResetPasswordScreenProps {
   initialEmail?: string;
+  initialPhone?: string;
+  initialCountryGateway?: string;
   onBackHome: () => void;
   onBackSignIn: () => void;
-  onProceedToOtp: (email: string) => void;
+  onProceedToOtp: (target: {
+    phone?: string;
+    email?: string;
+    otpType?: 'recovery' | 'sms';
+    countryGateway?: string;
+  }) => void;
   onNavigateDemoEvent: () => void;
   onOpenLegal?: (doc: 'terms' | 'privacy') => void;
 }
 
 export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
   initialEmail = '',
+  initialPhone = '',
+  initialCountryGateway = 'GH',
   onBackHome,
   onBackSignIn,
   onProceedToOtp,
   onNavigateDemoEvent,
   onOpenLegal,
 }) => {
-  const [method, setMethod] = useState<'email' | 'sms'>('email');
-  const [contactValue, setContactValue] = useState(initialEmail || 'amoakoimml@gmail.com');
+  const [method, setMethod] = useState<'sms' | 'email'>(initialPhone ? 'sms' : 'email');
+  const [countryGateway, setCountryGateway] = useState(initialCountryGateway);
+  const [contactValue, setContactValue] = useState(initialPhone || initialEmail || '');
+  const [dispatchedTarget, setDispatchedTarget] = useState<{
+    phone?: string;
+    email?: string;
+  } | null>(null);
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -44,21 +59,61 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
     setMethod(next);
     setSent(false);
     setErrorMsg(null);
-    if (next === 'email' && !contactValue.includes('@')) {
-      setContactValue(initialEmail || 'amoakoimml@gmail.com');
+    if (next === 'email') {
+      setContactValue(initialEmail && initialEmail.includes('@') ? initialEmail : '');
+    } else {
+      setContactValue(initialPhone || '');
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!contactValue.trim()) return;
+    const raw = contactValue.trim();
+    if (!raw) return;
+
     setSending(true);
     setErrorMsg(null);
     try {
-      await api.auth.resetPassword(contactValue.trim(), window.location.origin);
-      setSent(true);
+      if (method === 'sms') {
+        const phoneCheck = validateStrictPhoneE164(raw, countryGateway);
+        if (!phoneCheck.ok) {
+          setErrorMsg(phoneCheck.error);
+          setSending(false);
+          return;
+        }
+        const res = await api.auth.resetPassword({
+          phone: phoneCheck.normalized,
+          countryGateway,
+        });
+        setDispatchedTarget({
+          phone: res.phone || phoneCheck.normalized,
+          email: res.email,
+        });
+        setContactValue(res.phone || phoneCheck.normalized);
+        setSent(true);
+      } else {
+        const emailCheck = validateStrictEmail(raw);
+        if (!emailCheck.ok) {
+          setErrorMsg(emailCheck.error);
+          setSending(false);
+          return;
+        }
+        await api.auth.resetPassword({
+          email: emailCheck.normalized,
+          redirectTo: window.location.origin,
+        });
+        setDispatchedTarget({ email: emailCheck.normalized });
+        setContactValue(emailCheck.normalized);
+        setSent(true);
+      }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to send recovery email.');
+      setErrorMsg(
+        err instanceof Error
+          ? err.message
+          : method === 'sms'
+            ? 'Unable to send SMS recovery code.'
+            : 'Unable to send recovery email.'
+      );
     } finally {
       setSending(false);
     }
@@ -185,7 +240,7 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
               {/* Form */}
               <form onSubmit={handleSubmit} className="flex flex-col gap-4">
                 <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <label
                       className="text-xs font-semibold text-[#1A1C1D]"
                       htmlFor="recovery-contact"
@@ -194,37 +249,58 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
                         ? 'Work / Organisation Email'
                         : 'Verified Mobile Number (E.164)'}
                     </label>
-                    <span className="text-[11px] font-medium text-[#71717A]">Required</span>
+                    {method === 'sms' ? (
+                      <select
+                        aria-label="Recovery country gateway"
+                        value={countryGateway}
+                        onChange={(e) => setCountryGateway(e.target.value)}
+                        className="bg-[#F5F5F7] rounded-full px-2.5 py-0.5 text-[11px] font-semibold text-[#0B0B0B] outline-none cursor-pointer"
+                      >
+                        <option value="GH">GH (+233)</option>
+                        <option value="NG">NG (+234)</option>
+                        <option value="KE">KE (+254)</option>
+                        <option value="RW">RW (+250)</option>
+                        <option value="OTHER">Global</option>
+                      </select>
+                    ) : (
+                      <span className="text-[11px] font-medium text-[#71717A]">Required</span>
+                    )}
                   </div>
                   <div className="relative flex items-center">
-                    <AtSign className="w-4 h-4 text-[#71717A] absolute left-4 pointer-events-none" />
+                    {method === 'sms' ? (
+                      <Smartphone className="w-4 h-4 text-[#71717A] absolute left-4 pointer-events-none" />
+                    ) : (
+                      <AtSign className="w-4 h-4 text-[#71717A] absolute left-4 pointer-events-none" />
+                    )}
                     <input
                       id="recovery-contact"
                       type={method === 'email' ? 'email' : 'tel'}
                       required
                       value={contactValue}
-                      onChange={(e) => setContactValue(e.target.value)}
+                      onChange={(e) => {
+                        setContactValue(e.target.value);
+                        if (errorMsg) setErrorMsg(null);
+                      }}
                       placeholder={
-                        method === 'email' ? 'amoakoimml@gmail.com' : '+233 24 000 0000'
+                        method === 'email' ? 'you@gmail.com' : '+233 24 123 4567'
                       }
-                      className="w-full bg-[#F5F5F7] hover:bg-[#EEEEF0]/70 focus:bg-white text-[#0B0B0B] text-sm pl-11 pr-4 py-3 rounded-full outline-none transition-all focus:ring-2 focus:ring-[#0B0B0B]"
+                      className="w-full bg-[#F5F5F7] hover:bg-[#EEEEF0]/70 focus:bg-white text-[#0B0B0B] text-sm pl-11 pr-4 py-3 rounded-full outline-none transition-all focus:ring-2 focus:ring-[#0B0B0B] tabular-nums"
                     />
                   </div>
                 </div>
 
-                {/* SMS Fallback Indicator Card */}
+                {/* Delivery Channel Indicator Card */}
                 <div className="bg-[#F5F5F7] rounded-2xl p-3 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center text-[#0B0B0B] shrink-0">
                       <Smartphone className="w-4 h-4" />
                     </div>
                     <div className="truncate">
-                      <p className="text-[11px] text-[#71717A]">Linked backup number</p>
+                      <p className="text-[11px] text-[#71717A]">
+                        {method === 'sms' ? 'Arkesel SMS OTP Recovery' : 'Resend Recovery Channel'}
+                      </p>
                       <p className="text-xs font-semibold text-[#1A1C1D] truncate tabular-nums">
-                        +233 24 ••• ••84{' '}
-                        <span className="text-[#71717A] font-normal">
-                          (MTN Ghana · Arkesel v2)
-                        </span>
+                        {contactValue.trim() || (method === 'sms' ? 'Enter mobile phone above' : 'Enter email above')}
                       </p>
                     </div>
                   </div>
@@ -287,7 +363,18 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
                   </div>
                   <button
                     type="button"
-                    onClick={() => onProceedToOtp(contactValue)}
+                    onClick={() =>
+                      onProceedToOtp({
+                        phone:
+                          dispatchedTarget?.phone ||
+                          (method === 'sms' ? contactValue.trim() : undefined),
+                        email:
+                          dispatchedTarget?.email ||
+                          (method === 'email' ? contactValue.trim() : undefined),
+                        otpType: method === 'sms' ? 'sms' : 'recovery',
+                        countryGateway,
+                      })
+                    }
                     className="px-4 py-2 rounded-full bg-white text-[#0B0B0B] text-xs font-semibold hover:bg-zinc-200 transition-colors whitespace-nowrap shrink-0"
                   >
                     Enter 6-Digit OTP →
@@ -298,7 +385,18 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
               <div className="mt-6 pt-4 border-t border-[#E5E5EA] flex flex-col gap-2">
                 <button
                   type="button"
-                  onClick={() => onProceedToOtp(contactValue)}
+                  onClick={() =>
+                    onProceedToOtp({
+                      phone:
+                        dispatchedTarget?.phone ||
+                        (method === 'sms' ? contactValue.trim() : undefined),
+                      email:
+                        dispatchedTarget?.email ||
+                        (method === 'email' ? contactValue.trim() : undefined),
+                      otpType: method === 'sms' ? 'sms' : 'recovery',
+                      countryGateway,
+                    })
+                  }
                   className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#0B0B0B] hover:opacity-80 transition-opacity w-fit"
                 >
                   <span>Already have your 6-digit SMS code? Verify identity</span>

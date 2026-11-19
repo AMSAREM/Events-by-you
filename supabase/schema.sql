@@ -11,6 +11,8 @@ create table if not exists public.profiles (
   role text not null default 'Lead Organiser',
   app_role text not null default 'organizer' check (app_role in ('creator', 'organizer', 'gate_staff')),
   email text not null,
+  phone text,
+  phone_verified boolean not null default false,
   studio text not null default 'Events Studio',
   plan text not null default 'Starter' check (plan in ('Starter', 'Pro Organizer', 'Enterprise')),
   sms_credits integer not null default 20,
@@ -27,6 +29,16 @@ create table if not exists public.profiles (
 alter table public.profiles
   add column if not exists app_role text not null default 'organizer' check (app_role in ('creator', 'organizer', 'gate_staff'));
 
+alter table public.profiles
+  add column if not exists phone text;
+
+alter table public.profiles
+  add column if not exists phone_verified boolean not null default false;
+
+create unique index if not exists idx_profiles_unique_phone
+  on public.profiles (phone)
+  where phone is not null and phone <> '';
+
 -- Automatically provision a profile when a user signs up via Supabase Auth
 create or replace function public.handle_new_user()
 returns trigger
@@ -36,16 +48,22 @@ as $$
 declare
   full_name text;
   requested_app_role text;
+  user_phone text;
+  is_phone_verified boolean;
 begin
   full_name := coalesce(nullif(trim(new.raw_user_meta_data ->> 'name'), ''), split_part(coalesce(new.email, 'Organiser'), '@', 1));
   requested_app_role := case
     when (new.raw_user_meta_data ->> 'app_role') = 'gate_staff' then 'gate_staff'
     else 'organizer'
   end;
-  insert into public.profiles (id, email, name, first_name, role, app_role, studio)
+  user_phone := nullif(trim(coalesce(new.phone, new.raw_user_meta_data ->> 'phone', '')), '');
+  is_phone_verified := coalesce((new.raw_user_meta_data ->> 'phone_verified')::boolean, new.phone_confirmed_at is not null, false);
+  insert into public.profiles (id, email, phone, phone_verified, name, first_name, role, app_role, studio)
   values (
     new.id,
     coalesce(new.email, ''),
+    user_phone,
+    is_phone_verified,
     full_name,
     split_part(full_name, ' ', 1),
     case when requested_app_role = 'gate_staff' then 'Gate Check-In Staff' else 'Lead Organiser' end,
@@ -93,6 +111,7 @@ begin
   -- Service role / postgres superuser bypasses auth.uid()
   if auth.uid() is not null and not public.is_creator() then
     new.app_role := old.app_role;
+    new.phone_verified := old.phone_verified;
   end if;
   return new;
 end;

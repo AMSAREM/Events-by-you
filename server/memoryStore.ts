@@ -66,6 +66,7 @@ interface StoredCreatorAppRecord extends CreatorApp {
 interface MemoryDatabase {
   users: Map<string, MemoryUser>;
   userIdByEmail: Map<string, string>;
+  userIdByPhone: Map<string, string>;
   sessionsByAccessToken: Map<string, MemorySession>;
   sessionsByRefreshToken: Map<string, MemorySession>;
   events: Map<string, EventItem & { organizerId: string }>;
@@ -197,6 +198,7 @@ function createMemorySession(userId: string): MemorySession {
 const db: MemoryDatabase = {
   users: new Map(),
   userIdByEmail: new Map(),
+  userIdByPhone: new Map(),
   sessionsByAccessToken: new Map(),
   sessionsByRefreshToken: new Map(),
   events: new Map(),
@@ -406,27 +408,44 @@ export function getOrCreateMemoryUser(
     password?: string;
     setPasswordIfMissing?: boolean;
     appRole?: AppRole;
+    phone?: string;
+    phoneVerified?: boolean;
   }
 ): MemoryUser {
   const email = emailInput.trim().toLowerCase();
-  const existingId = db.userIdByEmail.get(email);
+  const normalizedPhone = options?.phone ? normalizePhoneE164(options.phone) : undefined;
+  const existingId =
+    (email ? db.userIdByEmail.get(email) : undefined) ||
+    (normalizedPhone ? db.userIdByPhone.get(normalizedPhone) : undefined);
   if (existingId) {
     const user = db.users.get(existingId)!;
     if (options?.password && options.setPasswordIfMissing && !user.passwordHash) {
       user.passwordHash = hashPassword(options.password);
+    }
+    if (normalizedPhone && !user.profile.phone) {
+      user.profile.phone = normalizedPhone;
+      db.userIdByPhone.set(normalizedPhone, user.id);
+    }
+    if (options?.phoneVerified) {
+      user.profile.phoneVerified = true;
     }
     return user;
   }
 
   const userId = `usr-${crypto.randomBytes(6).toString('hex')}`;
   const creatorEmail = (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase();
-  const isCreator = email === creatorEmail;
+  const creatorPhone = (process.env.CREATOR_PHONE || '').trim()
+    ? normalizePhoneE164((process.env.CREATOR_PHONE || '').trim())
+    : '';
+  const isCreator =
+    (Boolean(email) && email === creatorEmail) ||
+    Boolean(creatorPhone && normalizedPhone && normalizedPhone === creatorPhone);
   const resolvedAppRole: AppRole = isCreator
     ? 'creator'
     : options?.appRole === 'gate_staff'
       ? 'gate_staff'
       : 'organizer';
-  const name = options?.name?.trim() || email.split('@')[0] || 'Organiser';
+  const name = options?.name?.trim() || (email ? email.split('@')[0] : normalizedPhone) || 'Organiser';
   const profile: OrganizerProfile = {
     name,
     firstName: name.split(' ')[0] || 'Organiser',
@@ -438,6 +457,8 @@ export function getOrCreateMemoryUser(
           : 'Lead Organiser',
     appRole: resolvedAppRole,
     email,
+    phone: normalizedPhone,
+    phoneVerified: Boolean(options?.phoneVerified),
     studio: options?.studio?.trim() || (isCreator ? 'Apps Creator Console' : 'Events Studio'),
     plan: isCreator ? 'Pro Organizer' : 'Starter',
     smsCredits: isCreator ? 1840 : 20,
@@ -458,7 +479,8 @@ export function getOrCreateMemoryUser(
     createdAt: now,
   };
   db.users.set(userId, user);
-  db.userIdByEmail.set(email, userId);
+  if (email) db.userIdByEmail.set(email, userId);
+  if (normalizedPhone) db.userIdByPhone.set(normalizedPhone, userId);
   return user;
 }
 
@@ -488,13 +510,36 @@ function buildTenantSummary(user: MemoryUser): BuilderTenantSummary {
 }
 
 export const memoryStore = {
-  signUp(payload: { email: string; password: string; name: string; studio?: string; appRole?: AppRole }) {
+  getUserByPhone(phoneInput: string): MemoryUser | null {
+    const normalized = normalizePhoneE164(phoneInput);
+    const id = normalized ? db.userIdByPhone.get(normalized) : undefined;
+    return id ? db.users.get(id) ?? null : null;
+  },
+
+  getUserByEmail(emailInput: string): MemoryUser | null {
+    const clean = emailInput.trim().toLowerCase();
+    const id = clean ? db.userIdByEmail.get(clean) : undefined;
+    return id ? db.users.get(id) ?? null : null;
+  },
+
+  signUp(payload: {
+    email?: string;
+    phone: string;
+    phoneVerified?: boolean;
+    password: string;
+    name: string;
+    studio?: string;
+    appRole?: AppRole;
+  }) {
     if (!platformRuntime.flags.signupsEnabled) {
       throw new Error('New organiser signups are temporarily paused by platform administrator.');
     }
-    const email = payload.email.trim().toLowerCase();
-    const existingId = db.userIdByEmail.get(email);
-    if (existingId) {
+    const normalizedPhone = normalizePhoneE164(payload.phone);
+    const email = (payload.email || '').trim().toLowerCase();
+    if (normalizedPhone && db.userIdByPhone.has(normalizedPhone)) {
+      throw new Error('An account with this mobile phone number already exists. Please sign in.');
+    }
+    if (email && db.userIdByEmail.has(email)) {
       throw new Error('An account with this email already exists. Please sign in.');
     }
     const user = getOrCreateMemoryUser(email, {
@@ -502,17 +547,26 @@ export const memoryStore = {
       studio: payload.studio || 'Events Studio',
       password: payload.password,
       appRole: payload.appRole === 'gate_staff' ? 'gate_staff' : 'organizer',
+      phone: normalizedPhone,
+      phoneVerified: Boolean(payload.phoneVerified),
     });
     user.lastLoginAt = new Date().toISOString();
     const session = createMemorySession(user.id);
     return { session, profile: user.profile };
   },
 
-  signIn(emailInput: string, password: string) {
-    const email = emailInput.trim().toLowerCase();
-    const existingId = db.userIdByEmail.get(email);
+  signIn(identifierInput: string, password: string, countryGateway = 'GH') {
+    const raw = identifierInput.trim();
+    const isEmail = raw.includes('@');
+    const existingId = isEmail
+      ? db.userIdByEmail.get(raw.toLowerCase())
+      : db.userIdByPhone.get(normalizePhoneE164(raw, countryGateway));
     if (!existingId) {
-      throw new Error('Invalid email or password. Create a free account or use a 6-digit email code.');
+      throw new Error(
+        isEmail
+          ? 'Invalid email or password. Create a free account or use a 6-digit code.'
+          : 'Invalid mobile number or password. Create a free account or use a 6-digit SMS code.'
+      );
     }
     const user = db.users.get(existingId)!;
     if (user.suspended) {
@@ -545,13 +599,25 @@ export const memoryStore = {
     return { session, profile: user.profile };
   },
 
-  verifyOtp(emailInput: string, token: string) {
+  verifyOtp(target: { email?: string; phone?: string }, token: string) {
     if (!/^\d{6}$/.test(token.trim())) {
       throw new Error('Enter a valid 6-digit verification code.');
     }
-    const user = getOrCreateMemoryUser(emailInput);
+    const user = target.phone
+      ? this.getUserByPhone(target.phone)
+      : target.email
+        ? getOrCreateMemoryUser(target.email)
+        : null;
+    if (!user) {
+      throw new Error('Account not found for verification.');
+    }
     if (user.suspended) {
       throw new Error('This organiser account has been suspended.');
+    }
+    if (target.phone) {
+      user.profile.phone = normalizePhoneE164(target.phone);
+      user.profile.phoneVerified = true;
+      db.userIdByPhone.set(user.profile.phone, user.id);
     }
     user.lastLoginAt = new Date().toISOString();
     const session = createMemorySession(user.id);
@@ -731,7 +797,21 @@ export const memoryStore = {
   updateProfile(userId: string, patch: Partial<OrganizerProfile>): OrganizerProfile {
     const user = db.users.get(userId);
     if (!user) throw new Error('User not found.');
-    const { appRole: _ignoreAppRole, ...safePatch } = patch;
+    const {
+      appRole: _ignoreAppRole,
+      phoneVerified: _ignorePhoneVerified,
+      ...safePatch
+    } = patch;
+    if (typeof safePatch.phone === 'string') {
+      const normalized = safePatch.phone.trim() ? normalizePhoneE164(safePatch.phone.trim()) : undefined;
+      if (normalized && normalized !== user.profile.phone) {
+        if (user.profile.phone) db.userIdByPhone.delete(user.profile.phone);
+        db.userIdByPhone.set(normalized, user.id);
+        safePatch.phone = normalized;
+      } else if (!normalized) {
+        safePatch.phone = undefined;
+      }
+    }
     user.profile = { ...user.profile, ...safePatch };
     return user.profile;
   },

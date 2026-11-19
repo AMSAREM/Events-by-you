@@ -19,6 +19,11 @@ import {
   Verified,
   Wallet,
 } from 'lucide-react';
+import {
+  validateStrictEmail,
+  validateStrictPassword,
+  validateStrictPhoneE164,
+} from '../data/initialData';
 import { api } from '../lib/api';
 import { EventItem, OrganizerProfile, SystemAlert } from '../types/events';
 
@@ -79,6 +84,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [role, setRole] = useState(profile.role);
   const [studio, setStudio] = useState(profile.studio);
   const [email, setEmail] = useState(profile.email);
+  const [phone, setPhone] = useState(profile.phone ?? '');
   const [replyToEmail, setReplyToEmail] = useState(
     profile.replyToEmail ?? 'support@techleaders.africa'
   );
@@ -117,6 +123,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     setRole(profile.role);
     setStudio(profile.studio);
     setEmail(profile.email);
+    setPhone(profile.phone ?? '');
     setReplyToEmail(profile.replyToEmail ?? 'support@techleaders.africa');
     setTimezone(profile.timezone ?? 'Africa/Accra');
     setThreshold(profile.capacityAlertThreshold);
@@ -132,6 +139,30 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
   const handleSave = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (!name.trim() || name.trim().length < 2) {
+      showToast('Full legal name must be at least 2 characters.');
+      return;
+    }
+    let normalizedEmail = profile.email;
+    if (email.trim()) {
+      const emailCheck = validateStrictEmail(email);
+      if (!emailCheck.ok) {
+        showToast(emailCheck.error);
+        return;
+      }
+      normalizedEmail = emailCheck.normalized;
+    }
+    let normalizedPhone = profile.phone;
+    if (phone.trim()) {
+      const phoneCheck = validateStrictPhoneE164(phone, 'GH');
+      if (!phoneCheck.ok) {
+        showToast(phoneCheck.error);
+        return;
+      }
+      normalizedPhone = phoneCheck.normalized;
+      setPhone(phoneCheck.normalized);
+    }
+
     const firstName = name.trim().split(' ')[0] || profile.firstName;
     onUpdateProfile({
       ...profile,
@@ -139,7 +170,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       firstName,
       role: role.trim() || profile.role,
       studio: studio.trim() || profile.studio,
-      email: email.trim() || profile.email,
+      email: normalizedEmail,
+      phone: normalizedPhone,
       replyToEmail: replyToEmail.trim() || 'support@techleaders.africa',
       timezone,
       capacityAlertThreshold: threshold,
@@ -155,6 +187,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     setRole(profile.role);
     setStudio(profile.studio);
     setEmail(profile.email);
+    setPhone(profile.phone ?? '');
     setReplyToEmail(profile.replyToEmail ?? 'support@techleaders.africa');
     setTimezone(profile.timezone ?? 'Africa/Accra');
     setThreshold(profile.capacityAlertThreshold);
@@ -393,14 +426,47 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                       type="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@gmail.com"
                       className="w-full pl-4 pr-24 py-2.5 rounded-2xl bg-white border border-[#E5E5EA]/70 text-sm text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B] transition-all"
                     />
                     <span className="absolute right-2 top-2 px-2.5 py-0.5 rounded-full bg-[#EEEEF0] text-[#0B0B0B] text-[11px] font-medium flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-[#0B0B0B]" />
-                      Verified
+                      {email.trim() ? 'Linked' : 'Optional'}
                     </span>
                   </div>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#71717A] mb-1.5">
+                  Mobile Phone Number (Auth &amp; Authorisation)
+                </label>
+                <div className="relative">
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+233 24 123 4567"
+                    className="w-full pl-4 pr-28 py-2.5 rounded-2xl bg-white border border-[#E5E5EA]/70 text-sm text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B] transition-all tabular-nums"
+                  />
+                  <span
+                    className={`absolute right-2 top-2 px-2.5 py-0.5 rounded-full text-[11px] font-medium flex items-center gap-1 ${
+                      profile.phoneVerified
+                        ? 'bg-[#0B0B0B] text-white'
+                        : 'bg-[#EEEEF0] text-[#71717A]'
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        profile.phoneVerified ? 'bg-emerald-400' : 'bg-[#71717A]'
+                      }`}
+                    />
+                    {profile.phoneVerified ? 'Verified' : 'Unverified'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#71717A] mt-1">
+                  Used for SMS OTP sign-in, password recovery, and RBAC permission enforcement.
+                </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -646,15 +712,16 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                       type="password"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="Enter new 6+ char creator password"
+                      placeholder="Min 8 chars, 1 uppercase, 1 number"
                       className="flex-1 h-10 px-4 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
                     />
                     <button
                       type="button"
                       disabled={updatingPassword}
                       onClick={async () => {
-                        if (newPassword.trim().length < 6) {
-                          showToast('Enter at least 6 characters.');
+                        const pwCheck = validateStrictPassword(newPassword);
+                        if (!pwCheck.ok) {
+                          showToast(pwCheck.error);
                           return;
                         }
                         setUpdatingPassword(true);

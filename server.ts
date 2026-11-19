@@ -9,6 +9,8 @@ import {
   createServiceSupabaseClient,
   createUserSupabaseClient,
   ensureProfileRow,
+  findSupabaseUserByEmail,
+  findSupabaseUserByPhone,
   isSupabaseConfigured,
   mapAlertRow,
   mapAttendeeRow,
@@ -28,6 +30,9 @@ import {
   INITIAL_ROLL_SETTINGS,
   INITIAL_SCHEDULE,
   normalizePhoneE164,
+  validateStrictEmail,
+  validateStrictPassword,
+  validateStrictPhoneE164,
 } from './src/data/initialData.ts';
 import type {
   AppRole,
@@ -46,6 +51,7 @@ import {
   getCreatorCredentials,
   requireCreatorVerification,
   requireRole,
+  requireVerifiedPhoneIfSet,
   safeTimingEqual,
   signCreatorSessionToken,
   type AuthedRequest,
@@ -55,6 +61,17 @@ import {
   sendAuthOtpEmail,
   sendEventPassEmail,
 } from './server/resend.ts';
+import {
+  buildSyntheticPhoneEmail,
+  clearPendingSignup,
+  consumePendingSignup,
+  dispatchPhoneVerificationChallenge,
+  getPendingSignup,
+  isArkeselConfigured,
+  isSyntheticPhoneEmail,
+  stagePendingSignup,
+  verifyPhoneOtp,
+} from './server/phoneAuth.ts';
 import { createMemoryRouter } from './server/memoryRoutes.ts';
 import { createBuilderRouter } from './server/builderRoutes.ts';
 import { memoryStore, platformRuntime } from './server/memoryStore.ts';
@@ -156,14 +173,38 @@ async function requireSupabaseAuth(req: AuthedRequest, res: Response, next: Next
     req.accessToken = token;
     req.user = data.user;
     req.supabase = createUserSupabaseClient(token);
-    const { data: prof } = await req.supabase
+    let prof: Record<string, unknown> | null = null;
+    const profRes = await req.supabase
       .from('profiles')
-      .select('app_role')
+      .select('app_role, phone, phone_verified')
       .eq('id', data.user.id)
       .maybeSingle();
-    const dbRole = (prof as Record<string, unknown> | null)?.app_role;
+    if (!profRes.error) {
+      prof = profRes.data as Record<string, unknown> | null;
+    } else {
+      const legacyRes = await req.supabase
+        .from('profiles')
+        .select('app_role')
+        .eq('id', data.user.id)
+        .maybeSingle();
+      prof = legacyRes.data as Record<string, unknown> | null;
+    }
+    const dbRole = prof?.app_role;
     if (dbRole === 'creator' || dbRole === 'organizer' || dbRole === 'gate_staff') {
       req.appRole = dbRole;
+    }
+    const rawPhone =
+      (typeof prof?.phone === 'string' && prof.phone.trim()) ||
+      (typeof data.user.phone === 'string' && data.user.phone.trim()) ||
+      (typeof data.user.user_metadata?.phone === 'string' && data.user.user_metadata.phone.trim()) ||
+      '';
+    if (rawPhone) {
+      req.userPhone = normalizePhoneE164(rawPhone);
+      req.phoneVerified = Boolean(
+        prof?.phone_verified ||
+          data.user.phone_confirmed_at ||
+          data.user.user_metadata?.phone_verified
+      );
     }
     return next();
   } catch (err) {
@@ -275,10 +316,18 @@ async function createAppServer() {
   const app = express();
   app.use(express.json({ limit: '15mb' }));
 
-  app.get(['/robots.txt', '/robot.txt'], (req, res) => {
+  const resolveBaseUrl = (req: Request) => {
+    if (process.env.APP_URL) return process.env.APP_URL.replace(/\/+$/, '');
     const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
-    const host = (req.headers['x-forwarded-host'] as string) || req.get('host') || 'localhost:3000';
-    const baseUrl = (process.env.APP_URL || `${proto}://${host}`).replace(/\/+$/, '');
+    const host = (req.headers['x-forwarded-host'] as string) || req.get('host') || 'www.eventsbyyou.xyz';
+    if (host.includes('localhost') || host.includes('127.0.0.1')) {
+      return 'https://www.eventsbyyou.xyz';
+    }
+    return `${proto}://${host}`.replace(/\/+$/, '');
+  };
+
+  app.get(['/robots.txt', '/robot.txt'], (req, res) => {
+    const baseUrl = resolveBaseUrl(req);
     res.type('text/plain; charset=utf-8').send(
       [
         'User-agent: *',
@@ -296,9 +345,7 @@ async function createAppServer() {
   });
 
   app.get('/sitemap.xml', async (req, res) => {
-    const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
-    const host = (req.headers['x-forwarded-host'] as string) || req.get('host') || 'localhost:3000';
-    const baseUrl = (process.env.APP_URL || `${proto}://${host}`).replace(/\/+$/, '');
+    const baseUrl = resolveBaseUrl(req);
     const today = new Date().toISOString().split('T')[0];
 
     let publicEvents: EventItem[] = [];
@@ -360,6 +407,7 @@ async function createAppServer() {
       supabaseConfigured: configured,
       serviceRoleConfigured: Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()),
       resendConfigured: isResendConfigured(),
+      arkeselConfigured: isArkeselConfigured(),
       inMemoryFallback: !configured,
       creatorEmail: creator.email,
       creatorPasswordConfigured: creator.configured,
@@ -525,41 +573,104 @@ async function createAppServer() {
   });
 
   app.post('/api/auth/signin', requireSupabaseConfiguredMiddleware, async (req, res) => {
-    const { email, password } = req.body as { email?: string; password?: string };
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required.' });
+    const { identifier, email, phone, password, countryGateway } = req.body as {
+      identifier?: string;
+      email?: string;
+      phone?: string;
+      password?: string;
+      countryGateway?: string;
+    };
+    const rawIdentifier = (identifier || phone || email || '').trim();
+    if (!rawIdentifier || !password) {
+      return res.status(400).json({ error: 'Mobile phone number (or email) and password are required.' });
     }
     try {
+      const svc = createServiceSupabaseClient();
+      let loginEmail = rawIdentifier;
+      let resolvedPhone = '';
+
+      if (!rawIdentifier.includes('@')) {
+        const phoneCheck = validateStrictPhoneE164(rawIdentifier, countryGateway || 'GH');
+        if (!phoneCheck.ok) {
+          return res.status(400).json({ error: phoneCheck.error });
+        }
+        resolvedPhone = phoneCheck.normalized;
+        if (!svc) {
+          return res.status(503).json({
+            error: 'Server-side phone lookup requires SUPABASE_SERVICE_ROLE_KEY.',
+          });
+        }
+        const matchedUser = await findSupabaseUserByPhone(svc, resolvedPhone);
+        if (!matchedUser?.email) {
+          return res.status(401).json({
+            error: `No account found for ${resolvedPhone}. Create a free account or sign in with your email.`,
+          });
+        }
+        loginEmail = matchedUser.email;
+      }
+
       const supabase = createPublicSupabaseClient();
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
+        email: loginEmail,
         password,
       });
       if (error || !data.session || !data.user) {
         if (error?.message?.toLowerCase().includes('email not confirmed')) {
-          const svc = createServiceSupabaseClient();
-          if (isResendConfigured() && svc) {
+          if (isResendConfigured() && svc && !isSyntheticPhoneEmail(loginEmail)) {
             const linkRes = await svc.auth.admin.generateLink({
               type: 'magiclink',
-              email: email.trim(),
+              email: loginEmail,
             });
             const otpCode = linkRes.data?.properties?.email_otp;
             const actionLink = linkRes.data?.properties?.action_link;
             if (!linkRes.error && (otpCode || actionLink)) {
               await sendAuthOtpEmail({
-                to: email.trim(),
+                to: loginEmail,
                 code: otpCode,
                 actionLink,
                 purpose: 'signup',
               });
             }
           }
-          return res.json({ requiresOtp: true, email: email.trim(), otpType: 'signup' });
+          return res.json({
+            requiresOtp: true,
+            email: isSyntheticPhoneEmail(loginEmail) ? undefined : loginEmail,
+            phone: resolvedPhone || undefined,
+            otpType: 'signup',
+          });
         }
         return res.status(401).json({ error: error?.message || 'Invalid credentials.' });
       }
+
       const userClient = createUserSupabaseClient(data.session.access_token);
       const profile = await ensureProfileRow(userClient, data.user);
+      const userPhone = profile.phone || resolvedPhone;
+      const phoneVerified = Boolean(
+        profile.phoneVerified ||
+          data.user.phone_confirmed_at ||
+          data.user.user_metadata?.phone_verified
+      );
+
+      if (userPhone && !phoneVerified) {
+        const displayEmail = isSyntheticPhoneEmail(data.user.email) ? undefined : data.user.email;
+        const challenge = await dispatchPhoneVerificationChallenge({
+          phone: userPhone,
+          email: displayEmail,
+          purpose: 'login',
+          name: profile.name,
+        });
+        if (!challenge.ok) {
+          return res.status(400).json({ error: challenge.error || 'Could not dispatch verification code.' });
+        }
+        return res.json({
+          requiresOtp: true,
+          phone: userPhone,
+          email: displayEmail,
+          otpType: 'sms',
+          provider: challenge.provider,
+        });
+      }
+
       return res.json({
         requiresOtp: false,
         session: {
@@ -581,151 +692,326 @@ async function createAppServer() {
         error: 'New organiser signups are temporarily paused by platform administrator.',
       });
     }
-    const { email, password, name, studio, countryGateway, appRole } = req.body as {
+    const { email, phone, password, name, studio, countryGateway, appRole, agreed } = req.body as {
       email?: string;
+      phone?: string;
       password?: string;
       name?: string;
       studio?: string;
       countryGateway?: string;
       appRole?: AppRole;
+      agreed?: boolean;
     };
-    if (!email || !password || !name) {
-      return res.status(400).json({ error: 'Name, email, and password are required.' });
+
+    const trimmedName = (name || '').trim();
+    if (trimmedName.length < 2) {
+      return res.status(400).json({ error: 'Full name must be at least 2 characters.' });
     }
 
-    const trimmedEmail = email.trim();
-    const trimmedName = name.trim();
-    const userMetadata = {
-      name: trimmedName,
-      first_name: trimmedName.split(' ')[0] || 'Organiser',
-      studio: (studio || 'Events Studio').trim(),
-      country_gateway: countryGateway || 'GH',
-      app_role: appRole === 'gate_staff' ? 'gate_staff' : 'organizer',
-    };
+    const gateway = countryGateway || 'GH';
+    const phoneCheck = validateStrictPhoneE164(phone || '', gateway);
+    if (!phoneCheck.ok) {
+      return res.status(400).json({ error: phoneCheck.error });
+    }
+
+    let cleanEmail = '';
+    if (email && email.trim()) {
+      const emailCheck = validateStrictEmail(email);
+      if (!emailCheck.ok) {
+        return res.status(400).json({ error: emailCheck.error });
+      }
+      cleanEmail = emailCheck.normalized;
+    }
+
+    const pwCheck = validateStrictPassword(password || '');
+    if (!pwCheck.ok) {
+      return res.status(400).json({ error: pwCheck.error });
+    }
+
+    if (agreed === false) {
+      return res.status(400).json({
+        error: 'You must agree to the Terms & Conditions and NCA SMS regulations to create an account.',
+      });
+    }
+
+    const trimmedStudio = (studio || `${trimmedName.split(' ')[0]}'s Events`).trim();
+    const resolvedAppRole = appRole === 'gate_staff' ? 'gate_staff' : 'organizer';
 
     try {
       const svc = createServiceSupabaseClient();
-
-      // Route signup verification directly through Resend when RESEND_API_KEY + Service Role are configured
-      if (isResendConfigured() && svc) {
-        let otpCode: string | undefined;
-        let actionLink: string | undefined;
-
-        const genRes = await svc.auth.admin.generateLink({
-          type: 'signup',
-          email: trimmedEmail,
-          password,
-          options: {
-            data: userMetadata,
-          },
+      if (!svc) {
+        return res.status(503).json({
+          error:
+            'Transactional phone verification requires SUPABASE_SERVICE_ROLE_KEY so accounts are only created after verification succeeds.',
         });
+      }
 
-        if (genRes.error) {
-          const msgLower = genRes.error.message.toLowerCase();
-          if (msgLower.includes('already') || msgLower.includes('registered') || msgLower.includes('exists')) {
-            const { data: listData } = await svc.auth.admin.listUsers({ perPage: 200 });
-            const existingUser = listData?.users?.find(
-              (u) => (u.email || '').trim().toLowerCase() === trimmedEmail.toLowerCase()
-            );
-            if (existingUser && !existingUser.email_confirmed_at) {
-              await svc.auth.admin.updateUserById(existingUser.id, {
-                password,
-                user_metadata: userMetadata,
-              });
-              const magicRes = await svc.auth.admin.generateLink({
-                type: 'magiclink',
-                email: trimmedEmail,
-              });
-              if (magicRes.error) {
-                return res.status(400).json({ error: magicRes.error.message });
-              }
-              otpCode = magicRes.data?.properties?.email_otp;
-              actionLink = magicRes.data?.properties?.action_link;
-            } else {
-              return res.status(400).json({
-                error: 'An account with this email already exists. Please sign in instead.',
-              });
-            }
-          } else {
-            return res.status(400).json({ error: genRes.error.message });
-          }
-        } else {
-          otpCode = genRes.data?.properties?.email_otp;
-          actionLink = genRes.data?.properties?.action_link;
-        }
-
-        const emailDelivery = await sendAuthOtpEmail({
-          to: trimmedEmail,
-          code: otpCode,
-          actionLink,
-          purpose: 'signup',
-          name: trimmedName,
+      // Check duplicates strictly BEFORE staging or writing anything to database
+      const existingByPhone = await findSupabaseUserByPhone(svc, phoneCheck.normalized);
+      if (existingByPhone) {
+        return res.status(409).json({
+          error: `An account with phone number ${phoneCheck.normalized} already exists. Please sign in instead.`,
         });
+      }
 
-        if (!emailDelivery.ok) {
-          return res.status(400).json({
-            error: `Resend could not send verification email: ${emailDelivery.error || 'Unknown error'}`,
+      if (cleanEmail) {
+        const existingByEmail = await findSupabaseUserByEmail(svc, cleanEmail);
+        if (existingByEmail) {
+          return res.status(409).json({
+            error: `An account with email ${cleanEmail} already exists. Please sign in instead.`,
           });
         }
-
-        return res.json({
-          requiresOtp: true,
-          email: trimmedEmail,
-          otpType: 'signup',
-          provider: 'resend',
-        });
       }
 
-      const supabase = createPublicSupabaseClient();
-      const { data, error } = await supabase.auth.signUp({
-        email: trimmedEmail,
-        password,
-        options: {
-          data: userMetadata,
-        },
+      // Stage registration in volatile memory ONLY (zero writes to Supabase auth.users or public.profiles yet)
+      stagePendingSignup({
+        phone: phoneCheck.normalized,
+        email: cleanEmail,
+        password: password!,
+        name: trimmedName,
+        studio: trimmedStudio,
+        countryGateway: gateway,
+        appRole: resolvedAppRole,
       });
-      if (error) {
-        const formatted = formatSupabaseEmailError(error.message, Boolean(svc));
-        return res.status(formatted.status).json({ error: formatted.error });
-      }
-      if (data.session && data.user) {
-        const userClient = createUserSupabaseClient(data.session.access_token);
-        const profile = await ensureProfileRow(userClient, data.user);
-        return res.json({
-          requiresOtp: false,
-          session: {
-            accessToken: data.session.access_token,
-            refreshToken: data.session.refresh_token,
-            expiresAt: data.session.expires_at,
-          },
-          profile,
+
+      const delivery = await dispatchPhoneVerificationChallenge({
+        phone: phoneCheck.normalized,
+        email: cleanEmail || undefined,
+        purpose: 'signup',
+        name: trimmedName,
+      });
+
+      if (!delivery.ok) {
+        // Roll back staged state cleanly; nothing was ever written to the database
+        clearPendingSignup(phoneCheck.normalized);
+        return res.status(400).json({
+          error: delivery.error || 'Could not dispatch phone verification code. Account was not created.',
         });
       }
+
       return res.json({
         requiresOtp: true,
-        email: trimmedEmail,
-        otpType: 'signup',
+        phone: phoneCheck.normalized,
+        email: cleanEmail || undefined,
+        otpType: 'sms',
+        provider: delivery.provider,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Sign-up failed.';
+      clearPendingSignup(phoneCheck.normalized);
+      const message = err instanceof Error ? err.message : 'Sign-up failed. Account was not created.';
       return res.status(500).json({ error: message });
     }
   });
 
   app.post('/api/auth/verify-otp', requireSupabaseConfiguredMiddleware, async (req, res) => {
-    const { email, token, otpType } = req.body as {
+    const { email, phone, token, otpType, countryGateway } = req.body as {
       email?: string;
+      phone?: string;
       token?: string;
-      otpType?: 'signup' | 'email' | 'recovery';
+      otpType?: 'signup' | 'email' | 'recovery' | 'sms';
+      countryGateway?: string;
     };
-    if (!email || !token) {
-      return res.status(400).json({ error: 'Email and 6-digit verification code are required.' });
+    const cleanToken = (token || '').trim();
+    if ((!email && !phone) || !cleanToken) {
+      return res.status(400).json({ error: 'Phone number (or email) and 6-digit verification code are required.' });
     }
+
     try {
+      const svc = createServiceSupabaseClient();
+
+      if (phone?.trim() || otpType === 'sms') {
+        const phoneCheck = validateStrictPhoneE164(phone || '', countryGateway || 'GH');
+        if (!phoneCheck.ok) {
+          return res.status(400).json({ error: phoneCheck.error });
+        }
+        const normalizedPhone = phoneCheck.normalized;
+        const otpCheck = verifyPhoneOtp(normalizedPhone, cleanToken);
+        if (!otpCheck.ok) {
+          return res.status(401).json({ error: otpCheck.error });
+        }
+        if (!svc) {
+          return res.status(503).json({
+            error: 'Phone OTP session verification requires SUPABASE_SERVICE_ROLE_KEY.',
+          });
+        }
+
+        const pending = getPendingSignup(normalizedPhone);
+        const publicClient = createPublicSupabaseClient();
+
+        if (pending) {
+          // Re-verify uniqueness right before atomic commit
+          const dupPhone = await findSupabaseUserByPhone(svc, pending.phone);
+          if (dupPhone) {
+            consumePendingSignup(normalizedPhone);
+            return res.status(409).json({
+              error: `An account with phone number ${pending.phone} already exists. Please sign in instead.`,
+            });
+          }
+          if (pending.email) {
+            const dupEmail = await findSupabaseUserByEmail(svc, pending.email);
+            if (dupEmail) {
+              consumePendingSignup(normalizedPhone);
+              return res.status(409).json({
+                error: `An account with email ${pending.email} already exists. Please sign in instead.`,
+              });
+            }
+          }
+
+          const internalEmail = pending.email || buildSyntheticPhoneEmail(pending.phone);
+          const creator = getCreatorCredentials();
+          const finalRole: AppRole =
+            (pending.email && pending.email.toLowerCase() === creator.email) ||
+            (creator.phone && pending.phone === creator.phone)
+              ? 'creator'
+              : pending.appRole;
+
+          const { data: createdRes, error: createErr } = await svc.auth.admin.createUser({
+            email: internalEmail,
+            phone: pending.phone,
+            password: pending.password,
+            email_confirm: true,
+            phone_confirm: true,
+            user_metadata: {
+              name: pending.name,
+              first_name: pending.name.split(' ')[0] || 'Organiser',
+              studio: pending.studio,
+              country_gateway: pending.countryGateway,
+              app_role: finalRole,
+              phone: pending.phone,
+              phone_verified: true,
+            },
+          });
+
+          if (createErr || !createdRes?.user) {
+            return res.status(400).json({
+              error: createErr?.message || 'Could not create account after phone verification.',
+            });
+          }
+
+          const createdUser = createdRes.user;
+          try {
+            const profile = await ensureProfileRow(svc, createdUser);
+
+            const linkRes = await svc.auth.admin.generateLink({
+              type: 'magiclink',
+              email: internalEmail,
+            });
+            const magicOtp = linkRes.data?.properties?.email_otp;
+            if (linkRes.error || !magicOtp) {
+              throw new Error(linkRes.error?.message || 'Could not mint authenticated session.');
+            }
+
+            const sessionRes = await publicClient.auth.verifyOtp({
+              email: internalEmail,
+              token: magicOtp,
+              type: 'magiclink',
+            });
+            if (sessionRes.error || !sessionRes.data.session) {
+              throw new Error(sessionRes.error?.message || 'Could not start authenticated session.');
+            }
+
+            consumePendingSignup(normalizedPhone);
+            return res.json({
+              session: {
+                accessToken: sessionRes.data.session.access_token,
+                refreshToken: sessionRes.data.session.refresh_token,
+                expiresAt: sessionRes.data.session.expires_at,
+              },
+              profile: {
+                ...profile,
+                phone: pending.phone,
+                phoneVerified: true,
+              },
+            });
+          } catch (commitErr) {
+            // Atomic rollback: remove user and profile so no partial/broken data persists on error
+            try {
+              await svc.from('profiles').delete().eq('id', createdUser.id);
+            } catch {
+              // Best effort cleanup
+            }
+            try {
+              await svc.auth.admin.deleteUser(createdUser.id);
+            } catch {
+              // Best effort cleanup
+            }
+            const errMsg =
+              commitErr instanceof Error
+                ? commitErr.message
+                : 'Account provisioning failed and was cleanly rolled back.';
+            return res.status(400).json({ error: errMsg });
+          }
+        }
+
+        // Existing user verifying SMS OTP for sign-in, password recovery, or phone authorisation
+        const existingUser = await findSupabaseUserByPhone(svc, normalizedPhone);
+        if (!existingUser || !existingUser.email) {
+          return res.status(404).json({
+            error: `No account registered with ${normalizedPhone}.`,
+          });
+        }
+
+        await svc.auth.admin.updateUserById(existingUser.id, {
+          phone: normalizedPhone,
+          phone_confirm: true,
+          user_metadata: {
+            ...(existingUser.user_metadata || {}),
+            phone: normalizedPhone,
+            phone_verified: true,
+          },
+        });
+        try {
+          await svc
+            .from('profiles')
+            .update({ phone: normalizedPhone, phone_verified: true })
+            .eq('id', existingUser.id);
+        } catch {
+          // Ignore if remote profiles schema doesn't have phone columns yet
+        }
+
+        const linkRes = await svc.auth.admin.generateLink({
+          type: 'magiclink',
+          email: existingUser.email,
+        });
+        const magicOtp = linkRes.data?.properties?.email_otp;
+        if (linkRes.error || !magicOtp) {
+          return res.status(400).json({
+            error: linkRes.error?.message || 'Could not start verified session.',
+          });
+        }
+        const sessionRes = await publicClient.auth.verifyOtp({
+          email: existingUser.email,
+          token: magicOtp,
+          type: 'magiclink',
+        });
+        if (sessionRes.error || !sessionRes.data.session || !sessionRes.data.user) {
+          return res.status(401).json({
+            error: sessionRes.error?.message || 'Unable to verify phone session.',
+          });
+        }
+
+        const userClient = createUserSupabaseClient(sessionRes.data.session.access_token);
+        const profile = await ensureProfileRow(userClient, sessionRes.data.user);
+        return res.json({
+          session: {
+            accessToken: sessionRes.data.session.access_token,
+            refreshToken: sessionRes.data.session.refresh_token,
+            expiresAt: sessionRes.data.session.expires_at,
+          },
+          profile: {
+            ...profile,
+            phone: normalizedPhone,
+            phoneVerified: true,
+          },
+        });
+      }
+
+      // Email OTP verification path
       const supabase = createPublicSupabaseClient();
+      const emailTarget = (email || '').trim();
       const candidateTypes: Array<'signup' | 'email' | 'magiclink' | 'recovery'> = Array.from(
         new Set([
-          otpType || 'signup',
+          otpType === 'recovery' ? 'recovery' : otpType === 'email' ? 'email' : 'signup',
           'email',
           'magiclink',
           'signup',
@@ -734,16 +1020,16 @@ async function createAppServer() {
       );
 
       let result = await supabase.auth.verifyOtp({
-        email: email.trim(),
-        token: token.trim(),
+        email: emailTarget,
+        token: cleanToken,
         type: candidateTypes[0],
       });
 
       for (const nextType of candidateTypes.slice(1)) {
         if (!result.error && result.data.session && result.data.user) break;
         result = await supabase.auth.verifyOtp({
-          email: email.trim(),
-          token: token.trim(),
+          email: emailTarget,
+          token: cleanToken,
           type: nextType,
         });
       }
@@ -771,13 +1057,56 @@ async function createAppServer() {
   });
 
   app.post('/api/auth/send-otp', requireSupabaseConfiguredMiddleware, async (req, res) => {
-    const { email } = req.body as { email?: string };
-    if (!email?.trim()) {
-      return res.status(400).json({ error: 'Email address is required.' });
+    const { email, phone, identifier, countryGateway } = req.body as {
+      email?: string;
+      phone?: string;
+      identifier?: string;
+      countryGateway?: string;
+    };
+    const target = (phone || identifier || email || '').trim();
+    if (!target) {
+      return res.status(400).json({ error: 'Mobile phone number or email address is required.' });
     }
-    const trimmedEmail = email.trim();
+
     try {
       const svc = createServiceSupabaseClient();
+
+      if (!target.includes('@')) {
+        const phoneCheck = validateStrictPhoneE164(target, countryGateway || 'GH');
+        if (!phoneCheck.ok) {
+          return res.status(400).json({ error: phoneCheck.error });
+        }
+        if (!svc) {
+          return res.status(503).json({ error: 'Phone login requires SUPABASE_SERVICE_ROLE_KEY.' });
+        }
+        const existingUser = await findSupabaseUserByPhone(svc, phoneCheck.normalized);
+        if (!existingUser) {
+          return res.status(404).json({
+            error: `No registered account found for ${phoneCheck.normalized}. Create a free account first.`,
+          });
+        }
+        const displayEmail = isSyntheticPhoneEmail(existingUser.email) ? undefined : existingUser.email;
+        const delivery = await dispatchPhoneVerificationChallenge({
+          phone: phoneCheck.normalized,
+          email: displayEmail,
+          purpose: 'login',
+          name:
+            typeof existingUser.user_metadata?.name === 'string'
+              ? existingUser.user_metadata.name
+              : undefined,
+        });
+        if (!delivery.ok) {
+          return res.status(400).json({ error: delivery.error });
+        }
+        return res.json({
+          ok: true,
+          phone: phoneCheck.normalized,
+          email: displayEmail,
+          provider: delivery.provider,
+        });
+      }
+
+      const trimmedEmail = target;
       if (isResendConfigured() && svc) {
         const genRes = await svc.auth.admin.generateLink({
           type: 'magiclink',
@@ -804,7 +1133,7 @@ async function createAppServer() {
       const { error } = await supabase.auth.signInWithOtp({
         email: trimmedEmail,
         options: {
-          shouldCreateUser: true,
+          shouldCreateUser: false,
         },
       });
       if (error) {
@@ -819,16 +1148,53 @@ async function createAppServer() {
   });
 
   app.post('/api/auth/resend-otp', requireSupabaseConfiguredMiddleware, async (req, res) => {
-    const { email, otpType } = req.body as {
+    const { email, phone, otpType, countryGateway } = req.body as {
       email?: string;
-      otpType?: 'signup' | 'email' | 'recovery';
+      phone?: string;
+      otpType?: 'signup' | 'email' | 'recovery' | 'sms';
+      countryGateway?: string;
     };
-    if (!email?.trim()) {
-      return res.status(400).json({ error: 'Email is required.' });
-    }
-    const trimmedEmail = email.trim();
+
     try {
       const svc = createServiceSupabaseClient();
+
+      if (phone?.trim()) {
+        const phoneCheck = validateStrictPhoneE164(phone.trim(), countryGateway || 'GH');
+        if (!phoneCheck.ok) {
+          return res.status(400).json({ error: phoneCheck.error });
+        }
+        const normalizedPhone = phoneCheck.normalized;
+        const pending = getPendingSignup(normalizedPhone);
+        const existingUser = !pending && svc ? await findSupabaseUserByPhone(svc, normalizedPhone) : null;
+        if (!pending && !existingUser) {
+          return res.status(404).json({
+            error: 'No active phone verification session found. Submit sign-up or sign-in again.',
+          });
+        }
+        const targetEmail =
+          pending?.email ||
+          (existingUser && !isSyntheticPhoneEmail(existingUser.email) ? existingUser.email : undefined) ||
+          (email?.trim() || undefined);
+        const delivery = await dispatchPhoneVerificationChallenge({
+          phone: normalizedPhone,
+          email: targetEmail,
+          purpose: otpType === 'recovery' ? 'recovery' : pending ? 'signup' : 'login',
+          name:
+            pending?.name ||
+            (typeof existingUser?.user_metadata?.name === 'string'
+              ? existingUser.user_metadata.name
+              : undefined),
+        });
+        if (!delivery.ok) {
+          return res.status(400).json({ error: delivery.error });
+        }
+        return res.json({ ok: true, phone: normalizedPhone, provider: delivery.provider });
+      }
+
+      if (!email?.trim()) {
+        return res.status(400).json({ error: 'Phone number or email is required.' });
+      }
+      const trimmedEmail = email.trim();
       if (isResendConfigured() && svc) {
         const linkType = otpType === 'recovery' ? 'recovery' : 'magiclink';
         const genRes = await svc.auth.admin.generateLink({
@@ -872,19 +1238,61 @@ async function createAppServer() {
   });
 
   app.post('/api/auth/reset-password', requireSupabaseConfiguredMiddleware, async (req, res) => {
-    const { email, redirectTo } = req.body as { email?: string; redirectTo?: string };
-    if (!email?.trim()) {
-      return res.status(400).json({ error: 'Email address is required.' });
-    }
-    const trimmedEmail = email.trim();
+    const { email, phone, redirectTo, countryGateway } = req.body as {
+      email?: string;
+      phone?: string;
+      redirectTo?: string;
+      countryGateway?: string;
+    };
+
     try {
       const svc = createServiceSupabaseClient();
+
+      if (phone?.trim()) {
+        const phoneCheck = validateStrictPhoneE164(phone.trim(), countryGateway || 'GH');
+        if (!phoneCheck.ok) {
+          return res.status(400).json({ error: phoneCheck.error });
+        }
+        if (!svc) {
+          return res.status(503).json({ error: 'Phone recovery requires SUPABASE_SERVICE_ROLE_KEY.' });
+        }
+        const existingUser = await findSupabaseUserByPhone(svc, phoneCheck.normalized);
+        if (!existingUser) {
+          return res.status(404).json({
+            error: `No account registered with ${phoneCheck.normalized}.`,
+          });
+        }
+        const displayEmail = isSyntheticPhoneEmail(existingUser.email) ? undefined : existingUser.email;
+        const delivery = await dispatchPhoneVerificationChallenge({
+          phone: phoneCheck.normalized,
+          email: displayEmail,
+          purpose: 'recovery',
+          name:
+            typeof existingUser.user_metadata?.name === 'string'
+              ? existingUser.user_metadata.name
+              : undefined,
+        });
+        if (!delivery.ok) {
+          return res.status(400).json({ error: delivery.error });
+        }
+        return res.json({
+          ok: true,
+          phone: phoneCheck.normalized,
+          email: displayEmail,
+          provider: delivery.provider,
+        });
+      }
+
+      if (!email?.trim()) {
+        return res.status(400).json({ error: 'Email address or phone number is required.' });
+      }
+      const trimmedEmail = email.trim();
       if (isResendConfigured() && svc) {
         const genRes = await svc.auth.admin.generateLink({
           type: 'recovery',
           email: trimmedEmail,
           options: {
-            redirectTo: redirectTo || undefined,
+            redirectTo: redirectTo || process.env.APP_URL || 'https://www.eventsbyyou.xyz',
           },
         });
         if (genRes.error) {
@@ -906,7 +1314,7 @@ async function createAppServer() {
 
       const supabase = createPublicSupabaseClient();
       const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
-        redirectTo: redirectTo || undefined,
+        redirectTo: redirectTo || process.env.APP_URL || 'https://www.eventsbyyou.xyz',
       });
       if (error) {
         const formatted = formatSupabaseEmailError(error.message, Boolean(svc));
@@ -997,13 +1405,14 @@ async function createAppServer() {
     }
   });
 
-  app.post('/api/auth/update-password', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.post('/api/auth/update-password', requireSupabaseAuth, requireVerifiedPhoneIfSet, async (req: AuthedRequest, res) => {
     const { password } = req.body as { password?: string };
-    if (!password || password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    const pwCheck = validateStrictPassword(password || '');
+    if (!pwCheck.ok) {
+      return res.status(400).json({ error: pwCheck.error });
     }
     try {
-      const { error } = await req.supabase!.auth.updateUser({ password });
+      const { error } = await req.supabase!.auth.updateUser({ password: password! });
       if (error) {
         return res.status(400).json({ error: error.message });
       }
@@ -1384,7 +1793,18 @@ async function createAppServer() {
       if (next.name !== undefined) updatePayload.name = next.name;
       if (next.firstName !== undefined) updatePayload.first_name = next.firstName;
       if (next.role !== undefined) updatePayload.role = next.role;
-      if (next.email !== undefined) updatePayload.email = next.email;
+      if (next.email !== undefined) {
+        if (next.email.trim()) {
+          const emailCheck = validateStrictEmail(next.email);
+          if (!emailCheck.ok) return res.status(400).json({ error: emailCheck.error });
+          updatePayload.email = emailCheck.normalized;
+        }
+      }
+      if (next.phone !== undefined && next.phone.trim()) {
+        const phoneCheck = validateStrictPhoneE164(next.phone);
+        if (!phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
+        updatePayload.phone = phoneCheck.normalized;
+      }
       if (next.studio !== undefined) updatePayload.studio = next.studio;
       if (next.plan !== undefined) updatePayload.plan = next.plan;
       if (next.smsCredits !== undefined) updatePayload.sms_credits = next.smsCredits;
@@ -1399,12 +1819,24 @@ async function createAppServer() {
       }
       if (next.senderId !== undefined) updatePayload.sender_id = next.senderId;
 
-      const { data, error } = await req
+      let { data, error } = await req
         .supabase!.from('profiles')
         .update(updatePayload)
         .eq('id', req.user!.id)
         .select('*')
         .single();
+
+      if (error && error.message?.toLowerCase().includes('phone')) {
+        const { phone: _dropPhone, ...legacyUpdate } = updatePayload;
+        const retry = await req
+          .supabase!.from('profiles')
+          .update(legacyUpdate)
+          .eq('id', req.user!.id)
+          .select('*')
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
 
       if (error) return res.status(400).json({ error: error.message });
       return res.json({ profile: mapProfileRow(data as Record<string, unknown>, req.user!.email ?? '') });
@@ -2001,6 +2433,28 @@ async function createAppServer() {
   // =========================================================================
   // APPS CREATOR CONSOLE ROUTES (Supabase Single Source of Truth)
   // =========================================================================
+
+  app.get('/api/studio/apps', requireSupabaseAuth, requireCreatorVerification, async (req: AuthedRequest, res) => {
+    try {
+      const { data, error } = await req
+        .supabase!.from('creator_apps')
+        .select('*')
+        .eq('organizer_id', req.user!.id)
+        .order('created_at', { ascending: false });
+      if (error) {
+        if (isMissingTableError(error)) {
+          return res.json({ apps: [] });
+        }
+        return res.status(400).json({ error: error.message });
+      }
+      return res.json({
+        apps: (data ?? []).map((r) => mapCreatorAppRow(r as Record<string, unknown>)),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load creator apps.';
+      return res.status(500).json({ error: message });
+    }
+  });
 
   app.post('/api/studio/apps', requireSupabaseAuth, requireCreatorVerification, async (req: AuthedRequest, res) => {
     const {

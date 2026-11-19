@@ -111,7 +111,7 @@ async function refreshStoredSession(): Promise<StoredAuthSession | null> {
   const current = getStoredSession();
   if (!current?.refreshToken) return null;
   try {
-    const resp = await fetch('/api/auth/refresh', {
+    const resp = await fetch(resolveApiUrl('/api/auth/refresh'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken: current.refreshToken }),
@@ -132,12 +132,20 @@ async function refreshStoredSession(): Promise<StoredAuthSession | null> {
   }
 }
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+
+function resolveApiUrl(url: string): string {
+  if (!API_BASE_URL || /^https?:\/\//i.test(url)) return url;
+  return `${API_BASE_URL}${url.startsWith('/') ? url : `/${url}`}`;
+}
+
 async function request<T>(
   url: string,
   options: RequestInit = {},
   authenticated = false,
   retried = false
 ): Promise<T> {
+  const targetUrl = resolveApiUrl(url);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...((options.headers as Record<string, string>) || {}),
@@ -155,7 +163,7 @@ async function request<T>(
     }
   }
 
-  const resp = await fetch(url, { ...options, headers });
+  const resp = await fetch(targetUrl, { ...options, headers });
 
   if (resp.status === 401 && authenticated && !retried) {
     const refreshed = await refreshStoredSession();
@@ -180,6 +188,11 @@ async function request<T>(
 
   if (!parsed || typeof parsed !== 'object') {
     const contentType = resp.headers.get('content-type') || 'unknown';
+    if (contentType.toLowerCase().includes('text/html')) {
+      throw new Error(
+        `Backend API route ${url} returned HTML instead of JSON (HTTP ${resp.status}). This domain is serving the static frontend without the Express server (node server.ts). Deploy full-stack with "npm run build && npm start" or set VITE_API_BASE_URL.`
+      );
+    }
     throw new Error(
       `Invalid JSON response from ${url} (HTTP ${resp.status}, ${contentType})`
     );
@@ -196,6 +209,7 @@ export const api = {
       supabaseConfigured: boolean;
       serviceRoleConfigured?: boolean;
       resendConfigured?: boolean;
+      arkeselConfigured?: boolean;
       inMemoryFallback?: boolean;
       creatorEmail?: string;
       creatorPasswordConfigured?: boolean;
@@ -207,7 +221,8 @@ export const api = {
         requiresOtp: boolean;
         creatorToken: string;
         email?: string;
-        otpType?: 'signup' | 'email';
+        phone?: string;
+        otpType?: 'signup' | 'email' | 'sms';
         session?: StoredAuthSession;
         profile?: OrganizerProfile;
       }>('/api/auth/creator-login', {
@@ -215,30 +230,36 @@ export const api = {
         body: JSON.stringify({ email, password }),
       }),
 
-    signIn: (email: string, password: string) =>
+    signIn: (identifier: string, password: string, countryGateway = 'GH') =>
       request<{
         requiresOtp: boolean;
         email?: string;
-        otpType?: 'signup' | 'email';
+        phone?: string;
+        otpType?: 'signup' | 'email' | 'sms';
+        provider?: string;
         session?: StoredAuthSession;
         profile?: OrganizerProfile;
       }>('/api/auth/signin', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ identifier, password, countryGateway }),
       }),
 
     signUp: (payload: {
-      email: string;
+      phone: string;
+      email?: string;
       password: string;
       name: string;
       studio: string;
       countryGateway: string;
       appRole?: AppRole;
+      agreed: boolean;
     }) =>
       request<{
         requiresOtp: boolean;
+        phone?: string;
         email?: string;
-        otpType?: 'signup' | 'email';
+        otpType?: 'signup' | 'email' | 'sms';
+        provider?: string;
         session?: StoredAuthSession;
         profile?: OrganizerProfile;
       }>('/api/auth/signup', {
@@ -246,29 +267,56 @@ export const api = {
         body: JSON.stringify(payload),
       }),
 
-    verifyOtp: (email: string, token: string, otpType: 'signup' | 'email' | 'recovery' = 'signup') =>
+    verifyOtp: (payload: {
+      email?: string;
+      phone?: string;
+      token: string;
+      otpType?: 'signup' | 'email' | 'recovery' | 'sms';
+      countryGateway?: string;
+    }) =>
       request<{ session: StoredAuthSession; profile: OrganizerProfile }>('/api/auth/verify-otp', {
         method: 'POST',
-        body: JSON.stringify({ email, token, otpType }),
+        body: JSON.stringify(payload),
       }),
 
-    sendOtp: (email: string) =>
-      request<{ ok: boolean; email: string }>('/api/auth/send-otp', {
+    sendOtp: (payload: {
+      identifier?: string;
+      email?: string;
+      phone?: string;
+      countryGateway?: string;
+    }) =>
+      request<{ ok: boolean; email?: string; phone?: string; provider?: string }>(
+        '/api/auth/send-otp',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        }
+      ),
+
+    resendOtp: (payload: {
+      email?: string;
+      phone?: string;
+      otpType?: 'signup' | 'email' | 'recovery' | 'sms';
+      countryGateway?: string;
+    }) =>
+      request<{ ok: boolean; phone?: string; provider?: string }>('/api/auth/resend-otp', {
         method: 'POST',
-        body: JSON.stringify({ email }),
+        body: JSON.stringify(payload),
       }),
 
-    resendOtp: (email: string, otpType?: 'signup' | 'email' | 'recovery') =>
-      request<{ ok: boolean }>('/api/auth/resend-otp', {
-        method: 'POST',
-        body: JSON.stringify({ email, otpType }),
-      }),
-
-    resetPassword: (email: string, redirectTo?: string) =>
-      request<{ ok: boolean }>('/api/auth/reset-password', {
-        method: 'POST',
-        body: JSON.stringify({ email, redirectTo }),
-      }),
+    resetPassword: (payload: {
+      email?: string;
+      phone?: string;
+      redirectTo?: string;
+      countryGateway?: string;
+    }) =>
+      request<{ ok: boolean; phone?: string; email?: string; provider?: string }>(
+        '/api/auth/reset-password',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        }
+      ),
 
     getOAuthUrl: (provider: 'google' | 'github', redirectTo: string) =>
       request<{ url: string }>(

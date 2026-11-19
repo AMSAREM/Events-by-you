@@ -18,8 +18,10 @@ import { api, saveStoredSession, type StoredAuthSession } from '../lib/api';
 import type { OrganizerProfile } from '../types/events';
 
 interface VerifyOtpScreenProps {
-  email: string;
-  otpType?: 'signup' | 'email' | 'recovery';
+  phone?: string;
+  email?: string;
+  countryGateway?: string;
+  otpType?: 'signup' | 'email' | 'recovery' | 'sms';
   onBackHome: () => void;
   onBackSignIn: () => void;
   onVerified: (session: StoredAuthSession, profile: OrganizerProfile) => void;
@@ -28,8 +30,10 @@ interface VerifyOtpScreenProps {
 }
 
 export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
-  email,
-  otpType = 'signup',
+  phone = '',
+  email = '',
+  countryGateway = 'GH',
+  otpType = 'sms',
   onBackHome,
   onBackSignIn,
   onVerified,
@@ -41,8 +45,10 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
   const [trustDevice, setTrustDevice] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [fallbackNotice, setFallbackNotice] = useState(false);
+  const [resendNotice, setResendNotice] = useState<string | null>(null);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const isPhoneChallenge = Boolean(phone.trim()) || otpType === 'sms';
+  const displayTarget = phone.trim() || email.trim();
 
   useEffect(() => {
     if (secondsLeft <= 0) return;
@@ -83,10 +89,20 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
   const handleResend = async () => {
     if (secondsLeft > 0) return;
     setErrorMsg(null);
+    setResendNotice(null);
     try {
-      await api.auth.resendOtp(email, otpType);
+      const res = await api.auth.resendOtp({
+        phone: phone.trim() || undefined,
+        email: email.trim() || undefined,
+        otpType,
+        countryGateway,
+      });
       setSecondsLeft(42);
-      setFallbackNotice(true);
+      setResendNotice(
+        res.provider === 'resend' && email.trim()
+          ? `A fresh 6-digit verification code was sent to ${email.trim()}.`
+          : `A fresh 6-digit verification code was dispatched to ${displayTarget}.`
+      );
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to resend code.');
     }
@@ -96,7 +112,11 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
     e.preventDefault();
     const code = digits.join('');
     if (code.length < 6) {
-      setErrorMsg('Please enter the 6-digit verification code sent to your email.');
+      setErrorMsg(
+        isPhoneChallenge
+          ? 'Please enter the 6-digit SMS verification code.'
+          : 'Please enter the 6-digit verification code sent to your email.'
+      );
       const firstEmpty = digits.findIndex((d) => !d);
       if (firstEmpty >= 0) inputRefs.current[firstEmpty]?.focus();
       return;
@@ -104,7 +124,13 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
     setSubmitting(true);
     setErrorMsg(null);
     try {
-      const res = await api.auth.verifyOtp(email, code, otpType);
+      const res = await api.auth.verifyOtp({
+        phone: phone.trim() || undefined,
+        email: email.trim() || undefined,
+        token: code,
+        otpType,
+        countryGateway,
+      });
       saveStoredSession(res.session);
       onVerified(res.session, res.profile);
     } catch (err) {
@@ -196,13 +222,30 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                 </div>
 
                 <h1 className="font-display text-[32px] sm:text-[36px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.03em] mb-3">
-                  Verify your identity
+                  {isPhoneChallenge ? 'Verify your phone number' : 'Verify your identity'}
                 </h1>
                 <p className="text-sm text-[#71717A] mb-6 leading-relaxed">
-                  Enter the 6-digit security code sent via Arkesel direct carrier SMS to your
-                  verified mobile number ending in{' '}
-                  <span className="font-semibold text-[#0B0B0B]">••• ••84</span> (+233) for{' '}
-                  <span className="font-semibold text-[#0B0B0B]">{email}</span>.
+                  {isPhoneChallenge ? (
+                    <>
+                      Enter the 6-digit security code dispatched to{' '}
+                      <span className="font-semibold text-[#0B0B0B] tabular-nums">
+                        {phone.trim() || displayTarget}
+                      </span>
+                      {email.trim() ? (
+                        <>
+                          {' '}
+                          (backup copy to{' '}
+                          <span className="font-semibold text-[#0B0B0B]">{email.trim()}</span>)
+                        </>
+                      ) : null}
+                      . Your account is committed once verification succeeds.
+                    </>
+                  ) : (
+                    <>
+                      Enter the 6-digit security code sent to{' '}
+                      <span className="font-semibold text-[#0B0B0B]">{email.trim()}</span>.
+                    </>
+                  )}
                 </p>
 
                 {/* Delivery Metric Card */}
@@ -213,10 +256,14 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                     </div>
                     <div className="truncate">
                       <p className="text-xs font-semibold text-[#0B0B0B] truncate tabular-nums">
-                        SMS Code dispatched to +233 24 ••• ••84
+                        {isPhoneChallenge
+                          ? `SMS OTP dispatched to ${phone.trim() || displayTarget}`
+                          : `Email OTP dispatched to ${email.trim()}`}
                       </p>
                       <p className="text-[11px] text-[#71717A] tabular-nums">
-                        Routed via MTN Ghana Core · Delivered in 1.4s
+                        {isPhoneChallenge
+                          ? 'Routed via Arkesel Direct Carrier Gateway · 10-min expiry'
+                          : 'Routed via Resend Transactional API · 10-min expiry'}
                       </p>
                     </div>
                   </div>
@@ -233,7 +280,11 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                       Authentication Code
                     </label>
                     <span className="text-[11px] font-medium text-[#71717A]">
-                      Check your email inbox (Resend)
+                      {isPhoneChallenge
+                        ? email.trim()
+                          ? 'Check your SMS messages or email inbox'
+                          : 'Check your SMS messages'
+                        : 'Check your email inbox (Resend)'}
                     </span>
                   </div>
                   <div className="grid grid-cols-6 gap-2 sm:gap-3.5">
@@ -260,11 +311,13 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                   )}
                 </div>
 
-                {/* Countdown Resend & Alternate Flow */}
+                {/* Countdown Resend */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-8 text-[11px]">
                   <div className="flex items-center gap-2 text-[#71717A]">
                     <Clock className="w-4 h-4" />
-                    <span className="text-[13px]">Didn&apos;t receive SMS?</span>
+                    <span className="text-[13px]">
+                      {isPhoneChallenge ? "Didn't receive SMS?" : "Didn't receive code?"}
+                    </span>
                     <button
                       type="button"
                       onClick={handleResend}
@@ -273,22 +326,25 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                         secondsLeft === 0 ? 'underline cursor-pointer' : 'cursor-default'
                       }`}
                     >
-                      {secondsLeft > 0 ? `Resend in ${formattedTime}` : 'Resend SMS now'}
+                      {secondsLeft > 0
+                        ? `Resend in ${formattedTime}`
+                        : isPhoneChallenge
+                          ? 'Resend SMS now'
+                          : 'Resend code now'}
                     </button>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setFallbackNotice((p) => !p)}
+                    onClick={onBackSignIn}
                     className="text-xs font-semibold text-[#0B0B0B] hover:opacity-70 transition-opacity text-left underline underline-offset-4"
                   >
-                    Use Authenticator App / Email fallback
+                    Use a different phone or email
                   </button>
                 </div>
 
-                {fallbackNotice && (
+                {resendNotice && (
                   <div className="mb-6 p-3.5 rounded-2xl bg-[#F5F5F7] text-xs text-[#1A1C1D]">
-                    Backup verification code dispatched via Resend to{' '}
-                    <span className="font-semibold">{email}</span>.
+                    {resendNotice}
                   </div>
                 )}
 

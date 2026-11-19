@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
+import { normalizePhoneE164 } from '../src/data/initialData.ts';
 import type { AppRole } from '../src/types/events.ts';
 import { platformRuntime, type MemoryUser } from './memoryStore.ts';
 
@@ -10,6 +11,8 @@ export interface AuthedRequest extends Request {
   supabase?: SupabaseClient;
   memoryUser?: MemoryUser;
   appRole?: AppRole;
+  userPhone?: string;
+  phoneVerified?: boolean;
 }
 
 export function getBearerToken(req: Request): string | null {
@@ -22,9 +25,12 @@ export function getBearerToken(req: Request): string | null {
 export function getCreatorCredentials() {
   const email = (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase();
   const password = (process.env.CREATOR_PASSWORD || '').trim();
+  const rawPhone = (process.env.CREATOR_PHONE || '').trim();
+  const phone = rawPhone ? normalizePhoneE164(rawPhone) : '';
   return {
     email,
     password,
+    phone,
     configured: Boolean(email && password),
   };
 }
@@ -41,13 +47,34 @@ export function resolveUserRole(req: AuthedRequest): AppRole {
   if (email && email === creator.email) {
     return 'creator';
   }
+  if (creator.phone && req.userPhone && normalizePhoneE164(req.userPhone) === creator.phone) {
+    return 'creator';
+  }
   const metaRole = req.user?.user_metadata?.app_role;
   if (metaRole === 'gate_staff') return 'gate_staff';
   return 'organizer';
 }
 
+export function requireVerifiedPhoneIfSet(req: AuthedRequest, res: Response, next: NextFunction) {
+  if (req.userPhone && req.phoneVerified === false) {
+    return res.status(403).json({
+      error: `Phone verification required for ${req.userPhone}. Verify your 6-digit SMS code to authorise workspace actions.`,
+      code: 'PHONE_VERIFICATION_REQUIRED',
+      phone: req.userPhone,
+    });
+  }
+  return next();
+}
+
 export function requireRole(...allowedRoles: AppRole[]) {
   return (req: AuthedRequest, res: Response, next: NextFunction) => {
+    if (req.userPhone && req.phoneVerified === false) {
+      return res.status(403).json({
+        error: `Phone verification required for ${req.userPhone}. Verify your 6-digit SMS code to authorise this action.`,
+        code: 'PHONE_VERIFICATION_REQUIRED',
+        phone: req.userPhone,
+      });
+    }
     const role = resolveUserRole(req);
     if (!allowedRoles.includes(role)) {
       return res.status(403).json({
@@ -109,6 +136,13 @@ export function verifyCreatorSessionToken(
 }
 
 export function requireCreatorVerification(req: AuthedRequest, res: Response, next: NextFunction) {
+  if (req.userPhone && req.phoneVerified === false) {
+    return res.status(403).json({
+      error: `Phone verification required for ${req.userPhone} before accessing Apps Creator Console.`,
+      code: 'PHONE_VERIFICATION_REQUIRED',
+      phone: req.userPhone,
+    });
+  }
   const role = resolveUserRole(req);
   if (role !== 'creator') {
     return res.status(403).json({

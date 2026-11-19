@@ -1,27 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>/</loc>
+    <loc>https://www.eventsbyyou.xyz/</loc>
     <changefreq>daily</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>/signin</loc>
+    <loc>https://www.eventsbyyou.xyz/signin</loc>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>/signup</loc>
+    <loc>https://www.eventsbyyou.xyz/signup</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>/terms</loc>
+    <loc>https://www.eventsbyyou.xyz/terms</loc>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>/privacy</loc>
+    <loc>https://www.eventsbyyou.xyz/privacy</loc>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
