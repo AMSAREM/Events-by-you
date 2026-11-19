@@ -3198,7 +3198,7 @@ async function createAppServer() {
       appType: 'spa',
     });
 
-    app.get(['/e/:slug', '/'], async (req, res, next) => {
+    app.get(['/e/:slug', '/e/:slug/checkin', '/'], async (req, res, next) => {
       const slugOrId =
         req.params.slug ||
         (typeof req.query.event === 'string' ? req.query.event.trim() : '');
@@ -3222,7 +3222,7 @@ async function createAppServer() {
     app.use(express.static(distDir, { index: false }));
     app.get('*', async (req, res) => {
       const indexPath = path.join(distDir, 'index.html');
-      const slugMatch = req.path.match(/^\/e\/([^/]+)$/);
+      const slugMatch = req.path.match(/^\/e\/([^/]+)(?:\/checkin)?$/i);
       const slugOrId =
         (slugMatch ? decodeURIComponent(slugMatch[1]) : '') ||
         (typeof req.query.event === 'string' ? req.query.event.trim() : '');

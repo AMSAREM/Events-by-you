@@ -133,6 +133,7 @@ export function buildEventInvitationUrl(slugOrId: string, tab?: 'checkin' | 'reg
       ? window.location.origin
       : 'https://www.eventsbyyou.xyz';
   const base = `${origin}/e/${clean}`;
+  if (tab === 'checkin') return `${base}/checkin`;
   return tab ? `${base}?tab=${tab}` : base;
 }
 

@@ -63,6 +63,10 @@ function parseInvitationFromLocation(): {
 } {
   if (typeof window === 'undefined') return {};
   const pathname = window.location.pathname;
+  const checkinMatch = pathname.match(/^\/e\/([^/]+)\/checkin\/?$/i);
+  if (checkinMatch && checkinMatch[1]) {
+    return { slugOrId: decodeURIComponent(checkinMatch[1]), focus: 'checkin' };
+  }
   const match = pathname.match(/^\/e\/([^/]+)\/?$/i);
   const params = new URLSearchParams(window.location.search);
   const tab = (params.get('tab') || '').toLowerCase();
@@ -359,9 +363,14 @@ export default function App() {
       setPublicPreviewEventId(targetId);
       setPublicPreviewFocus(focus);
       setRoute('demo-event');
-      const query = focus === 'checkin' ? '?tab=checkin' : focus === 'register' ? '?tab=register' : '';
-      syncBrowserPath(`/e/${encodeURIComponent(slugOrId)}${query}`);
-      if (focus === 'top') {
+      const nextPath =
+        focus === 'checkin'
+          ? `/e/${encodeURIComponent(slugOrId)}/checkin`
+          : focus === 'register'
+            ? `/e/${encodeURIComponent(slugOrId)}?tab=register`
+            : `/e/${encodeURIComponent(slugOrId)}`;
+      syncBrowserPath(nextPath);
+      if (focus === 'top' || focus === 'checkin') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     },
@@ -1502,7 +1511,15 @@ export default function App() {
           onBackHome={navigateHome}
           onSelectEvent={(evt) => {
             setPublicPreviewEventId(evt.id);
-            syncBrowserPath(`/e/${encodeURIComponent(evt.slug || evt.id)}`);
+            const cleanSlug = encodeURIComponent(evt.slug || evt.id);
+            syncBrowserPath(
+              publicPreviewFocus === 'checkin' ? `/e/${cleanSlug}/checkin` : `/e/${cleanSlug}`
+            );
+          }}
+          onFocusModeChange={(mode, evt) => {
+            setPublicPreviewFocus(mode);
+            const cleanSlug = encodeURIComponent(evt.slug || evt.id);
+            syncBrowserPath(mode === 'checkin' ? `/e/${cleanSlug}/checkin` : `/e/${cleanSlug}`);
           }}
           onOpenStudio={() =>
             requireSignedIn({

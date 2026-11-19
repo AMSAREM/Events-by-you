@@ -52,6 +52,7 @@ interface PublicEventScreenProps {
   onOpenStudio: () => void;
   onNavigateSignUp?: () => void;
   onCreateEvent?: () => void;
+  onFocusModeChange?: (mode: 'top' | 'checkin', event: EventItem) => void;
   onRegisterAttendee: (eventId: string, attendee: Attendee) => Promise<Attendee | void> | void;
   onOpenDisposableCamera?: (eventId: string, guestName?: string) => void;
   onOpenLegal?: (doc: 'terms' | 'privacy') => void;
@@ -133,6 +134,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   onBackHome,
   onSelectEvent,
   onOpenStudio,
+  onFocusModeChange,
   onRegisterAttendee,
   onOpenDisposableCamera,
   onOpenLegal,
@@ -158,12 +160,15 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const selectedEvent =
     events.find((e) => e.id === selectedEventId) ?? activeEvents[0] ?? events[0];
 
-  const [showCheckinModal, setShowCheckinModal] = useState(initialFocus === 'checkin');
+  const [standaloneCheckin, setStandaloneCheckin] = useState(initialFocus === 'checkin');
+  const [showCheckinModal, setShowCheckinModal] = useState(false);
 
   useEffect(() => {
     if (initialFocus === 'checkin') {
-      setShowCheckinModal(true);
+      setStandaloneCheckin(true);
+      setShowCheckinModal(false);
     } else if (initialFocus === 'register' && selectedEvent) {
+      setStandaloneCheckin(false);
       const timer = window.setTimeout(() => {
         const el = document.getElementById('register-section');
         if (el) {
@@ -171,6 +176,8 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
         }
       }, 60);
       return () => window.clearTimeout(timer);
+    } else if (initialFocus === 'top') {
+      setStandaloneCheckin(false);
     }
   }, [initialFocus, selectedEvent]);
 
@@ -202,10 +209,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const [issuedPass, setIssuedPass] = useState<Attendee | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [shareToast, setShareToast] = useState(false);
+  const [shareToast, setShareToast] = useState<string | null>(null);
   const [walletSaved, setWalletSaved] = useState(false);
   const [showOgPreview, setShowOgPreview] = useState(false);
   const [heroFailed, setHeroFailed] = useState(false);
+  const [checkinSubMode, setCheckinSubMode] = useState<'register' | 'lookup'>('register');
+  const [lookupQuery, setLookupQuery] = useState('');
+  const [lookupError, setLookupError] = useState<string | null>(null);
 
   useEffect(() => {
     setHeroFailed(false);
@@ -216,6 +226,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     setGiftMessage('');
     setCustomResponses({});
     setDuplicateError(null);
+    setLookupError(null);
   }, [selectedEvent?.id, selectedEvent?.flyerUrl]);
 
   const normalizedPhone = useMemo(() => {
@@ -245,12 +256,82 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     [selectedEvent?.slug, selectedEvent?.id]
   );
 
-  const handleShare = () => {
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(invitationUrl).catch(() => {});
+  const switchScreenMode = (mode: 'top' | 'checkin') => {
+    setStandaloneCheckin(mode === 'checkin');
+    if (selectedEvent) {
+      onFocusModeChange?.(mode, selectedEvent);
     }
-    setShareToast(true);
-    setTimeout(() => setShareToast(false), 2600);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleShare = () => {
+    const targetUrl = standaloneCheckin ? checkinKioskUrl : invitationUrl;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(targetUrl).catch(() => {});
+    }
+    setShareToast(
+      standaloneCheckin
+        ? `Check-in link copied: /e/${selectedEvent?.slug}/checkin`
+        : `Invitation link copied: /e/${selectedEvent?.slug}`
+    );
+    setTimeout(() => setShareToast(null), 2600);
+  };
+
+  const handleShareCheckinUrl = async () => {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(checkinKioskUrl).catch(() => {});
+    }
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function' && selectedEvent) {
+      try {
+        await navigator.share({
+          title: `${selectedEvent.title} — Event Check-In`,
+          text: `Check in for ${selectedEvent.title} (${selectedEvent.date} · ${selectedEvent.venue})`,
+          url: checkinKioskUrl,
+        });
+      } catch {
+        // Ignore user-cancelled share dialog
+      }
+    }
+    setShareToast(`Standalone Check-In URL copied: /e/${selectedEvent?.slug}/checkin`);
+    setTimeout(() => setShareToast(null), 2600);
+  };
+
+  const handleLookupExistingPass = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEvent) return;
+    const raw = lookupQuery.trim();
+    if (!raw) {
+      setLookupError('Enter your pass code (e.g. #TSL-2026-8801), phone number, or email.');
+      return;
+    }
+    const cleanLower = raw.toLowerCase();
+    const cleanCode = cleanLower.replace(/^#/, '');
+    const digitsOnly = raw.replace(/\D/g, '');
+    const normalizedLookupPhone = digitsOnly.length >= 9 ? normalizePhoneE164(raw) : '';
+
+    const match = attendees.find((att) => {
+      if (att.eventId !== selectedEvent.id) return false;
+      const attCode = att.ticketCode.toLowerCase().replace(/^#/, '');
+      const attPhone = att.phone.replace(/\s+/g, '');
+      const attDigits = att.phone.replace(/\D/g, '');
+      return (
+        attCode === cleanCode ||
+        att.email.toLowerCase() === cleanLower ||
+        (normalizedLookupPhone && attPhone === normalizedLookupPhone) ||
+        (digitsOnly.length >= 9 && attDigits.endsWith(digitsOnly.slice(-9)))
+      );
+    });
+
+    if (!match) {
+      setLookupError(
+        `No registered pass found for "${raw}". Use New Guest Check-In to validate your circle and generate a QR pass.`
+      );
+      return;
+    }
+
+    setLookupError(null);
+    setIssuedPass(match);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleDownloadIcs = () => {
@@ -477,6 +558,581 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     .slice(0, 2)
     .toUpperCase();
 
+  const registerSectionCard = (
+    <section
+      id="register-section"
+      className="scroll-mt-24 bg-white rounded-[32px] p-6 sm:p-7 shadow-md border border-[#E5E5EA]/70 space-y-5"
+    >
+      {!canCheckInRegister ? (
+        <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2.5 text-center">
+          <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
+            <ShieldCheck className="w-5 h-5" />
+          </div>
+          <h3 className="font-display text-lg font-bold text-[#0B0B0B] tracking-tight">
+            Event Is In Draft Mode
+          </h3>
+          <p className="text-xs text-[#71717A] leading-relaxed max-w-md mx-auto">
+            Publish this event from Creator Studio to open guest validation and QR pass registration.
+          </p>
+        </div>
+      ) : !isQrPassPublished ? (
+        <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2.5 text-center">
+          <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
+            <ShieldCheck className="w-5 h-5" />
+          </div>
+          <h3 className="font-display text-lg font-bold text-[#0B0B0B] tracking-tight">
+            Check-In QR Passes Pending Publication
+          </h3>
+          <p className="text-xs text-[#71717A] leading-relaxed max-w-md mx-auto">
+            Guest registration and QR pass delivery will open once the creator publishes check-in passes for this event.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="inline-flex items-center gap-1.5 bg-[#0B0B0B] text-white text-[11px] font-semibold px-3 py-1 rounded-full">
+                <Bolt className="w-3.5 h-3.5" />
+                <span>
+                  {standaloneCheckin
+                    ? 'Standalone Event Check-In Process'
+                    : 'Guest Validation & Check-In Registration'}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => switchScreenMode(standaloneCheckin ? 'top' : 'checkin')}
+                  className="text-[11px] font-semibold text-[#0B0B0B] bg-[#F5F5F7] hover:bg-[#E8E8EA] px-3 py-1 rounded-full inline-flex items-center gap-1 transition-colors"
+                >
+                  {standaloneCheckin ? (
+                    <>
+                      <ArrowLeft className="w-3 h-3" />
+                      <span>Full Event Page</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Open Standalone Check-In Screen</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </>
+                  )}
+                </button>
+                {checkinSubMode === 'register' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const rand = Math.floor(100 + Math.random() * 899);
+                      setName('Yaw Osei');
+                      setCountryPrefix('+233');
+                      setPhoneInput(`024 778 9${rand}`);
+                      setEmail(`yaw.osei${rand}@eventsbyyou.xyz`);
+                      if (validationConfig.options.length > 0) {
+                        setValidationGroup(validationConfig.options[0]);
+                      }
+                      if (validationConfig.requireInviteCode && validationConfig.inviteCode) {
+                        setInviteCodeInput(validationConfig.inviteCode);
+                      }
+                      setDuplicateError(null);
+                    }}
+                    className="text-[11px] font-semibold text-[#71717A] hover:text-[#0B0B0B] underline underline-offset-2"
+                  >
+                    Fill sample guest
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="pt-1">
+              <h3 className="font-display text-[22px] leading-7 font-bold text-[#0B0B0B] tracking-[-0.02em]">
+                {checkinSubMode === 'lookup'
+                  ? 'Retrieve Your Existing Check-In QR Pass'
+                  : spotsRemaining > 0
+                    ? 'Validate & Get QR Check-In Pass'
+                    : 'Join Priority Waitlist'}
+              </h3>
+              <p className="text-[13px] text-[#71717A] mt-0.5">
+                {checkinSubMode === 'lookup'
+                  ? 'Already registered? Enter your ticket code, mobile number, or email to pull up your QR pass immediately.'
+                  : 'Select your guest circle, submit event details, and receive your scannable QR gate pass immediately.'}
+              </p>
+            </div>
+
+            {/* Standalone Process Tabs: New Guest Check-In vs Retrieve Existing Pass */}
+            <div className="grid grid-cols-2 gap-1.5 p-1 bg-[#F5F5F7] rounded-2xl border border-[#E5E5EA]">
+              <button
+                type="button"
+                onClick={() => {
+                  setCheckinSubMode('register');
+                  setLookupError(null);
+                }}
+                className={`py-2 px-3 rounded-xl text-xs font-semibold transition-all ${
+                  checkinSubMode === 'register'
+                    ? 'bg-[#0B0B0B] text-white shadow-sm'
+                    : 'text-[#71717A] hover:text-[#0B0B0B]'
+                }`}
+              >
+                New Guest Check-In
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCheckinSubMode('lookup');
+                  setDuplicateError(null);
+                }}
+                className={`py-2 px-3 rounded-xl text-xs font-semibold transition-all ${
+                  checkinSubMode === 'lookup'
+                    ? 'bg-[#0B0B0B] text-white shadow-sm'
+                    : 'text-[#71717A] hover:text-[#0B0B0B]'
+                }`}
+              >
+                Find My Existing QR Pass
+              </button>
+            </div>
+          </div>
+
+          {checkinSubMode === 'lookup' ? (
+            <form onSubmit={handleLookupExistingPass} className="space-y-4">
+              {lookupError && (
+                <div className="p-3.5 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 flex items-center gap-2.5 text-xs font-medium text-[#0B0B0B]">
+                  <AlertCircle className="w-4 h-4 text-[#EF4444] shrink-0" />
+                  <span>{lookupError}</span>
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="lookup-pass-input"
+                  className="block text-xs font-semibold text-[#0B0B0B]"
+                >
+                  Pass Code, Mobile Number, or Email *
+                </label>
+                <div className="relative">
+                  <input
+                    id="lookup-pass-input"
+                    type="text"
+                    required
+                    value={lookupQuery}
+                    onChange={(e) => setLookupQuery(e.target.value)}
+                    placeholder="e.g. #TSL-2026-8801 or +233 24 123 4567"
+                    className="w-full h-12 px-4 pr-10 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm font-mono placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
+                  />
+                  <QrCode className="w-4 h-4 text-[#71717A] absolute right-4 top-4 pointer-events-none" />
+                </div>
+              </div>
+              <button
+                type="submit"
+                className="w-full h-13 bg-[#0B0B0B] hover:opacity-90 text-white text-sm font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
+              >
+                <QrCode className="w-4 h-4" />
+                <span>Open My Check-In QR Pass</span>
+              </button>
+            </form>
+          ) : (
+            <>
+              {duplicateError && (
+                <div className="p-3.5 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 flex items-center gap-2.5 text-xs font-medium text-[#0B0B0B]">
+                  <AlertCircle className="w-4 h-4 text-[#EF4444] shrink-0" />
+                  <span>{duplicateError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleSubmit} className="space-y-5">
+                {/* STEP 1: EVENT VALIDATION FORM */}
+                {validationConfig.enabled && validationConfig.options.length > 0 && (
+                  <div className="p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <ShieldCheck className="w-4 h-4 text-[#0B0B0B]" />
+                        <span className="text-xs font-bold text-[#0B0B0B]">
+                          {validationConfig.label} *
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-[#71717A]">
+                        {selectedEvent.category} Validation
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {validationConfig.options.map((opt) => {
+                        const active = validationGroup === opt;
+                        return (
+                          <button
+                            key={opt}
+                            type="button"
+                            onClick={() => {
+                              setValidationGroup(opt);
+                              if (!giftSide) setGiftSide(opt);
+                              setDuplicateError(null);
+                            }}
+                            className={`px-3 py-2 rounded-xl text-xs font-semibold text-left border transition-all flex items-center justify-between gap-1.5 ${
+                              active
+                                ? 'bg-[#0B0B0B] text-white border-[#0B0B0B] shadow-sm'
+                                : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                            }`}
+                          >
+                            <span className="truncate">{opt}</span>
+                            {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {validationConfig.requireInviteCode && (
+                      <div className="pt-1 space-y-1">
+                        <label className="text-[11px] font-semibold text-[#0B0B0B] flex items-center gap-1">
+                          <Lock className="w-3 h-3" />
+                          Private Invitation Passcode Required
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={inviteCodeInput}
+                          onChange={(e) => setInviteCodeInput(e.target.value)}
+                          placeholder="Enter host invitation code (e.g. ROYAL2026)"
+                          className="w-full h-10 px-4 rounded-full bg-white border border-[#E5E5EA] text-xs font-mono uppercase text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Full Name */}
+                <div className="space-y-1.5">
+                  <label
+                    className="block text-xs font-semibold text-[#0B0B0B]"
+                    htmlFor="checkout-fullName"
+                  >
+                    Full Name *
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="checkout-fullName"
+                      type="text"
+                      required
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="e.g. Ama Serwaa"
+                      className="w-full h-12 px-4 pr-10 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
+                    />
+                    <User className="w-4 h-4 text-[#71717A] absolute right-4 top-4 pointer-events-none" />
+                  </div>
+                </div>
+
+                {/* Phone Number with Country Selector */}
+                <div className="space-y-1.5">
+                  <label
+                    className="block text-xs font-semibold text-[#0B0B0B]"
+                    htmlFor="checkout-phone"
+                  >
+                    Phone Number (For SMS Pass) *
+                  </label>
+                  <div className="flex gap-2">
+                    <div className="relative shrink-0">
+                      <select
+                        aria-label="Country dial code"
+                        value={countryPrefix}
+                        onChange={(e) => {
+                          setCountryPrefix(e.target.value);
+                          setDuplicateError(null);
+                        }}
+                        className="h-12 pl-3.5 pr-8 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-xs font-semibold appearance-none focus:outline-none focus:ring-1 focus:ring-[#0B0B0B] cursor-pointer"
+                      >
+                        {COUNTRY_CODES.map((c) => (
+                          <option key={c.code} value={c.code}>
+                            {c.flag} {c.code}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="w-3.5 h-3.5 text-[#71717A] absolute right-2.5 top-4 pointer-events-none" />
+                    </div>
+                    <div className="relative flex-1">
+                      <input
+                        id="checkout-phone"
+                        type="tel"
+                        required
+                        value={phoneInput}
+                        onChange={(e) => {
+                          setPhoneInput(e.target.value);
+                          setDuplicateError(null);
+                        }}
+                        placeholder="024 123 4567"
+                        className="w-full h-12 px-4 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm font-mono placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] px-2">
+                    <span className="text-[#71717A]">
+                      Accepts local format (024XXXXXXX) or E.164
+                    </span>
+                    <span className="font-mono font-semibold text-emerald-700 tabular-nums">
+                      {normalizedPhone || 'Waiting...'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Email Address */}
+                <div className="space-y-1.5">
+                  <label
+                    className="block text-xs font-semibold text-[#0B0B0B]"
+                    htmlFor="checkout-email"
+                  >
+                    Email Address *
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="checkout-email"
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="e.g. ama@eventsbyyou.xyz"
+                      className="w-full h-12 px-4 pr-10 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
+                    />
+                    <Mail className="w-4 h-4 text-[#71717A] absolute right-4 top-4 pointer-events-none" />
+                  </div>
+                </div>
+
+                {/* EVENT-SPECIFIC EXTRA DATA COLLECTION FIELDS */}
+                {(extraDataConfig.customFields?.length ?? 0) > 0 && (
+                  <div className="p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-[#0B0B0B]">
+                        Additional {selectedEvent.category} Details
+                      </span>
+                      <span className="text-[10px] font-mono uppercase text-[#71717A]">
+                        Organizer Form
+                      </span>
+                    </div>
+                    <div className="space-y-3">
+                      {extraDataConfig.customFields.map((field) => {
+                        const val = customResponses[field.id] || '';
+                        return (
+                          <div key={field.id} className="space-y-1">
+                            <label className="block text-xs font-semibold text-[#0B0B0B]">
+                              {field.label}
+                              {field.required ? ' *' : ''}
+                            </label>
+                            {field.type === 'select' && field.options ? (
+                              <select
+                                required={field.required}
+                                value={val}
+                                onChange={(e) =>
+                                  setCustomResponses((prev) => ({
+                                    ...prev,
+                                    [field.id]: e.target.value,
+                                  }))
+                                }
+                                className="w-full h-11 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs font-medium text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                              >
+                                <option value="">Select an option...</option>
+                                {field.options.map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : field.type === 'textarea' ? (
+                              <textarea
+                                rows={2}
+                                required={field.required}
+                                value={val}
+                                onChange={(e) =>
+                                  setCustomResponses((prev) => ({
+                                    ...prev,
+                                    [field.id]: e.target.value,
+                                  }))
+                                }
+                                placeholder={field.placeholder || 'Enter response...'}
+                                className="w-full p-3 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none resize-none"
+                              />
+                            ) : (
+                              <input
+                                type="text"
+                                required={field.required}
+                                value={val}
+                                onChange={(e) =>
+                                  setCustomResponses((prev) => ({
+                                    ...prev,
+                                    [field.id]: e.target.value,
+                                  }))
+                                }
+                                placeholder={field.placeholder || 'Enter response...'}
+                                className="w-full h-11 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                              />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* WEDDING GIFT TABLE & CASH ENVELOPE REGISTRY FORM */}
+                {(selectedEvent.category === 'Wedding' || extraDataConfig.enableGiftTable) && (
+                  <div className="p-4 sm:p-5 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] space-y-3.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-2.5">
+                        <div className="w-9 h-9 rounded-xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
+                          <Gift className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-bold text-[#0B0B0B]">
+                            {extraDataConfig.giftTitle || 'Couple Gift Table & Cash Envelope'}
+                          </h4>
+                          <p className="text-[11px] text-[#71717A] mt-0.5">
+                            Log a gift table item, Mobile Money envelope, or well-wishes note with your RSVP.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                      {(
+                        [
+                          { id: 'none', label: 'No Gift Yet' },
+                          { id: 'cash-momo', label: 'MoMo / Cash' },
+                          { id: 'registry-item', label: 'Registry Gift' },
+                          { id: 'blessing-only', label: 'Wishes Note' },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setGiftMode(opt.id)}
+                          className={`py-2 px-2.5 rounded-xl text-[11px] font-semibold border transition-colors ${
+                            giftMode === opt.id
+                              ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                              : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {giftMode !== 'none' && (
+                      <div className="space-y-3 pt-1">
+                        {giftMode === 'cash-momo' && (
+                          <div className="p-3 rounded-xl bg-white border border-[#E5E5EA] space-y-2.5">
+                            {extraDataConfig.momoNumber && (
+                              <p className="text-[11px] text-[#444748]">
+                                Couple MoMo / Gift Line:{' '}
+                                <strong className="font-mono text-[#0B0B0B]">
+                                  {extraDataConfig.momoNumber}
+                                </strong>{' '}
+                                ({extraDataConfig.momoName || selectedEvent.organizer})
+                              </p>
+                            )}
+                            <div className="flex gap-2">
+                              <select
+                                value={giftCurrency}
+                                onChange={(e) =>
+                                  setGiftCurrency(e.target.value as 'GHS' | 'USD')
+                                }
+                                aria-label="Gift currency"
+                                className="h-10 px-3 rounded-xl bg-[#F5F5F7] text-xs font-bold text-[#0B0B0B]"
+                              >
+                                <option value="GHS">GHS</option>
+                                <option value="USD">USD</option>
+                              </select>
+                              <input
+                                type="number"
+                                min={1}
+                                value={giftAmount}
+                                onChange={(e) => setGiftAmount(e.target.value)}
+                                placeholder="Pledge / envelope amount"
+                                className="flex-1 h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono font-semibold text-[#0B0B0B]"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {giftMode === 'registry-item' && (
+                          <div>
+                            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                              Select Gift Table Registry Item
+                            </label>
+                            <select
+                              value={giftItem}
+                              onChange={(e) => setGiftItem(e.target.value)}
+                              className="w-full h-10 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs font-medium text-[#0B0B0B]"
+                            >
+                              {(
+                                extraDataConfig.giftRegistryItems ?? [
+                                  'Cash Envelope Blessing',
+                                  'Couple Dinnerware Set',
+                                  'Honeymoon Travel Fund',
+                                ]
+                              ).map((item) => (
+                                <option key={item} value={item}>
+                                  {item}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                              Guest Side / Honoring
+                            </label>
+                            <input
+                              type="text"
+                              value={giftSide || validationGroup}
+                              onChange={(e) => setGiftSide(e.target.value)}
+                              placeholder="e.g. Bride's Family / Groom's Friends"
+                              className="w-full h-10 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                              Well-Wishes &amp; Card Note
+                            </label>
+                            <input
+                              type="text"
+                              value={giftMessage}
+                              onChange={(e) => setGiftMessage(e.target.value)}
+                              placeholder="Write a blessing for the couple..."
+                              className="w-full h-10 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Instant Notification Callout */}
+                <div className="p-3 rounded-2xl bg-[#F3F3F5] flex items-start gap-2 text-[#444748]">
+                  <ShieldCheck className="w-4 h-4 text-[#0B0B0B] shrink-0 mt-0.5" />
+                  <span className="text-[11px] leading-relaxed">
+                    Instant SMS with QR entry code and calendar invitation will be dispatched
+                    immediately. Strictly no marketing spam.
+                  </span>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="w-full h-14 bg-[#0B0B0B] hover:opacity-90 active:scale-[0.99] disabled:opacity-60 text-white text-base font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
+                >
+                  <span>
+                    {submitting
+                      ? 'Registering...'
+                      : selectedEvent.ticketPrice === 0
+                        ? 'Validate & Generate QR Pass'
+                        : `Claim Pass ($${selectedEvent.ticketPrice})`}
+                  </span>
+                  <ArrowRight className="w-5 h-5" />
+                </button>
+              </form>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  );
+
   return (
     <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col overflow-x-clip selection:bg-[#0B0B0B] selection:text-white">
       {/* Fullscreen Kiosk Check-In & QR Pass Modal */}
@@ -523,7 +1179,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   Scan at Gate Entrance or Desk
                 </p>
                 <p className="text-[11px] font-mono text-[#71717A] break-all">
-                  /e/{selectedEvent.slug}?tab=checkin
+                  /e/{selectedEvent.slug}/checkin
                 </p>
               </div>
               <div className="w-full grid grid-cols-2 gap-2 pt-1 text-left">
@@ -553,11 +1209,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               </button>
               <button
                 type="button"
-                onClick={handleShare}
+                onClick={() => void handleShareCheckinUrl()}
                 className="h-11 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1.5"
               >
                 <Copy className="w-3.5 h-3.5" />
-                Copy Invite Link
+                Copy Check-In Link
               </button>
             </div>
 
@@ -565,13 +1221,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               type="button"
               onClick={() => {
                 setShowCheckinModal(false);
-                document
-                  .getElementById('register-section')
-                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                switchScreenMode('checkin');
               }}
               className="w-full h-12 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors"
             >
-              <span>Complete Guest Check-In Registration</span>
+              <span>Open Standalone Event Check-In Screen</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>
@@ -598,24 +1252,50 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               <ArrowLeft className="w-5 h-5" />
             </button>
             <h1 className="font-display text-base font-semibold text-[#1A1C1D] truncate">
-              Event Invitation &amp; Check-In
+              {standaloneCheckin ? 'Event Check-In Screen' : 'Event Invitation & Check-In'}
             </h1>
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
             {!issuedPass && (
-              <select
-                value={selectedEvent.id}
-                onChange={(e) => switchEvent(e.target.value)}
-                aria-label="Select event"
-                className="hidden sm:block h-9 max-w-[190px] px-3 rounded-full bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none truncate"
-              >
-                {activeEvents.map((evt) => (
-                  <option key={evt.id} value={evt.id}>
-                    /e/{evt.slug}
-                  </option>
-                ))}
-              </select>
+              <>
+                <div className="hidden sm:flex items-center p-1 rounded-full bg-white border border-[#E5E5EA]">
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('top')}
+                    className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+                      !standaloneCheckin
+                        ? 'bg-[#0B0B0B] text-white'
+                        : 'text-[#71717A] hover:text-[#0B0B0B]'
+                    }`}
+                  >
+                    Invitation
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('checkin')}
+                    className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+                      standaloneCheckin
+                        ? 'bg-[#0B0B0B] text-white'
+                        : 'text-[#71717A] hover:text-[#0B0B0B]'
+                    }`}
+                  >
+                    Check-In Screen
+                  </button>
+                </div>
+                <select
+                  value={selectedEvent.id}
+                  onChange={(e) => switchEvent(e.target.value)}
+                  aria-label="Select event"
+                  className="hidden md:block h-9 max-w-[170px] px-3 rounded-full bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none truncate"
+                >
+                  {activeEvents.map((evt) => (
+                    <option key={evt.id} value={evt.id}>
+                      /e/{evt.slug}
+                    </option>
+                  ))}
+                </select>
+              </>
             )}
             <button
               type="button"
@@ -629,7 +1309,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               type="button"
               onClick={handleShare}
               aria-label="Share Page"
-              title="Copy Invitation Link"
+              title="Copy Link"
               className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-[#E8E8EA] transition-colors text-[#1A1C1D]"
             >
               <Share2 className="w-4.5 h-4.5" />
@@ -652,11 +1332,105 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
         <div className="max-w-3xl mx-auto flex flex-col space-y-6">
           {shareToast && (
             <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold shadow-lg">
-              Invitation link copied: /e/{selectedEvent.slug}
+              {shareToast}
             </div>
           )}
 
           {!issuedPass ? (
+            standaloneCheckin ? (
+              <>
+                {/* Mobile View Mode & Event Switcher */}
+                <div className="sm:hidden flex items-center justify-between gap-2 bg-white rounded-full p-1.5 shadow-sm border border-[#E5E5EA]">
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('top')}
+                    className="flex-1 py-1.5 rounded-full text-xs font-semibold text-[#71717A]"
+                  >
+                    Event Invitation
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('checkin')}
+                    className="flex-1 py-1.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white"
+                  >
+                    Check-In Screen
+                  </button>
+                </div>
+
+                {/* Standalone Event Check-In Screen Summary & Gate QR Card */}
+                <section className="bg-[#0B0B0B] text-white rounded-[32px] p-5 sm:p-6 shadow-xl border border-black/10 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-4 min-w-0">
+                      <div className="w-20 h-16 rounded-2xl overflow-hidden bg-zinc-900 border border-white/15 shrink-0">
+                        {!heroFailed && (
+                          <img
+                            src={heroFlyerSrc}
+                            alt={selectedEvent.title}
+                            onError={() => setHeroFailed(true)}
+                            className="w-full h-full object-cover"
+                          />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                          <span className="px-2.5 py-0.5 rounded-full bg-white text-[#0B0B0B] text-[10px] font-bold uppercase tracking-wider">
+                            Standalone Event Check-In
+                          </span>
+                          <span className="px-2.5 py-0.5 rounded-full bg-white/10 text-zinc-200 text-[10px] font-mono">
+                            {selectedEvent.category}
+                          </span>
+                        </div>
+                        <h2 className="font-display text-lg sm:text-xl font-bold text-white truncate">
+                          {selectedEvent.title}
+                        </h2>
+                        <p className="text-xs text-zinc-300 mt-0.5 truncate tabular-nums">
+                          {selectedEvent.date} · {selectedEvent.time} · {selectedEvent.venue}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div className="p-2 bg-white rounded-2xl shrink-0">
+                        <DeterministicQrSvg
+                          value={checkinKioskUrl}
+                          size={64}
+                          label={`Gate Check-In QR for ${selectedEvent.title}`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-white/15">
+                    <div className="text-xs text-zinc-300 tabular-nums">
+                      <strong className="text-white">{selectedEvent.checkedIn}</strong> checked in ·{' '}
+                      <strong className="text-white">{selectedEvent.registered}</strong> /{' '}
+                      {selectedEvent.capacity} seats claimed ({occupancyPct}%)
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleShareCheckinUrl()}
+                        className="px-3.5 py-1.5 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
+                      >
+                        <Share2 className="w-3.5 h-3.5" />
+                        <span>Share Check-In Link</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowCheckinModal(true)}
+                        className="px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                      >
+                        <QrCode className="w-3.5 h-3.5" />
+                        <span>Fullscreen QR Kiosk</span>
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                {/* Primary Standalone Event Check-In Section */}
+                {registerSectionCard}
+              </>
+            ) : (
             <>
               {/* Mobile Event Switcher */}
               {activeEvents.length > 1 && (
@@ -862,22 +1636,32 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 <div className="flex flex-col sm:items-end gap-2 w-full sm:w-auto shrink-0">
                   <button
                     type="button"
-                    onClick={() => setShowCheckinModal(true)}
+                    onClick={() => switchScreenMode('checkin')}
                     className="w-full sm:w-auto h-10 px-4 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
                   >
                     <QrCode className="w-4 h-4" />
-                    <span>Open QR Check-In Screen</span>
+                    <span>Open Standalone Check-In Screen</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      downloadQrSvg(checkinKioskUrl, `${selectedEvent.slug}-checkin-qr.svg`)
-                    }
-                    className="w-full sm:w-auto h-9 px-4 rounded-full bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Save Check-In QR (.svg)</span>
-                  </button>
+                  <div className="flex items-center gap-2 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => setShowCheckinModal(true)}
+                      className="flex-1 sm:flex-initial h-9 px-3.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                      <span>QR Kiosk</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        downloadQrSvg(checkinKioskUrl, `${selectedEvent.slug}-checkin-qr.svg`)
+                      }
+                      className="flex-1 sm:flex-initial h-9 px-3.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Save QR</span>
+                    </button>
+                  </div>
                 </div>
               </section>
 
@@ -1021,472 +1805,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               </section>
 
               {/* Guest Validation, Gift Table & Check-In Registration Form */}
-              <section
-                id="register-section"
-                className="scroll-mt-24 bg-white rounded-[32px] p-6 shadow-md space-y-5"
-              >
-                {!canCheckInRegister ? (
-                  <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2.5 text-center">
-                    <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
-                      <ShieldCheck className="w-5 h-5" />
-                    </div>
-                    <h3 className="font-display text-lg font-bold text-[#0B0B0B] tracking-tight">
-                      Event Is In Draft Mode
-                    </h3>
-                    <p className="text-xs text-[#71717A] leading-relaxed max-w-md mx-auto">
-                      Publish this event from Creator Studio to open guest validation and QR pass registration.
-                    </p>
-                  </div>
-                ) : !isQrPassPublished ? (
-                  <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2.5 text-center">
-                    <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
-                      <ShieldCheck className="w-5 h-5" />
-                    </div>
-                    <h3 className="font-display text-lg font-bold text-[#0B0B0B] tracking-tight">
-                      Check-In QR Passes Pending Publication
-                    </h3>
-                    <p className="text-xs text-[#71717A] leading-relaxed max-w-md mx-auto">
-                      Guest registration and QR pass delivery will open once the creator publishes check-in passes for this event.
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <div className="inline-flex items-center gap-1 bg-[#F3F3F5] text-[#0B0B0B] text-[11px] font-medium px-2.5 py-0.5 rounded-full">
-                      <Bolt className="w-3.5 h-3.5" />
-                      <span>Guest Validation &amp; Check-In Registration</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const rand = Math.floor(100 + Math.random() * 899);
-                        setName('Yaw Osei');
-                        setCountryPrefix('+233');
-                        setPhoneInput(`024 778 9${rand}`);
-                        setEmail(`yaw.osei${rand}@eventsbyyou.xyz`);
-                        if (validationConfig.options.length > 0) {
-                          setValidationGroup(validationConfig.options[0]);
-                        }
-                        if (validationConfig.requireInviteCode && validationConfig.inviteCode) {
-                          setInviteCodeInput(validationConfig.inviteCode);
-                        }
-                        setDuplicateError(null);
-                      }}
-                      className="text-[11px] font-semibold text-[#71717A] hover:text-[#0B0B0B] underline underline-offset-2"
-                    >
-                      Fill sample guest
-                    </button>
-                  </div>
-                  <h3 className="font-display text-[22px] leading-7 font-bold text-[#0B0B0B] tracking-[-0.02em]">
-                    {spotsRemaining > 0 ? 'Validate & Get QR Check-In Pass' : 'Join Priority Waitlist'}
-                  </h3>
-                  <p className="text-[13px] text-[#71717A]">
-                    Select your guest circle, submit event details, and receive your scannable QR gate pass immediately.
-                  </p>
-                </div>
-
-                {duplicateError && (
-                  <div className="p-3.5 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 flex items-center gap-2.5 text-xs font-medium text-[#0B0B0B]">
-                    <AlertCircle className="w-4 h-4 text-[#EF4444] shrink-0" />
-                    <span>{duplicateError}</span>
-                  </div>
-                )}
-
-                <form onSubmit={handleSubmit} className="space-y-5">
-                  {/* STEP 1: EVENT VALIDATION FORM */}
-                  {validationConfig.enabled && validationConfig.options.length > 0 && (
-                    <div className="p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5">
-                          <ShieldCheck className="w-4 h-4 text-[#0B0B0B]" />
-                          <span className="text-xs font-bold text-[#0B0B0B]">
-                            {validationConfig.label} *
-                          </span>
-                        </div>
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-[#71717A]">
-                          {selectedEvent.category} Validation
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                        {validationConfig.options.map((opt) => {
-                          const active = validationGroup === opt;
-                          return (
-                            <button
-                              key={opt}
-                              type="button"
-                              onClick={() => {
-                                setValidationGroup(opt);
-                                if (!giftSide) setGiftSide(opt);
-                                setDuplicateError(null);
-                              }}
-                              className={`px-3 py-2 rounded-xl text-xs font-semibold text-left border transition-all flex items-center justify-between gap-1.5 ${
-                                active
-                                  ? 'bg-[#0B0B0B] text-white border-[#0B0B0B] shadow-sm'
-                                  : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
-                              }`}
-                            >
-                              <span className="truncate">{opt}</span>
-                              {active && <Check className="w-3.5 h-3.5 shrink-0" />}
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {validationConfig.requireInviteCode && (
-                        <div className="pt-1 space-y-1">
-                          <label className="text-[11px] font-semibold text-[#0B0B0B] flex items-center gap-1">
-                            <Lock className="w-3 h-3" />
-                            Private Invitation Passcode Required
-                          </label>
-                          <input
-                            type="text"
-                            required
-                            value={inviteCodeInput}
-                            onChange={(e) => setInviteCodeInput(e.target.value)}
-                            placeholder="Enter host invitation code (e.g. ROYAL2026)"
-                            className="w-full h-10 px-4 rounded-full bg-white border border-[#E5E5EA] text-xs font-mono uppercase text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Full Name */}
-                  <div className="space-y-1.5">
-                    <label
-                      className="block text-xs font-semibold text-[#0B0B0B]"
-                      htmlFor="checkout-fullName"
-                    >
-                      Full Name *
-                    </label>
-                    <div className="relative">
-                      <input
-                        id="checkout-fullName"
-                        type="text"
-                        required
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="e.g. Ama Serwaa"
-                        className="w-full h-12 px-4 pr-10 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
-                      />
-                      <User className="w-4 h-4 text-[#71717A] absolute right-4 top-4 pointer-events-none" />
-                    </div>
-                  </div>
-
-                  {/* Phone Number with Country Selector */}
-                  <div className="space-y-1.5">
-                    <label
-                      className="block text-xs font-semibold text-[#0B0B0B]"
-                      htmlFor="checkout-phone"
-                    >
-                      Phone Number (For SMS Pass) *
-                    </label>
-                    <div className="flex gap-2">
-                      <div className="relative shrink-0">
-                        <select
-                          aria-label="Country dial code"
-                          value={countryPrefix}
-                          onChange={(e) => {
-                            setCountryPrefix(e.target.value);
-                            setDuplicateError(null);
-                          }}
-                          className="h-12 pl-3.5 pr-8 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-xs font-semibold appearance-none focus:outline-none focus:ring-1 focus:ring-[#0B0B0B] cursor-pointer"
-                        >
-                          {COUNTRY_CODES.map((c) => (
-                            <option key={c.code} value={c.code}>
-                              {c.flag} {c.code}
-                            </option>
-                          ))}
-                        </select>
-                        <ChevronDown className="w-3.5 h-3.5 text-[#71717A] absolute right-2.5 top-4 pointer-events-none" />
-                      </div>
-                      <div className="relative flex-1">
-                        <input
-                          id="checkout-phone"
-                          type="tel"
-                          required
-                          value={phoneInput}
-                          onChange={(e) => {
-                            setPhoneInput(e.target.value);
-                            setDuplicateError(null);
-                          }}
-                          placeholder="024 123 4567"
-                          className="w-full h-12 px-4 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm font-mono placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
-                        />
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between text-[11px] px-2">
-                      <span className="text-[#71717A]">
-                        Accepts local format (024XXXXXXX) or E.164
-                      </span>
-                      <span className="font-mono font-semibold text-emerald-700 tabular-nums">
-                        {normalizedPhone || 'Waiting...'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Email Address */}
-                  <div className="space-y-1.5">
-                    <label
-                      className="block text-xs font-semibold text-[#0B0B0B]"
-                      htmlFor="checkout-email"
-                    >
-                      Email Address *
-                    </label>
-                    <div className="relative">
-                      <input
-                        id="checkout-email"
-                        type="email"
-                        required
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="e.g. ama@eventsbyyou.xyz"
-                        className="w-full h-12 px-4 pr-10 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
-                      />
-                      <Mail className="w-4 h-4 text-[#71717A] absolute right-4 top-4 pointer-events-none" />
-                    </div>
-                  </div>
-
-                  {/* EVENT-SPECIFIC EXTRA DATA COLLECTION FIELDS */}
-                  {(extraDataConfig.customFields?.length ?? 0) > 0 && (
-                    <div className="p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-[#0B0B0B]">
-                          Additional {selectedEvent.category} Details
-                        </span>
-                        <span className="text-[10px] font-mono uppercase text-[#71717A]">
-                          Organizer Form
-                        </span>
-                      </div>
-                      <div className="space-y-3">
-                        {extraDataConfig.customFields.map((field) => {
-                          const val = customResponses[field.id] || '';
-                          return (
-                            <div key={field.id} className="space-y-1">
-                              <label className="block text-xs font-semibold text-[#0B0B0B]">
-                                {field.label}
-                                {field.required ? ' *' : ''}
-                              </label>
-                              {field.type === 'select' && field.options ? (
-                                <select
-                                  required={field.required}
-                                  value={val}
-                                  onChange={(e) =>
-                                    setCustomResponses((prev) => ({
-                                      ...prev,
-                                      [field.id]: e.target.value,
-                                    }))
-                                  }
-                                  className="w-full h-11 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs font-medium text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
-                                >
-                                  <option value="">Select an option...</option>
-                                  {field.options.map((opt) => (
-                                    <option key={opt} value={opt}>
-                                      {opt}
-                                    </option>
-                                  ))}
-                                </select>
-                              ) : field.type === 'textarea' ? (
-                                <textarea
-                                  rows={2}
-                                  required={field.required}
-                                  value={val}
-                                  onChange={(e) =>
-                                    setCustomResponses((prev) => ({
-                                      ...prev,
-                                      [field.id]: e.target.value,
-                                    }))
-                                  }
-                                  placeholder={field.placeholder || 'Enter response...'}
-                                  className="w-full p-3 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none resize-none"
-                                />
-                              ) : (
-                                <input
-                                  type="text"
-                                  required={field.required}
-                                  value={val}
-                                  onChange={(e) =>
-                                    setCustomResponses((prev) => ({
-                                      ...prev,
-                                      [field.id]: e.target.value,
-                                    }))
-                                  }
-                                  placeholder={field.placeholder || 'Enter response...'}
-                                  className="w-full h-11 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
-                                />
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* WEDDING GIFT TABLE & CASH ENVELOPE REGISTRY FORM */}
-                  {(selectedEvent.category === 'Wedding' || extraDataConfig.enableGiftTable) && (
-                    <div className="p-4 sm:p-5 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] space-y-3.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-start gap-2.5">
-                          <div className="w-9 h-9 rounded-xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
-                            <Gift className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <h4 className="text-xs font-bold text-[#0B0B0B]">
-                              {extraDataConfig.giftTitle || 'Couple Gift Table & Cash Envelope'}
-                            </h4>
-                            <p className="text-[11px] text-[#71717A] mt-0.5">
-                              Log a gift table item, Mobile Money envelope, or well-wishes note with your RSVP.
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                        {(
-                          [
-                            { id: 'none', label: 'No Gift Yet' },
-                            { id: 'cash-momo', label: 'MoMo / Cash' },
-                            { id: 'registry-item', label: 'Registry Gift' },
-                            { id: 'blessing-only', label: 'Wishes Note' },
-                          ] as const
-                        ).map((opt) => (
-                          <button
-                            key={opt.id}
-                            type="button"
-                            onClick={() => setGiftMode(opt.id)}
-                            className={`py-2 px-2.5 rounded-xl text-[11px] font-semibold border transition-colors ${
-                              giftMode === opt.id
-                                ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
-                                : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
-                            }`}
-                          >
-                            {opt.label}
-                          </button>
-                        ))}
-                      </div>
-
-                      {giftMode !== 'none' && (
-                        <div className="space-y-3 pt-1">
-                          {giftMode === 'cash-momo' && (
-                            <div className="p-3 rounded-xl bg-white border border-[#E5E5EA] space-y-2.5">
-                              {extraDataConfig.momoNumber && (
-                                <p className="text-[11px] text-[#444748]">
-                                  Couple MoMo / Gift Line:{' '}
-                                  <strong className="font-mono text-[#0B0B0B]">
-                                    {extraDataConfig.momoNumber}
-                                  </strong>{' '}
-                                  ({extraDataConfig.momoName || selectedEvent.organizer})
-                                </p>
-                              )}
-                              <div className="flex gap-2">
-                                <select
-                                  value={giftCurrency}
-                                  onChange={(e) =>
-                                    setGiftCurrency(e.target.value as 'GHS' | 'USD')
-                                  }
-                                  aria-label="Gift currency"
-                                  className="h-10 px-3 rounded-xl bg-[#F5F5F7] text-xs font-bold text-[#0B0B0B]"
-                                >
-                                  <option value="GHS">GHS</option>
-                                  <option value="USD">USD</option>
-                                </select>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  value={giftAmount}
-                                  onChange={(e) => setGiftAmount(e.target.value)}
-                                  placeholder="Pledge / envelope amount"
-                                  className="flex-1 h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono font-semibold text-[#0B0B0B]"
-                                />
-                              </div>
-                            </div>
-                          )}
-
-                          {giftMode === 'registry-item' && (
-                            <div>
-                              <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                                Select Gift Table Registry Item
-                              </label>
-                              <select
-                                value={giftItem}
-                                onChange={(e) => setGiftItem(e.target.value)}
-                                className="w-full h-10 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs font-medium text-[#0B0B0B]"
-                              >
-                                {(
-                                  extraDataConfig.giftRegistryItems ?? [
-                                    'Cash Envelope Blessing',
-                                    'Couple Dinnerware Set',
-                                    'Honeymoon Travel Fund',
-                                  ]
-                                ).map((item) => (
-                                  <option key={item} value={item}>
-                                    {item}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          )}
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                            <div>
-                              <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                                Guest Side / Honoring
-                              </label>
-                              <input
-                                type="text"
-                                value={giftSide || validationGroup}
-                                onChange={(e) => setGiftSide(e.target.value)}
-                                placeholder="e.g. Bride's Family / Groom's Friends"
-                                className="w-full h-10 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                                Well-Wishes &amp; Card Note
-                              </label>
-                              <input
-                                type="text"
-                                value={giftMessage}
-                                onChange={(e) => setGiftMessage(e.target.value)}
-                                placeholder="Write a blessing for the couple..."
-                                className="w-full h-10 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Instant Notification Callout */}
-                  <div className="p-3 rounded-2xl bg-[#F3F3F5] flex items-start gap-2 text-[#444748]">
-                    <ShieldCheck className="w-4 h-4 text-[#0B0B0B] shrink-0 mt-0.5" />
-                    <span className="text-[11px] leading-relaxed">
-                      Instant SMS with QR entry code and calendar invitation will be dispatched
-                      immediately. Strictly no marketing spam.
-                    </span>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="w-full h-14 bg-[#0B0B0B] hover:opacity-90 active:scale-[0.99] disabled:opacity-60 text-white text-base font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
-                  >
-                    <span>
-                      {submitting
-                        ? 'Registering...'
-                        : selectedEvent.ticketPrice === 0
-                          ? 'Validate & Generate QR Pass'
-                          : `Claim Pass ($${selectedEvent.ticketPrice})`}
-                    </span>
-                    <ArrowRight className="w-5 h-5" />
-                  </button>
-                </form>
-                  </>
-                )}
-              </section>
+              {registerSectionCard}
             </>
+            )
           ) : (
             /* SCREEN 2: TICKET CONFIRMATION & DIGITAL PASS SCREEN */
             <div className="flex flex-col w-full">
