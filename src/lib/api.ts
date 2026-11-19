@@ -1,3 +1,4 @@
+import { LocalApiError, localFallbackRequest } from './localFallbackApi';
 import type {
   AppRole,
   Attendee,
@@ -23,6 +24,12 @@ import type {
 
 const SESSION_KEY = 'eventsapp_supabase_session_v1';
 const CREATOR_TOKEN_KEY = 'eventsapp_creator_token_v1';
+
+let useLocalFallback = false;
+
+export function isLocalFallbackMode(): boolean {
+  return useLocalFallback;
+}
 
 export function getStoredCreatorToken(): string | null {
   try {
@@ -107,15 +114,46 @@ export function extractSessionFromUrlHash(): StoredAuthSession | null {
   }
 }
 
+const RAW_API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+const API_BASE_URL = RAW_API_BASE_URL.replace(/\/api$/i, '');
+
+export function resolveApiUrl(url: string): string {
+  if (!API_BASE_URL || /^https?:\/\//i.test(url)) return url;
+  return `${API_BASE_URL}${url.startsWith('/') ? url : `/${url}`}`;
+}
+
 async function refreshStoredSession(): Promise<StoredAuthSession | null> {
   const current = getStoredSession();
   if (!current?.refreshToken) return null;
+  if (useLocalFallback && !API_BASE_URL) {
+    try {
+      const data = await localFallbackRequest<{ session: StoredAuthSession }>('/api/auth/refresh', {
+        method: 'POST',
+        body: JSON.stringify({ refreshToken: current.refreshToken }),
+      });
+      if (data.session?.accessToken) {
+        saveStoredSession(data.session);
+        return data.session;
+      }
+      saveStoredSession(null);
+      return null;
+    } catch {
+      saveStoredSession(null);
+      return null;
+    }
+  }
+
   try {
     const resp = await fetch(resolveApiUrl('/api/auth/refresh'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken: current.refreshToken }),
     });
+    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+    if (!API_BASE_URL && (resp.status === 404 || resp.status === 405 || contentType.includes('text/html'))) {
+      useLocalFallback = true;
+      return refreshStoredSession();
+    }
     if (!resp.ok) {
       saveStoredSession(null);
       return null;
@@ -132,12 +170,24 @@ async function refreshStoredSession(): Promise<StoredAuthSession | null> {
   }
 }
 
-const RAW_API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
-const API_BASE_URL = RAW_API_BASE_URL.replace(/\/api$/i, '');
-
-function resolveApiUrl(url: string): string {
-  if (!API_BASE_URL || /^https?:\/\//i.test(url)) return url;
-  return `${API_BASE_URL}${url.startsWith('/') ? url : `/${url}`}`;
+async function executeLocalFallback<T>(
+  url: string,
+  options: RequestInit,
+  authenticated: boolean,
+  retried: boolean,
+  accessToken?: string
+): Promise<T> {
+  try {
+    return await localFallbackRequest<T>(url, options, accessToken);
+  } catch (err) {
+    if (err instanceof LocalApiError && err.status === 401 && authenticated && !retried) {
+      const refreshed = await refreshStoredSession();
+      if (refreshed) {
+        return executeLocalFallback<T>(url, options, true, true, refreshed.accessToken);
+      }
+    }
+    throw err;
+  }
 }
 
 async function request<T>(
@@ -146,17 +196,22 @@ async function request<T>(
   authenticated = false,
   retried = false
 ): Promise<T> {
+  const session = authenticated ? getStoredSession() : null;
+  if (authenticated && !session?.accessToken) {
+    throw new Error('Authentication required. Please sign in.');
+  }
+
+  if (useLocalFallback && !API_BASE_URL) {
+    return executeLocalFallback<T>(url, options, authenticated, retried, session?.accessToken);
+  }
+
   const targetUrl = resolveApiUrl(url);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...((options.headers as Record<string, string>) || {}),
   };
 
-  if (authenticated) {
-    const session = getStoredSession();
-    if (!session?.accessToken) {
-      throw new Error('Authentication required. Please sign in.');
-    }
+  if (authenticated && session?.accessToken) {
     headers.Authorization = `Bearer ${session.accessToken}`;
     const creatorToken = getStoredCreatorToken();
     if (creatorToken) {
@@ -183,12 +238,23 @@ async function request<T>(
     }
   }
 
+  const contentType = (resp.headers.get('content-type') || 'unknown').toLowerCase();
+  const isStaticMissingApi =
+    !API_BASE_URL &&
+    (((resp.status === 404 || resp.status === 405) &&
+      (!parsed || contentType.includes('text/html'))) ||
+      (!parsed && contentType.includes('text/html')));
+
+  if (isStaticMissingApi) {
+    useLocalFallback = true;
+    return executeLocalFallback<T>(url, options, authenticated, retried, session?.accessToken);
+  }
+
   if (!resp.ok) {
     if (parsed?.error) {
       throw new Error(parsed.error);
     }
-    const contentType = resp.headers.get('content-type') || 'unknown';
-    if (resp.status === 404 && (!parsed || contentType.toLowerCase().includes('text/html'))) {
+    if (resp.status === 404 && (!parsed || contentType.includes('text/html'))) {
       throw new Error(
         `API route ${url} returned HTTP 404 without a JSON backend response. This deployment is serving static frontend files without the Express server ("node server.ts"). Deploy full-stack with "npm run build && npm start" or set VITE_API_BASE_URL to your backend API URL.`
       );
@@ -197,8 +263,7 @@ async function request<T>(
   }
 
   if (!parsed || typeof parsed !== 'object') {
-    const contentType = resp.headers.get('content-type') || 'unknown';
-    if (contentType.toLowerCase().includes('text/html')) {
+    if (contentType.includes('text/html')) {
       throw new Error(
         `Backend API route ${url} returned HTML instead of JSON (HTTP ${resp.status}). This domain is serving the static frontend without the Express server (node server.ts). Deploy full-stack with "npm run build && npm start" or set VITE_API_BASE_URL.`
       );

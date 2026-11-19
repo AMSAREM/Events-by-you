@@ -26,6 +26,7 @@ import {
   extractSessionFromUrlHash,
   getStoredCreatorToken,
   getStoredSession,
+  resolveApiUrl,
   saveStoredCreatorToken,
   saveStoredSession,
   type StoredAuthSession,
@@ -273,8 +274,20 @@ export default function App() {
 
     void init();
 
+    const handleHashChange = async () => {
+      const hashSession = extractSessionFromUrlHash();
+      if (hashSession && !cancelled) {
+        const ok = await hydrateStudioWorkspace();
+        if (ok && !cancelled) {
+          setRoute('studio');
+        }
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+
     return () => {
       cancelled = true;
+      window.removeEventListener('hashchange', handleHashChange);
     };
   }, [hydrateStudioWorkspace, loadPublicEvents]);
 
@@ -1189,7 +1202,9 @@ export default function App() {
         const cleanSlug = encodeURIComponent(active.slug || active.id);
         const origin = window.location.origin;
         const inviteUrl = `${origin}/e/${cleanSlug}`;
-        const ogImg = `${origin}/api/og/event/${cleanSlug}`;
+        const ogPath = `/api/og/event/${cleanSlug}`;
+        const resolvedOg = resolveApiUrl(ogPath);
+        const ogImg = /^https?:\/\//i.test(resolvedOg) ? resolvedOg : `${origin}${resolvedOg}`;
         const title = `${active.title} — ${active.date} · ${active.city} | Events App`;
         const desc = `${active.organizer} invites you to ${active.title} on ${active.date} at ${active.venue}, ${active.city}.`;
         document.title = title;
@@ -1206,9 +1221,13 @@ export default function App() {
     }
 
     document.title = 'Events App — Event Registration & SMS Ticketing';
-    const defaultOg = `${window.location.origin}/api/og/event/${encodeURIComponent(
+    const defaultOgPath = `/api/og/event/${encodeURIComponent(
       featuredEvent.slug || featuredEvent.id
     )}`;
+    const resolvedDefaultOg = resolveApiUrl(defaultOgPath);
+    const defaultOg = /^https?:\/\//i.test(resolvedDefaultOg)
+      ? resolvedDefaultOg
+      : `${window.location.origin}${resolvedDefaultOg}`;
     setMeta('property', 'og:image', defaultOg);
     setMeta('name', 'twitter:image', defaultOg);
   }, [route, publicPreviewEventId, safeEvents, safePublicEvents, featuredEvent]);

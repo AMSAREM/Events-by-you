@@ -321,6 +321,36 @@ async function createAppServer() {
   app.set('trust proxy', 1);
   app.use(express.json({ limit: '15mb' }));
 
+  const configuredCorsOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+
+  app.use('/api', (req, res, next) => {
+    const origin = req.headers.origin;
+    const appOrigin = (process.env.APP_URL || '').trim().replace(/\/+$/, '');
+    const allowed =
+      !origin ||
+      configuredCorsOrigins.length === 0 ||
+      configuredCorsOrigins.includes(origin) ||
+      (appOrigin && origin === appOrigin);
+
+    if (origin && allowed) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Creator-Token');
+      res.setHeader('Access-Control-Max-Age', '86400');
+    }
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+    if (!req.path.startsWith('/og/')) {
+      res.setHeader('Cache-Control', 'no-store');
+    }
+    return next();
+  });
+
   const resolveBaseUrl = (req: Request) => {
     if (process.env.APP_URL) return process.env.APP_URL.replace(/\/+$/, '');
     const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
@@ -457,6 +487,7 @@ async function createAppServer() {
     const configured = isSupabaseConfigured();
     res.json({
       ok: true,
+      architecture: 'hybrid',
       database: configured ? 'supabase' : 'in-memory',
       supabaseConfigured: configured,
       serviceRoleConfigured: Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()),
@@ -3191,7 +3222,8 @@ async function createAppServer() {
   // VITE DEV MIDDLEWARE / PRODUCTION STATIC ASSETS WITH SSR OG INJECTION
   // =========================================================================
 
-  const isProd = process.env.NODE_ENV === 'production';
+  const isProd =
+    process.env.NODE_ENV === 'production' || process.env.npm_lifecycle_event === 'start';
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -3211,7 +3243,10 @@ async function createAppServer() {
         const rawHtml = fs.readFileSync(indexPath, 'utf-8');
         const transformed = await vite.transformIndexHtml(req.originalUrl, rawHtml);
         const withOg = injectEventMetaTags(transformed, evt, resolveBaseUrl(req));
-        res.status(200).set({ 'Content-Type': 'text/html' }).end(withOg);
+        res
+          .status(200)
+          .set({ 'Content-Type': 'text/html', 'Cache-Control': 'no-cache, must-revalidate' })
+          .end(withOg);
       } catch (err) {
         next(err);
       }
@@ -3220,12 +3255,25 @@ async function createAppServer() {
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(__dirname, 'dist');
-    app.use(express.static(distDir, { index: false }));
+    const distAssetsDir = path.join(distDir, 'assets');
+    if (fs.existsSync(distAssetsDir)) {
+      app.use(
+        '/assets',
+        express.static(distAssetsDir, {
+          immutable: true,
+          maxAge: '1y',
+        })
+      );
+    }
+    app.use(express.static(distDir, { index: false, maxAge: '1h' }));
     app.get('*', async (req, res) => {
       const indexPath = path.join(distDir, 'index.html');
       if (!fs.existsSync(indexPath)) {
-        return res.status(503).send('Production build not found. Run "npm run build" before starting the server.');
+        return res
+          .status(503)
+          .send('Production build not found. Run "npm run build" before starting the server.');
       }
+      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
       const slugMatch = req.path.match(/^\/e\/([^/]+)(?:\/checkin)?$/i);
       const slugOrId =
         (slugMatch ? decodeURIComponent(slugMatch[1]) : '') ||

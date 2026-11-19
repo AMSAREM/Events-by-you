@@ -14,7 +14,7 @@ import {
   User,
 } from 'lucide-react';
 
-import { api, saveStoredSession, type StoredAuthSession } from '../lib/api';
+import { api, isLocalFallbackMode, saveStoredSession, type StoredAuthSession } from '../lib/api';
 import type { OrganizerProfile } from '../types/events';
 
 interface VerifyOtpScreenProps {
@@ -326,6 +326,11 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                       />
                     ))}
                   </div>
+                  {isLocalFallbackMode() && (
+                    <p className="text-[11px] font-medium text-[#71717A] mt-2">
+                      Browser preview mode: enter any 6 digits (e.g. 123456) to complete verification.
+                    </p>
+                  )}
                   {errorMsg && (
                     <p className="text-xs font-semibold text-[#EF4444] mt-2">{errorMsg}</p>
                   )}
