@@ -122,6 +122,11 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
     [phone, countryGateway]
   );
 
+  const emailValidation = useMemo(
+    () => (orgEmail.trim() ? validateStrictEmail(orgEmail) : null),
+    [orgEmail]
+  );
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedName = fullName.trim();
@@ -136,15 +141,12 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
       return;
     }
 
-    let cleanEmail: string | undefined;
-    if (orgEmail.trim()) {
-      const emailCheck = validateStrictEmail(orgEmail);
-      if (!emailCheck.ok) {
-        setFormError(emailCheck.error);
-        return;
-      }
-      cleanEmail = emailCheck.normalized;
+    const emailCheck = validateStrictEmail(orgEmail);
+    if (!emailCheck.ok) {
+      setFormError(emailCheck.error);
+      return;
     }
+    const cleanEmail = emailCheck.normalized;
 
     const pwCheck = validateStrictPassword(password);
     if (!pwCheck.ok) {
@@ -303,8 +305,9 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                   Start hosting events &amp; programs with high delivery
                 </h1>
                 <p className="text-sm text-[#444748] mb-8 max-w-xl leading-relaxed">
-                  Create your free individual or organiser account. Get 20 free Arkesel SMS credits
-                  instantly upon sign up for personal programs, weddings, birthdays, or community events.
+                  Create your free individual or organiser account. A 6-digit verification code is
+                  sent to both your phone via Arkesel SMS and your email via Resend before your
+                  account and 20 free SMS credits are provisioned.
                 </p>
 
                 <form onSubmit={handleSubmit} className="space-y-5">
@@ -372,7 +375,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                     </div>
                   </div>
 
-                  {/* Row 2: Optional Email & Primary Telecom Gateway */}
+                  {/* Row 2: Required Email & Primary Telecom Gateway */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="flex flex-col gap-1.5">
                       <label
@@ -380,22 +383,34 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                         className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between"
                       >
                         <span>Personal or Organisation Email</span>
-                        <span className="text-[11px] font-normal text-[#71717A]">Optional</span>
+                        <span className="text-[11px] font-normal text-[#71717A]">Required</span>
                       </label>
                       <div className="relative">
                         <input
                           id="signup-email"
                           type="email"
+                          required
                           value={orgEmail}
                           onChange={(e) => {
                             setOrgEmail(e.target.value);
                             if (formError) setFormError(null);
                           }}
-                          placeholder="you@gmail.com (for backup OTP & receipts)"
+                          placeholder="you@gmail.com"
                           className="w-full bg-[#F5F5F7] rounded-full px-4 py-3 pr-10 text-sm text-[#0B0B0B] placeholder:text-[#71717A] outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-all"
                         />
                         <AtSign className="w-4 h-4 text-[#71717A] absolute right-3.5 top-3.5 pointer-events-none" />
                       </div>
+                      {emailValidation && (
+                        <p
+                          className={`text-[11px] pl-3 ${
+                            emailValidation.ok ? 'text-emerald-700 font-medium' : 'text-[#EF4444]'
+                          }`}
+                        >
+                          {emailValidation.ok
+                            ? `Verified email format: ${emailValidation.normalized}`
+                            : emailValidation.error}
+                        </p>
+                      )}
                     </div>
 
                     <div className="flex flex-col gap-1.5">
@@ -590,7 +605,9 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                     className="w-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-sm font-semibold rounded-full py-3.5 px-6 flex items-center justify-center gap-2 shadow-sm transition-transform active:scale-[0.99] disabled:opacity-60"
                   >
                     <span>
-                      {submitting ? 'Sending SMS Verification...' : 'Verify Phone & Create Account'}
+                      {submitting
+                        ? 'Sending SMS & Email Code...'
+                        : 'Verify SMS & Email & Create Account'}
                     </span>
                     <ArrowRight className="w-4 h-4" />
                   </button>

@@ -47,8 +47,11 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [resendNotice, setResendNotice] = useState<string | null>(null);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
-  const isPhoneChallenge = Boolean(phone.trim()) || otpType === 'sms';
-  const displayTarget = phone.trim() || email.trim();
+  const cleanPhone = phone.trim();
+  const cleanEmail = email.trim();
+  const isDualChannel = Boolean(cleanPhone && cleanEmail);
+  const isPhoneChallenge = Boolean(cleanPhone) || otpType === 'sms';
+  const displayTarget = cleanPhone || cleanEmail;
 
   useEffect(() => {
     if (secondsLeft <= 0) return;
@@ -97,11 +100,15 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
         otpType,
         countryGateway,
       });
+      const nextPhone = res.phone || cleanPhone;
+      const nextEmail = res.email || cleanEmail;
       setSecondsLeft(42);
       setResendNotice(
-        res.provider === 'resend' && email.trim()
-          ? `A fresh 6-digit verification code was sent to ${email.trim()}.`
-          : `A fresh 6-digit verification code was dispatched to ${displayTarget}.`
+        nextPhone && nextEmail
+          ? `A fresh 6-digit verification code was dispatched to both ${nextPhone} (SMS) and ${nextEmail} (Email).`
+          : res.provider === 'resend' && nextEmail
+            ? `A fresh 6-digit verification code was sent to ${nextEmail}.`
+            : `A fresh 6-digit verification code was dispatched to ${nextPhone || nextEmail || displayTarget}.`
       );
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to resend code.');
@@ -113,9 +120,11 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
     const code = digits.join('');
     if (code.length < 6) {
       setErrorMsg(
-        isPhoneChallenge
-          ? 'Please enter the 6-digit SMS verification code.'
-          : 'Please enter the 6-digit verification code sent to your email.'
+        isDualChannel
+          ? 'Please enter the 6-digit verification code sent to your phone via SMS and your email.'
+          : isPhoneChallenge
+            ? 'Please enter the 6-digit SMS verification code.'
+            : 'Please enter the 6-digit verification code sent to your email.'
       );
       const firstEmpty = digits.findIndex((d) => !d);
       if (firstEmpty >= 0) inputRefs.current[firstEmpty]?.focus();
@@ -222,28 +231,35 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                 </div>
 
                 <h1 className="font-display text-[32px] sm:text-[36px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.03em] mb-3">
-                  {isPhoneChallenge ? 'Verify your phone number' : 'Verify your identity'}
+                  {isDualChannel
+                    ? 'Verify SMS & Email code'
+                    : isPhoneChallenge
+                      ? 'Verify your phone number'
+                      : 'Verify your identity'}
                 </h1>
                 <p className="text-sm text-[#71717A] mb-6 leading-relaxed">
-                  {isPhoneChallenge ? (
+                  {isDualChannel ? (
+                    <>
+                      Enter the 6-digit security code dispatched simultaneously via SMS to{' '}
+                      <span className="font-semibold text-[#0B0B0B] tabular-nums">
+                        {cleanPhone}
+                      </span>{' '}
+                      and Email to{' '}
+                      <span className="font-semibold text-[#0B0B0B]">{cleanEmail}</span>. Your
+                      account is verified and activated once confirmation succeeds.
+                    </>
+                  ) : isPhoneChallenge ? (
                     <>
                       Enter the 6-digit security code dispatched to{' '}
                       <span className="font-semibold text-[#0B0B0B] tabular-nums">
-                        {phone.trim() || displayTarget}
+                        {cleanPhone || displayTarget}
                       </span>
-                      {email.trim() ? (
-                        <>
-                          {' '}
-                          (backup copy to{' '}
-                          <span className="font-semibold text-[#0B0B0B]">{email.trim()}</span>)
-                        </>
-                      ) : null}
                       . Your account is committed once verification succeeds.
                     </>
                   ) : (
                     <>
                       Enter the 6-digit security code sent to{' '}
-                      <span className="font-semibold text-[#0B0B0B]">{email.trim()}</span>.
+                      <span className="font-semibold text-[#0B0B0B]">{cleanEmail}</span>.
                     </>
                   )}
                 </p>
@@ -256,14 +272,18 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                     </div>
                     <div className="truncate">
                       <p className="text-xs font-semibold text-[#0B0B0B] truncate tabular-nums">
-                        {isPhoneChallenge
-                          ? `SMS OTP dispatched to ${phone.trim() || displayTarget}`
-                          : `Email OTP dispatched to ${email.trim()}`}
+                        {isDualChannel
+                          ? `SMS & Email OTP sent to ${cleanPhone} & ${cleanEmail}`
+                          : isPhoneChallenge
+                            ? `SMS OTP dispatched to ${cleanPhone || displayTarget}`
+                            : `Email OTP dispatched to ${cleanEmail}`}
                       </p>
                       <p className="text-[11px] text-[#71717A] tabular-nums">
-                        {isPhoneChallenge
-                          ? 'Routed via Arkesel Direct Carrier Gateway · 10-min expiry'
-                          : 'Routed via Resend Transactional API · 10-min expiry'}
+                        {isDualChannel
+                          ? 'Dispatched simultaneously via Arkesel SMS & Resend Email · 10-min expiry'
+                          : isPhoneChallenge
+                            ? 'Routed via Arkesel Direct Carrier Gateway · 10-min expiry'
+                            : 'Routed via Resend Transactional API · 10-min expiry'}
                       </p>
                     </div>
                   </div>
@@ -280,11 +300,11 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                       Authentication Code
                     </label>
                     <span className="text-[11px] font-medium text-[#71717A]">
-                      {isPhoneChallenge
-                        ? email.trim()
-                          ? 'Check your SMS messages or email inbox'
-                          : 'Check your SMS messages'
-                        : 'Check your email inbox (Resend)'}
+                      {isDualChannel
+                        ? 'Check both your SMS messages & email inbox'
+                        : isPhoneChallenge
+                          ? 'Check your SMS messages'
+                          : 'Check your email inbox (Resend)'}
                     </span>
                   </div>
                   <div className="grid grid-cols-6 gap-2 sm:gap-3.5">
@@ -316,7 +336,11 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                   <div className="flex items-center gap-2 text-[#71717A]">
                     <Clock className="w-4 h-4" />
                     <span className="text-[13px]">
-                      {isPhoneChallenge ? "Didn't receive SMS?" : "Didn't receive code?"}
+                      {isDualChannel
+                        ? "Didn't receive SMS or email?"
+                        : isPhoneChallenge
+                          ? "Didn't receive SMS?"
+                          : "Didn't receive code?"}
                     </span>
                     <button
                       type="button"
@@ -328,9 +352,11 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
                     >
                       {secondsLeft > 0
                         ? `Resend in ${formattedTime}`
-                        : isPhoneChallenge
-                          ? 'Resend SMS now'
-                          : 'Resend code now'}
+                        : isDualChannel
+                          ? 'Resend SMS & Email'
+                          : isPhoneChallenge
+                            ? 'Resend SMS now'
+                            : 'Resend code now'}
                     </button>
                   </div>
                   <button
@@ -389,8 +415,8 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
               <div className="mt-8 pt-6 border-t border-[#E5E5EA] flex items-center justify-center gap-2 text-[#71717A] text-[11px] text-center">
                 <Lock className="w-3.5 h-3.5 shrink-0" />
                 <span>
-                  Protected by Supabase Auth MFA &amp; Arkesel Tier-1 Gateway · Session Token
-                  expires in 10 minutes
+                  Protected by Supabase Auth MFA, Arkesel SMS &amp; Resend Email · Challenge expires
+                  in 10 minutes
                 </span>
               </div>
             </form>

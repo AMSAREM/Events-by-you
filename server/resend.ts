@@ -240,6 +240,7 @@ export async function sendAuthOtpEmail(params: {
   actionLink?: string;
   purpose: 'signup' | 'login' | 'recovery';
   name?: string;
+  dualChannelSms?: boolean;
 }): Promise<SendResendEmailResult> {
   const recipientName = params.name?.trim() ? `Hi ${escapeHtml(params.name.trim())},` : 'Hello,';
   const heading =
@@ -255,17 +256,25 @@ export async function sendAuthOtpEmail(params: {
         ? `Your Events App verification code: ${params.code}`
         : 'Verify your Events App account'
       : params.purpose === 'recovery'
-        ? 'Reset your Events App password'
+        ? params.code
+          ? `Your Events App recovery code: ${params.code}`
+          : 'Reset your Events App password'
         : params.code
           ? `Your Events App sign-in code: ${params.code}`
           : 'Sign in to Events App';
 
   const intro =
     params.purpose === 'signup'
-      ? 'Use the 6-digit verification code below to confirm your email and open your event creator studio.'
+      ? params.dualChannelSms
+        ? 'Use the 6-digit verification code below (also sent to your mobile phone via SMS) to verify your account and open your event creator studio.'
+        : 'Use the 6-digit verification code below to confirm your account and open your event creator studio.'
       : params.purpose === 'recovery'
-        ? 'Use the recovery link or 6-digit verification code below to regain access to your Events App account.'
-        : 'Enter this 6-digit verification code to sign in to Events App.';
+        ? params.dualChannelSms
+          ? 'Use the 6-digit recovery code below (also sent via SMS) or your recovery link to regain access to your Events App account.'
+          : 'Use the recovery link or 6-digit verification code below to regain access to your Events App account.'
+        : params.dualChannelSms
+          ? 'Enter this 6-digit verification code (also sent to your mobile phone via SMS) to sign in to Events App.'
+          : 'Enter this 6-digit verification code to sign in to Events App.';
 
   const codeBlockHtml = params.code
     ? `

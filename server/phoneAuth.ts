@@ -5,8 +5,9 @@ import { platformRuntime } from './memoryStore.ts';
 
 export type PhoneOtpPurpose = 'signup' | 'login' | 'recovery';
 
-interface PhoneOtpChallenge {
-  phone: string;
+interface AuthOtpChallenge {
+  phone?: string;
+  email?: string;
   codeHash: string;
   purpose: PhoneOtpPurpose;
   expiresAt: number;
@@ -29,41 +30,93 @@ export interface PendingSignupRecord {
 const OTP_TTL_MS = 10 * 60 * 1000;
 const SIGNUP_TTL_MS = 15 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
-const otpChallenges = new Map<string, PhoneOtpChallenge>();
+const otpChallenges = new Map<string, AuthOtpChallenge>();
 const pendingSignupsByPhone = new Map<string, PendingSignupRecord>();
+const pendingSignupsByEmail = new Map<string, PendingSignupRecord>();
 
-export function stagePendingSignup(record: Omit<PendingSignupRecord, 'createdAt' | 'expiresAt'>): PendingSignupRecord {
+function normalizeEmailKey(email?: string | null): string {
+  return (email || '').trim().toLowerCase();
+}
+
+function phoneChallengeKey(phone: string): string {
+  return `phone:${phone.trim()}`;
+}
+
+function emailChallengeKey(email: string): string {
+  return `email:${normalizeEmailKey(email)}`;
+}
+
+export function stagePendingSignup(
+  record: Omit<PendingSignupRecord, 'createdAt' | 'expiresAt'>
+): PendingSignupRecord {
   const now = Date.now();
   const staged: PendingSignupRecord = {
     ...record,
+    email: normalizeEmailKey(record.email),
     createdAt: now,
     expiresAt: now + SIGNUP_TTL_MS,
   };
-  pendingSignupsByPhone.set(record.phone, staged);
+  pendingSignupsByPhone.set(staged.phone, staged);
+  if (staged.email && !isSyntheticPhoneEmail(staged.email)) {
+    pendingSignupsByEmail.set(staged.email, staged);
+  }
   return staged;
 }
 
-export function getPendingSignup(normalizedPhone: string): PendingSignupRecord | null {
-  const rec = pendingSignupsByPhone.get(normalizedPhone);
+export function getPendingSignup(
+  identifier: string | { phone?: string; email?: string }
+): PendingSignupRecord | null {
+  const phone = typeof identifier === 'string' ? identifier : identifier.phone || '';
+  const email = typeof identifier === 'string' ? '' : normalizeEmailKey(identifier.email);
+
+  const rec =
+    (phone ? pendingSignupsByPhone.get(phone) : undefined) ||
+    (email ? pendingSignupsByEmail.get(email) : undefined);
   if (!rec) return null;
   if (Date.now() > rec.expiresAt) {
-    pendingSignupsByPhone.delete(normalizedPhone);
+    pendingSignupsByPhone.delete(rec.phone);
+    if (rec.email) pendingSignupsByEmail.delete(rec.email);
     return null;
   }
   return rec;
 }
 
-export function consumePendingSignup(normalizedPhone: string): PendingSignupRecord | null {
-  const rec = getPendingSignup(normalizedPhone);
+export function consumePendingSignup(
+  identifier: string | { phone?: string; email?: string }
+): PendingSignupRecord | null {
+  const rec = getPendingSignup(identifier);
   if (rec) {
-    pendingSignupsByPhone.delete(normalizedPhone);
+    pendingSignupsByPhone.delete(rec.phone);
+    if (rec.email) pendingSignupsByEmail.delete(rec.email);
   }
   return rec;
 }
 
-export function clearPendingSignup(normalizedPhone: string): void {
-  pendingSignupsByPhone.delete(normalizedPhone);
-  otpChallenges.delete(normalizedPhone);
+export function clearPendingSignup(
+  identifier: string | { phone?: string; email?: string }
+): void {
+  const phone = typeof identifier === 'string' ? identifier : identifier.phone || '';
+  const email = typeof identifier === 'string' ? '' : normalizeEmailKey(identifier.email);
+  const rec =
+    (phone ? pendingSignupsByPhone.get(phone) : undefined) ||
+    (email ? pendingSignupsByEmail.get(email) : undefined);
+
+  if (phone) {
+    pendingSignupsByPhone.delete(phone);
+    otpChallenges.delete(phoneChallengeKey(phone));
+  }
+  if (email) {
+    pendingSignupsByEmail.delete(email);
+    otpChallenges.delete(emailChallengeKey(email));
+  }
+  if (rec) {
+    pendingSignupsByPhone.delete(rec.phone);
+    otpChallenges.delete(phoneChallengeKey(rec.phone));
+    if (rec.email) {
+      pendingSignupsByEmail.delete(rec.email);
+      otpChallenges.delete(emailChallengeKey(rec.email));
+    }
+  }
 }
 
 export function isArkeselConfigured(): boolean {
@@ -80,8 +133,8 @@ export function buildSyntheticPhoneEmail(normalizedPhone: string): string {
   return `u_${digest}@phone.eventsbyyou.xyz`;
 }
 
-function hashOtpCode(phone: string, code: string): string {
-  return crypto.createHash('sha256').update(`${phone.trim()}:${code.trim()}`).digest('hex');
+function hashOtpCode(code: string): string {
+  return crypto.createHash('sha256').update(`otp:${code.trim()}`).digest('hex');
 }
 
 function safeHexEqual(a: string, b: string): boolean {
@@ -91,55 +144,100 @@ function safeHexEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+function deleteChallengeEntries(challenge: AuthOtpChallenge): void {
+  if (challenge.phone) otpChallenges.delete(phoneChallengeKey(challenge.phone));
+  if (challenge.email) otpChallenges.delete(emailChallengeKey(challenge.email));
+}
+
+export function hasActiveAuthChallenge(params: { phone?: string; email?: string }): boolean {
+  const now = Date.now();
+  const byPhone = params.phone ? otpChallenges.get(phoneChallengeKey(params.phone)) : undefined;
+  const byEmail = params.email ? otpChallenges.get(emailChallengeKey(params.email)) : undefined;
+  const challenge = byPhone || byEmail;
+  if (!challenge) return false;
+  if (now > challenge.expiresAt) {
+    deleteChallengeEntries(challenge);
+    return false;
+  }
+  return true;
+}
+
+export function issueAuthOtp(params: {
+  phone?: string;
+  email?: string;
+  purpose: PhoneOtpPurpose;
+}): { code: string; expiresAt: number } {
+  const code = String(crypto.randomInt(100000, 1000000));
+  const now = Date.now();
+  const expiresAt = now + OTP_TTL_MS;
+  const cleanPhone = params.phone?.trim() || undefined;
+  const cleanEmail =
+    params.email && !isSyntheticPhoneEmail(params.email)
+      ? normalizeEmailKey(params.email)
+      : undefined;
+
+  const challenge: AuthOtpChallenge = {
+    phone: cleanPhone,
+    email: cleanEmail,
+    codeHash: hashOtpCode(code),
+    purpose: params.purpose,
+    expiresAt,
+    issuedAt: now,
+    attempts: 0,
+  };
+
+  if (cleanPhone) otpChallenges.set(phoneChallengeKey(cleanPhone), challenge);
+  if (cleanEmail) otpChallenges.set(emailChallengeKey(cleanEmail), challenge);
+  return { code, expiresAt };
+}
+
 export function issuePhoneOtp(
   normalizedPhone: string,
   purpose: PhoneOtpPurpose
 ): { code: string; expiresAt: number } {
-  const code = String(crypto.randomInt(100000, 1000000));
-  const now = Date.now();
-  const expiresAt = now + OTP_TTL_MS;
-  otpChallenges.set(normalizedPhone, {
-    phone: normalizedPhone,
-    codeHash: hashOtpCode(normalizedPhone, code),
-    purpose,
-    expiresAt,
-    issuedAt: now,
-    attempts: 0,
-  });
-  return { code, expiresAt };
+  return issueAuthOtp({ phone: normalizedPhone, purpose });
 }
 
-export function verifyPhoneOtp(
-  normalizedPhone: string,
-  token: string
-): { ok: true; purpose: PhoneOtpPurpose } | { ok: false; error: string } {
-  const cleanCode = token.replace(/\D/g, '');
+export function verifyAuthOtp(params: {
+  phone?: string;
+  email?: string;
+  token: string;
+}): { ok: true; purpose: PhoneOtpPurpose; phone?: string; email?: string } | { ok: false; error: string } {
+  const cleanCode = params.token.replace(/\D/g, '');
   if (!/^\d{6}$/.test(cleanCode)) {
     return { ok: false, error: 'Enter a valid 6-digit verification code.' };
   }
-  const challenge = otpChallenges.get(normalizedPhone);
+
+  const byPhone = params.phone?.trim()
+    ? otpChallenges.get(phoneChallengeKey(params.phone.trim()))
+    : undefined;
+  const byEmail = params.email?.trim()
+    ? otpChallenges.get(emailChallengeKey(params.email.trim()))
+    : undefined;
+  const challenge = byPhone || byEmail;
+
   if (!challenge) {
     return {
       ok: false,
-      error: 'No active SMS verification code found for this number. Request a new 6-digit code.',
+      error: 'No active verification code found. Request a new 6-digit code via SMS & Email.',
     };
   }
   if (Date.now() > challenge.expiresAt) {
-    otpChallenges.delete(normalizedPhone);
-    return { ok: false, error: 'Verification code has expired. Request a new 6-digit SMS code.' };
+    deleteChallengeEntries(challenge);
+    return { ok: false, error: 'Verification code has expired. Request a new 6-digit code.' };
   }
   if (challenge.attempts >= MAX_OTP_ATTEMPTS) {
-    otpChallenges.delete(normalizedPhone);
-    return { ok: false, error: 'Too many incorrect attempts. Request a new 6-digit SMS code.' };
+    deleteChallengeEntries(challenge);
+    return { ok: false, error: 'Too many incorrect attempts. Request a new 6-digit code.' };
   }
 
-  const candidateHash = hashOtpCode(normalizedPhone, cleanCode);
+  const candidateHash = hashOtpCode(cleanCode);
   if (!safeHexEqual(candidateHash, challenge.codeHash)) {
     challenge.attempts += 1;
     const remaining = MAX_OTP_ATTEMPTS - challenge.attempts;
     if (remaining <= 0) {
-      otpChallenges.delete(normalizedPhone);
-      return { ok: false, error: 'Too many incorrect attempts. Request a new 6-digit SMS code.' };
+      deleteChallengeEntries(challenge);
+      return { ok: false, error: 'Too many incorrect attempts. Request a new 6-digit code.' };
     }
     return {
       ok: false,
@@ -147,8 +245,22 @@ export function verifyPhoneOtp(
     };
   }
 
-  otpChallenges.delete(normalizedPhone);
-  return { ok: true, purpose: challenge.purpose };
+  deleteChallengeEntries(challenge);
+  return {
+    ok: true,
+    purpose: challenge.purpose,
+    phone: challenge.phone,
+    email: challenge.email,
+  };
+}
+
+export function verifyPhoneOtp(
+  normalizedPhone: string,
+  token: string
+): { ok: true; purpose: PhoneOtpPurpose } | { ok: false; error: string } {
+  const res = verifyAuthOtp({ phone: normalizedPhone, token });
+  if (!res.ok) return res;
+  return { ok: true, purpose: res.purpose };
 }
 
 export async function sendArkeselSmsOtp(params: {
@@ -220,6 +332,188 @@ export async function sendArkeselSmsOtp(params: {
   }
 }
 
+export interface DualAuthDispatchResult {
+  ok: boolean;
+  provider?: string;
+  channel?: 'both' | 'sms' | 'email';
+  channels: Array<'sms' | 'email'>;
+  smsSent: boolean;
+  emailSent: boolean;
+  smsError?: string;
+  emailError?: string;
+  error?: string;
+}
+
+export async function dispatchDualAuthChallenge(params: {
+  phone?: string;
+  email?: string;
+  purpose: PhoneOtpPurpose;
+  name?: string;
+  senderId?: string;
+  actionLink?: string;
+  requireBoth?: boolean;
+  allowSandboxFallback?: boolean;
+}): Promise<DualAuthDispatchResult> {
+  const targetPhone = params.phone?.trim() || undefined;
+  const targetEmail =
+    params.email && !isSyntheticPhoneEmail(params.email)
+      ? normalizeEmailKey(params.email)
+      : undefined;
+
+  if (!targetPhone && !targetEmail) {
+    return {
+      ok: false,
+      channels: [],
+      smsSent: false,
+      emailSent: false,
+      error: 'A valid mobile phone number and/or email address is required.',
+    };
+  }
+
+  const { code } = issueAuthOtp({
+    phone: targetPhone,
+    email: targetEmail,
+    purpose: params.purpose,
+  });
+
+  const arkeselReady = Boolean(targetPhone) && isArkeselConfigured();
+  const resendReady = Boolean(targetEmail) && isResendConfigured();
+
+  const [smsRes, emailRes] = await Promise.all([
+    targetPhone
+      ? arkeselReady
+        ? sendArkeselSmsOtp({
+            phone: targetPhone,
+            code,
+            purpose: params.purpose,
+            senderId: params.senderId,
+          })
+        : Promise.resolve({
+            ok: false,
+            configured: false,
+            error: 'ARKESEL_API_KEY is not configured on the server.',
+          })
+      : Promise.resolve(null),
+    targetEmail
+      ? resendReady
+        ? sendAuthOtpEmail({
+            to: targetEmail,
+            code,
+            actionLink: params.actionLink,
+            purpose: params.purpose,
+            name: params.name,
+            dualChannelSms: Boolean(targetPhone),
+          })
+        : Promise.resolve({
+            ok: false,
+            skipped: true,
+            error: 'RESEND_API_KEY is not configured on the server.',
+          })
+      : Promise.resolve(null),
+  ]);
+
+  const smsSent = Boolean(smsRes?.ok);
+  const emailSent = Boolean(emailRes?.ok);
+  const channels: Array<'sms' | 'email'> = [];
+  const providers: Array<'arkesel' | 'resend'> = [];
+
+  if (smsSent) {
+    channels.push('sms');
+    providers.push('arkesel');
+  }
+  if (emailSent) {
+    channels.push('email');
+    providers.push('resend');
+  }
+
+  const smsError = smsRes && !smsRes.ok ? smsRes.error : undefined;
+  const emailError = emailRes && !emailRes.ok ? emailRes.error : undefined;
+
+  const mustSendBoth = Boolean(params.requireBoth && targetPhone && targetEmail);
+
+  if (mustSendBoth) {
+    if (smsSent && emailSent) {
+      return {
+        ok: true,
+        provider: 'arkesel+resend',
+        channel: 'both',
+        channels,
+        smsSent: true,
+        emailSent: true,
+      };
+    }
+
+    if (params.allowSandboxFallback && !isArkeselConfigured() && !isResendConfigured()) {
+      return {
+        ok: true,
+        provider: 'sandbox',
+        channel: 'both',
+        channels: ['sms', 'email'],
+        smsSent: true,
+        emailSent: true,
+      };
+    }
+
+    const failures: string[] = [];
+    if (!smsSent) failures.push(`SMS (Arkesel): ${smsError || 'Failed to send SMS'}`);
+    if (!emailSent) failures.push(`Email (Resend): ${emailError || 'Failed to send email'}`);
+    clearPendingSignup({ phone: targetPhone, email: targetEmail });
+
+    return {
+      ok: false,
+      channels,
+      smsSent,
+      emailSent,
+      smsError,
+      emailError,
+      error: `Authentication verification requires both SMS and Email delivery. ${failures.join(' | ')}`,
+    };
+  }
+
+  if (channels.length > 0) {
+    return {
+      ok: true,
+      provider: providers.join('+'),
+      channel: channels.length === 2 ? 'both' : channels[0],
+      channels,
+      smsSent,
+      emailSent,
+      smsError,
+      emailError,
+    };
+  }
+
+  if (params.allowSandboxFallback) {
+    return {
+      ok: true,
+      provider: 'sandbox',
+      channel: targetPhone && targetEmail ? 'both' : targetPhone ? 'sms' : 'email',
+      channels: [
+        ...(targetPhone ? (['sms'] as const) : []),
+        ...(targetEmail ? (['email'] as const) : []),
+      ],
+      smsSent: Boolean(targetPhone),
+      emailSent: Boolean(targetEmail),
+    };
+  }
+
+  const failures: string[] = [];
+  if (targetPhone && smsError) failures.push(`SMS: ${smsError}`);
+  if (targetEmail && emailError) failures.push(`Email: ${emailError}`);
+
+  return {
+    ok: false,
+    channels: [],
+    smsSent: false,
+    emailSent: false,
+    smsError,
+    emailError,
+    error:
+      failures.join(' | ') ||
+      'Neither Arkesel SMS nor Resend email verification could be dispatched.',
+  };
+}
+
 export async function dispatchPhoneVerificationChallenge(params: {
   phone: string;
   email?: string;
@@ -227,64 +521,9 @@ export async function dispatchPhoneVerificationChallenge(params: {
   name?: string;
   senderId?: string;
   allowSandboxFallback?: boolean;
-}): Promise<{
-  ok: boolean;
-  provider?: 'arkesel' | 'resend' | 'sandbox';
-  channel?: 'sms' | 'email';
-  error?: string;
-}> {
-  const { code } = issuePhoneOtp(params.phone, params.purpose);
-
-  if (isArkeselConfigured()) {
-    const smsResult = await sendArkeselSmsOtp({
-      phone: params.phone,
-      code,
-      purpose: params.purpose,
-      senderId: params.senderId,
-    });
-    if (smsResult.ok) {
-      return { ok: true, provider: 'arkesel', channel: 'sms' };
-    }
-    if (params.email && !isSyntheticPhoneEmail(params.email) && isResendConfigured()) {
-      const emailRes = await sendAuthOtpEmail({
-        to: params.email,
-        code,
-        purpose: params.purpose,
-        name: params.name,
-      });
-      if (emailRes.ok) {
-        return { ok: true, provider: 'resend', channel: 'email' };
-      }
-    }
-    return {
-      ok: false,
-      error: `Arkesel could not send SMS verification code: ${smsResult.error || 'Unknown gateway error'}`,
-    };
-  }
-
-  if (params.email && !isSyntheticPhoneEmail(params.email) && isResendConfigured()) {
-    const emailRes = await sendAuthOtpEmail({
-      to: params.email,
-      code,
-      purpose: params.purpose,
-      name: params.name,
-    });
-    if (emailRes.ok) {
-      return { ok: true, provider: 'resend', channel: 'email' };
-    }
-    return {
-      ok: false,
-      error: `Could not dispatch verification code via SMS (ARKESEL_API_KEY missing) or Resend (${emailRes.error || 'Unknown error'}).`,
-    };
-  }
-
-  if (params.allowSandboxFallback) {
-    return { ok: true, provider: 'sandbox', channel: 'sms' };
-  }
-
-  return {
-    ok: false,
-    error:
-      'SMS verification gateway (ARKESEL_API_KEY) is not configured yet. Add ARKESEL_API_KEY in environment Secrets to send phone OTPs.',
-  };
+}) {
+  return dispatchDualAuthChallenge({
+    ...params,
+    requireBoth: Boolean(params.phone && params.email && !isSyntheticPhoneEmail(params.email)),
+  });
 }

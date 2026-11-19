@@ -189,9 +189,7 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
       setErrorMsg(
         err instanceof Error
           ? err.message
-          : authMode === 'phone'
-            ? 'Unable to send 6-digit SMS code.'
-            : 'Unable to send 6-digit email code.'
+          : 'Unable to send 6-digit SMS & Email login code.'
       );
     } finally {
       setSendingOtp(false);
@@ -403,7 +401,7 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                         </p>
                       ) : (
                         <p className="text-[11px] text-[#71717A] mt-1.5 ml-3">
-                          Sign in with your phone number &amp; password, or request a 6-digit SMS login code.
+                          Sign in with your phone number &amp; password, or request a 6-digit login code sent via SMS &amp; Email.
                         </p>
                       )}
                     </div>
@@ -428,7 +426,7 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                         />
                       </div>
                       <p className="text-[11px] text-[#71717A] mt-1.5 ml-3">
-                        Sign in with your password, 6-digit email code, or OAuth. Role permissions apply automatically.
+                        Sign in with your password, 6-digit SMS &amp; Email login code, or OAuth. Role permissions apply automatically.
                       </p>
                     </div>
                   )}
@@ -524,10 +522,8 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                     )}
                     <span>
                       {sendingOtp
-                        ? 'Sending 6-Digit Code...'
-                        : authMode === 'phone'
-                          ? 'Send 6-Digit SMS Login Code (Passwordless)'
-                          : 'Send 6-Digit Email Login Code (Passwordless)'}
+                        ? 'Sending SMS & Email Code...'
+                        : 'Send 6-Digit SMS & Email Login Code (Passwordless)'}
                     </span>
                   </button>
                 </form>

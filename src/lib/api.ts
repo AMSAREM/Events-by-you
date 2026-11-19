@@ -236,6 +236,7 @@ export const api = {
         email?: string;
         phone?: string;
         otpType?: 'signup' | 'email' | 'sms';
+        channels?: Array<'sms' | 'email'>;
         provider?: string;
         session?: StoredAuthSession;
         profile?: OrganizerProfile;
@@ -246,7 +247,7 @@ export const api = {
 
     signUp: (payload: {
       phone: string;
-      email?: string;
+      email: string;
       password: string;
       name: string;
       studio: string;
@@ -259,6 +260,7 @@ export const api = {
         phone?: string;
         email?: string;
         otpType?: 'signup' | 'email' | 'sms';
+        channels?: Array<'sms' | 'email'>;
         provider?: string;
         session?: StoredAuthSession;
         profile?: OrganizerProfile;
@@ -285,7 +287,13 @@ export const api = {
       phone?: string;
       countryGateway?: string;
     }) =>
-      request<{ ok: boolean; email?: string; phone?: string; provider?: string }>(
+      request<{
+        ok: boolean;
+        email?: string;
+        phone?: string;
+        channels?: Array<'sms' | 'email'>;
+        provider?: string;
+      }>(
         '/api/auth/send-otp',
         {
           method: 'POST',
@@ -299,7 +307,13 @@ export const api = {
       otpType?: 'signup' | 'email' | 'recovery' | 'sms';
       countryGateway?: string;
     }) =>
-      request<{ ok: boolean; phone?: string; provider?: string }>('/api/auth/resend-otp', {
+      request<{
+        ok: boolean;
+        phone?: string;
+        email?: string;
+        channels?: Array<'sms' | 'email'>;
+        provider?: string;
+      }>('/api/auth/resend-otp', {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
@@ -310,7 +324,13 @@ export const api = {
       redirectTo?: string;
       countryGateway?: string;
     }) =>
-      request<{ ok: boolean; phone?: string; email?: string; provider?: string }>(
+      request<{
+        ok: boolean;
+        phone?: string;
+        email?: string;
+        channels?: Array<'sms' | 'email'>;
+        provider?: string;
+      }>(
         '/api/auth/reset-password',
         {
           method: 'POST',

@@ -98,11 +98,14 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
           setSending(false);
           return;
         }
-        await api.auth.resetPassword({
+        const res = await api.auth.resetPassword({
           email: emailCheck.normalized,
           redirectTo: window.location.origin,
         });
-        setDispatchedTarget({ email: emailCheck.normalized });
+        setDispatchedTarget({
+          phone: res.phone,
+          email: res.email || emailCheck.normalized,
+        });
         setContactValue(emailCheck.normalized);
         setSent(true);
       }
@@ -110,9 +113,7 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
       setErrorMsg(
         err instanceof Error
           ? err.message
-          : method === 'sms'
-            ? 'Unable to send SMS recovery code.'
-            : 'Unable to send recovery email.'
+          : 'Unable to send recovery code via SMS & Email.'
       );
     } finally {
       setSending(false);
@@ -197,9 +198,9 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
                 Reset your studio password
               </h1>
               <p className="text-sm text-[#71717A] mb-6 max-w-xl leading-relaxed">
-                Enter your registered work or organization email. We will send a secure password
-                reset link and a temporary 6-digit SMS verification code to your verified mobile
-                number.
+                Enter your registered mobile number or email. We send the 6-digit verification code
+                simultaneously via Arkesel SMS and Resend Email (with your reset link) so you can
+                recover access immediately.
               </p>
 
               {/* Method Selector Tabs */}
@@ -297,7 +298,7 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
                     </div>
                     <div className="truncate">
                       <p className="text-[11px] text-[#71717A]">
-                        {method === 'sms' ? 'Arkesel SMS OTP Recovery' : 'Resend Recovery Channel'}
+                        Arkesel SMS &amp; Resend Email Dual Recovery
                       </p>
                       <p className="text-xs font-semibold text-[#1A1C1D] truncate tabular-nums">
                         {contactValue.trim() || (method === 'sms' ? 'Enter mobile phone above' : 'Enter email above')}
@@ -322,10 +323,8 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
                 >
                   <span>
                     {sending
-                      ? 'Sending...'
-                      : method === 'sms'
-                        ? 'Send 6-Digit SMS Code'
-                        : 'Send Recovery Instructions'}
+                      ? 'Sending SMS & Email Code...'
+                      : 'Send Recovery Code (SMS & Email)'}
                   </span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
@@ -355,9 +354,9 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
                     <div>
                       <p className="text-xs font-semibold text-white">Instructions Dispatched</p>
                       <p className="text-xs text-zinc-300 mt-0.5">
-                        A cryptographically signed token has been routed to{' '}
-                        <strong className="text-white">{contactValue}</strong> alongside priority
-                        carrier SMS.
+                        A 6-digit recovery code has been sent via both Arkesel SMS
+                        {dispatchedTarget?.phone ? ` (${dispatchedTarget.phone})` : ''} and Resend Email
+                        {dispatchedTarget?.email ? ` (${dispatchedTarget.email})` : ''}.
                       </p>
                     </div>
                   </div>

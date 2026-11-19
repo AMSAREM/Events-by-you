@@ -29,16 +29,16 @@ import {
 } from './helpers.ts';
 import {
   isResendConfigured,
-  sendAuthOtpEmail,
   sendEventPassEmail,
 } from './resend.ts';
 import {
   clearPendingSignup,
   consumePendingSignup,
-  dispatchPhoneVerificationChallenge,
+  dispatchDualAuthChallenge,
   getPendingSignup,
+  hasActiveAuthChallenge,
   stagePendingSignup,
-  verifyPhoneOtp,
+  verifyAuthOtp,
 } from './phoneAuth.ts';
 import { memoryStore, platformRuntime } from './memoryStore.ts';
 
@@ -133,18 +133,24 @@ export function createMemoryRouter() {
     try {
       const result = memoryStore.signIn(rawIdentifier, password, countryGateway || 'GH');
       if (result.profile.phone && !result.profile.phoneVerified) {
-        await dispatchPhoneVerificationChallenge({
+        const delivery = await dispatchDualAuthChallenge({
           phone: result.profile.phone,
           email: result.profile.email || undefined,
           purpose: 'login',
           name: result.profile.name,
+          requireBoth: Boolean(result.profile.phone && result.profile.email),
           allowSandboxFallback: true,
         });
+        if (!delivery.ok) {
+          return res.status(400).json({ error: delivery.error || 'Could not dispatch verification code.' });
+        }
         return res.json({
           requiresOtp: true,
           phone: result.profile.phone,
           email: result.profile.email || undefined,
           otpType: 'sms',
+          channels: delivery.channels,
+          provider: delivery.provider,
         });
       }
       return res.json({
@@ -184,14 +190,11 @@ export function createMemoryRouter() {
       return res.status(400).json({ error: phoneCheck.error });
     }
 
-    let cleanEmail = '';
-    if (email && email.trim()) {
-      const emailCheck = validateStrictEmail(email);
-      if (!emailCheck.ok) {
-        return res.status(400).json({ error: emailCheck.error });
-      }
-      cleanEmail = emailCheck.normalized;
+    const emailCheck = validateStrictEmail(email || '');
+    if (!emailCheck.ok) {
+      return res.status(400).json({ error: emailCheck.error });
     }
+    const cleanEmail = emailCheck.normalized;
 
     const pwCheck = validateStrictPassword(password || '');
     if (!pwCheck.ok) {
@@ -209,7 +212,7 @@ export function createMemoryRouter() {
         error: `An account with phone number ${phoneCheck.normalized} already exists. Please sign in instead.`,
       });
     }
-    if (cleanEmail && memoryStore.getUserByEmail(cleanEmail)) {
+    if (memoryStore.getUserByEmail(cleanEmail)) {
       return res.status(409).json({
         error: `An account with email ${cleanEmail} already exists. Please sign in instead.`,
       });
@@ -225,33 +228,40 @@ export function createMemoryRouter() {
       appRole: appRole === 'gate_staff' ? 'gate_staff' : 'organizer',
     });
 
-    const delivery = await dispatchPhoneVerificationChallenge({
+    const delivery = await dispatchDualAuthChallenge({
       phone: phoneCheck.normalized,
-      email: cleanEmail || undefined,
+      email: cleanEmail,
       purpose: 'signup',
       name: trimmedName,
+      requireBoth: true,
       allowSandboxFallback: true,
     });
 
     if (!delivery.ok) {
-      clearPendingSignup(phoneCheck.normalized);
-      return res.status(400).json({ error: delivery.error || 'Could not send verification code.' });
+      clearPendingSignup({ phone: phoneCheck.normalized, email: cleanEmail });
+      return res.status(400).json({
+        error:
+          delivery.error ||
+          'Could not dispatch verification code to both SMS and email. Account was not created.',
+      });
     }
 
     return res.json({
       requiresOtp: true,
       phone: phoneCheck.normalized,
-      email: cleanEmail || undefined,
+      email: cleanEmail,
       otpType: 'sms',
+      channels: delivery.channels,
       provider: delivery.provider,
     });
   });
 
   router.post('/auth/verify-otp', (req, res) => {
-    const { email, phone, token, countryGateway } = req.body as {
+    const { email, phone, token, otpType, countryGateway } = req.body as {
       email?: string;
       phone?: string;
       token?: string;
+      otpType?: 'signup' | 'email' | 'recovery' | 'sms';
       countryGateway?: string;
     };
     const cleanToken = (token || '').trim();
@@ -259,20 +269,33 @@ export function createMemoryRouter() {
       return res.status(400).json({ error: 'Phone number (or email) and 6-digit verification code are required.' });
     }
     try {
-      const normalizedPhone = phone?.trim()
-        ? normalizePhoneE164(phone.trim(), countryGateway || 'GH')
-        : '';
-
-      if (normalizedPhone) {
-        const pending = getPendingSignup(normalizedPhone);
-        const otpRes = verifyPhoneOtp(normalizedPhone, cleanToken);
-        const allowSandboxUnstaged = !pending && !memoryStore.getUserByPhone(normalizedPhone);
-        if (!otpRes.ok) {
-          // Allow existing unverified users or direct OTP verification check
-          if (pending || memoryStore.getUserByPhone(normalizedPhone) || allowSandboxUnstaged) {
-            return res.status(401).json({ error: otpRes.error });
-          }
+      let normalizedPhone = '';
+      if (phone?.trim()) {
+        const phoneCheck = validateStrictPhoneE164(phone.trim(), countryGateway || 'GH');
+        if (!phoneCheck.ok) {
+          return res.status(400).json({ error: phoneCheck.error });
         }
+        normalizedPhone = phoneCheck.normalized;
+      }
+      const normalizedEmail = email?.trim() ? email.trim().toLowerCase() : '';
+
+      const useDualChallenge =
+        Boolean(normalizedPhone) ||
+        otpType === 'sms' ||
+        hasActiveAuthChallenge({ phone: normalizedPhone, email: normalizedEmail });
+
+      if (useDualChallenge) {
+        const otpRes = verifyAuthOtp({
+          phone: normalizedPhone || undefined,
+          email: normalizedEmail || undefined,
+          token: cleanToken,
+        });
+        if (!otpRes.ok) {
+          return res.status(401).json({ error: otpRes.error });
+        }
+        const resolvedPhone = otpRes.phone || normalizedPhone;
+        const resolvedEmail = otpRes.email || normalizedEmail;
+        const pending = getPendingSignup({ phone: resolvedPhone, email: resolvedEmail });
         if (pending) {
           const created = memoryStore.signUp({
             email: pending.email,
@@ -283,14 +306,17 @@ export function createMemoryRouter() {
             studio: pending.studio,
             appRole: pending.appRole,
           });
-          consumePendingSignup(normalizedPhone);
+          consumePendingSignup({ phone: pending.phone, email: pending.email });
           return res.json(created);
         }
-        const result = memoryStore.verifyOtp({ phone: normalizedPhone, email }, cleanToken);
+        const result = memoryStore.verifyOtp(
+          { phone: resolvedPhone || undefined, email: resolvedEmail || undefined },
+          cleanToken
+        );
         return res.json(result);
       }
 
-      const result = memoryStore.verifyOtp({ email }, cleanToken);
+      const result = memoryStore.verifyOtp({ email: normalizedEmail || email }, cleanToken);
       return res.json(result);
     } catch (err) {
       return res.status(401).json({ error: err instanceof Error ? err.message : 'Invalid verification code.' });
@@ -316,14 +342,15 @@ export function createMemoryRouter() {
       const existingUser = memoryStore.getUserByPhone(phoneCheck.normalized);
       if (!existingUser) {
         return res.status(404).json({
-          error: `No verified account found for ${phoneCheck.normalized}. Create a free account first.`,
+          error: `No registered account found for ${phoneCheck.normalized}. Create a free account first.`,
         });
       }
-      const delivery = await dispatchPhoneVerificationChallenge({
+      const delivery = await dispatchDualAuthChallenge({
         phone: phoneCheck.normalized,
         email: existingUser.email || undefined,
         purpose: 'login',
         name: existingUser.profile.name,
+        requireBoth: Boolean(phoneCheck.normalized && existingUser.email),
         allowSandboxFallback: true,
       });
       if (!delivery.ok) {
@@ -333,26 +360,40 @@ export function createMemoryRouter() {
         ok: true,
         phone: phoneCheck.normalized,
         email: existingUser.email || undefined,
+        channels: delivery.channels,
         provider: delivery.provider,
       });
     }
 
-    const trimmedEmail = target;
-    if (isResendConfigured()) {
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      const delivery = await sendAuthOtpEmail({
-        to: trimmedEmail,
-        code,
-        purpose: 'login',
-      });
-      if (!delivery.ok) {
-        return res.status(400).json({
-          error: `Resend could not dispatch sign-in code: ${delivery.error || 'Unknown error'}`,
-        });
-      }
-      return res.json({ ok: true, email: trimmedEmail, provider: 'resend' });
+    const emailCheck = validateStrictEmail(target);
+    if (!emailCheck.ok) {
+      return res.status(400).json({ error: emailCheck.error });
     }
-    return res.json({ ok: true, email: trimmedEmail });
+    const cleanEmail = emailCheck.normalized;
+    const existingUser = memoryStore.getUserByEmail(cleanEmail);
+    if (!existingUser) {
+      return res.status(404).json({
+        error: `No registered account found for ${cleanEmail}. Create a free account first.`,
+      });
+    }
+    const delivery = await dispatchDualAuthChallenge({
+      phone: existingUser.profile.phone || undefined,
+      email: cleanEmail,
+      purpose: 'login',
+      name: existingUser.profile.name,
+      requireBoth: Boolean(existingUser.profile.phone && cleanEmail),
+      allowSandboxFallback: true,
+    });
+    if (!delivery.ok) {
+      return res.status(400).json({ error: delivery.error });
+    }
+    return res.json({
+      ok: true,
+      phone: existingUser.profile.phone || undefined,
+      email: cleanEmail,
+      channels: delivery.channels,
+      provider: delivery.provider,
+    });
   });
 
   router.post('/auth/resend-otp', async (req, res) => {
@@ -362,44 +403,51 @@ export function createMemoryRouter() {
       countryGateway?: string;
       otpType?: string;
     };
+
+    let normalizedPhone = '';
     if (phone?.trim()) {
-      const normalized = normalizePhoneE164(phone.trim(), countryGateway || 'GH');
-      const pending = getPendingSignup(normalized);
-      const existing = memoryStore.getUserByPhone(normalized);
-      if (!pending && !existing) {
-        return res.status(404).json({ error: 'No active verification session for this phone number.' });
+      const phoneCheck = validateStrictPhoneE164(phone.trim(), countryGateway || 'GH');
+      if (!phoneCheck.ok) {
+        return res.status(400).json({ error: phoneCheck.error });
       }
-      const delivery = await dispatchPhoneVerificationChallenge({
-        phone: normalized,
-        email: pending?.email || existing?.email || email?.trim(),
-        purpose: otpType === 'recovery' ? 'recovery' : pending ? 'signup' : 'login',
-        name: pending?.name || existing?.profile.name,
-        allowSandboxFallback: true,
+      normalizedPhone = phoneCheck.normalized;
+    }
+    const cleanEmail = email?.trim() ? email.trim().toLowerCase() : '';
+
+    const pending = getPendingSignup({ phone: normalizedPhone, email: cleanEmail });
+    const existing = normalizedPhone
+      ? memoryStore.getUserByPhone(normalizedPhone)
+      : cleanEmail
+        ? memoryStore.getUserByEmail(cleanEmail)
+        : null;
+
+    if (!pending && !existing) {
+      return res.status(404).json({
+        error: 'No active verification session found. Submit sign-up or sign-in again.',
       });
-      if (!delivery.ok) {
-        return res.status(400).json({ error: delivery.error });
-      }
-      return res.json({ ok: true, phone: normalized, provider: delivery.provider });
     }
 
-    if (!email?.trim()) {
-      return res.status(400).json({ error: 'Phone number or email is required.' });
+    const targetPhone = pending?.phone || existing?.profile.phone || normalizedPhone || undefined;
+    const targetEmail = pending?.email || existing?.email || cleanEmail || undefined;
+
+    const delivery = await dispatchDualAuthChallenge({
+      phone: targetPhone,
+      email: targetEmail,
+      purpose: otpType === 'recovery' ? 'recovery' : pending ? 'signup' : 'login',
+      name: pending?.name || existing?.profile.name,
+      requireBoth: Boolean(targetPhone && targetEmail),
+      allowSandboxFallback: true,
+    });
+    if (!delivery.ok) {
+      return res.status(400).json({ error: delivery.error });
     }
-    if (isResendConfigured()) {
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      const delivery = await sendAuthOtpEmail({
-        to: email.trim(),
-        code,
-        purpose: 'signup',
-      });
-      if (!delivery.ok) {
-        return res.status(400).json({
-          error: `Resend could not resend verification code: ${delivery.error || 'Unknown error'}`,
-        });
-      }
-      return res.json({ ok: true, provider: 'resend' });
-    }
-    return res.json({ ok: true });
+    return res.json({
+      ok: true,
+      phone: targetPhone,
+      email: targetEmail,
+      channels: delivery.channels,
+      provider: delivery.provider,
+    });
   });
 
   router.post('/auth/reset-password', async (req, res) => {
@@ -419,37 +467,58 @@ export function createMemoryRouter() {
           error: `No account registered with ${phoneCheck.normalized}.`,
         });
       }
-      const delivery = await dispatchPhoneVerificationChallenge({
+      const delivery = await dispatchDualAuthChallenge({
         phone: phoneCheck.normalized,
         email: existing.email || undefined,
         purpose: 'recovery',
         name: existing.profile.name,
+        requireBoth: Boolean(phoneCheck.normalized && existing.email),
         allowSandboxFallback: true,
       });
       if (!delivery.ok) {
         return res.status(400).json({ error: delivery.error });
       }
-      return res.json({ ok: true, phone: phoneCheck.normalized, provider: delivery.provider });
+      return res.json({
+        ok: true,
+        phone: phoneCheck.normalized,
+        email: existing.email || undefined,
+        channels: delivery.channels,
+        provider: delivery.provider,
+      });
     }
 
     if (!email?.trim()) {
       return res.status(400).json({ error: 'Email address or phone number is required.' });
     }
-    if (isResendConfigured()) {
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      const delivery = await sendAuthOtpEmail({
-        to: email.trim(),
-        code,
-        purpose: 'recovery',
-      });
-      if (!delivery.ok) {
-        return res.status(400).json({
-          error: `Resend could not send recovery instructions: ${delivery.error || 'Unknown error'}`,
-        });
-      }
-      return res.json({ ok: true, provider: 'resend' });
+    const emailCheck = validateStrictEmail(email.trim());
+    if (!emailCheck.ok) {
+      return res.status(400).json({ error: emailCheck.error });
     }
-    return res.json({ ok: true });
+    const cleanEmail = emailCheck.normalized;
+    const existing = memoryStore.getUserByEmail(cleanEmail);
+    if (!existing) {
+      return res.status(404).json({
+        error: `No account registered with ${cleanEmail}.`,
+      });
+    }
+    const delivery = await dispatchDualAuthChallenge({
+      phone: existing.profile.phone || undefined,
+      email: cleanEmail,
+      purpose: 'recovery',
+      name: existing.profile.name,
+      requireBoth: Boolean(existing.profile.phone && cleanEmail),
+      allowSandboxFallback: true,
+    });
+    if (!delivery.ok) {
+      return res.status(400).json({ error: delivery.error });
+    }
+    return res.json({
+      ok: true,
+      phone: existing.profile.phone || undefined,
+      email: cleanEmail,
+      channels: delivery.channels,
+      provider: delivery.provider,
+    });
   });
 
   router.get('/auth/oauth/:provider', (req, res) => {

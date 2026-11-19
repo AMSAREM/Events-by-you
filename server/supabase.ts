@@ -425,6 +425,21 @@ export async function findSupabaseUserByEmail(
   const target = emailInput.trim().toLowerCase();
   if (!target) return null;
 
+  try {
+    const { data: prof } = await svc
+      .from('profiles')
+      .select('id')
+      .ilike('email', target)
+      .maybeSingle();
+    const profId = (prof as Record<string, unknown> | null)?.id;
+    if (typeof profId === 'string' && profId) {
+      const { data: userRes } = await svc.auth.admin.getUserById(profId);
+      if (userRes?.user) return userRes.user;
+    }
+  } catch {
+    // Fallback to admin user scan below
+  }
+
   for (let page = 1; page <= 5; page += 1) {
     const { data: listData, error } = await svc.auth.admin.listUsers({
       page,
@@ -438,3 +453,51 @@ export async function findSupabaseUserByEmail(
 
   return null;
 }
+
+export async function resolveSupabaseUserContacts(
+  svc: SupabaseClient,
+  user: User
+): Promise<{ phone?: string; email?: string; name?: string }> {
+  let phone =
+    (typeof user.phone === 'string' && user.phone.trim() ? normalizePhoneE164(user.phone) : '') ||
+    (typeof user.user_metadata?.phone === 'string' && user.user_metadata.phone.trim()
+      ? normalizePhoneE164(user.user_metadata.phone)
+      : '');
+  let email =
+    user.email && !isSyntheticPhoneEmail(user.email) ? user.email.trim().toLowerCase() : '';
+  let name =
+    typeof user.user_metadata?.name === 'string' && user.user_metadata.name.trim()
+      ? user.user_metadata.name.trim()
+      : undefined;
+
+  if (!phone || !email || !name) {
+    try {
+      const { data: prof } = await svc
+        .from('profiles')
+        .select('phone, email, name')
+        .eq('id', user.id)
+        .maybeSingle();
+      if (prof) {
+        const rec = prof as Record<string, unknown>;
+        if (!phone && typeof rec.phone === 'string' && rec.phone.trim()) {
+          phone = normalizePhoneE164(rec.phone);
+        }
+        if (!email && typeof rec.email === 'string' && rec.email.trim() && !isSyntheticPhoneEmail(rec.email)) {
+          email = rec.email.trim().toLowerCase();
+        }
+        if (!name && typeof rec.name === 'string' && rec.name.trim()) {
+          name = rec.name.trim();
+        }
+      }
+    } catch {
+      // Ignore schema differences
+    }
+  }
+
+  return {
+    phone: phone || undefined,
+    email: email || undefined,
+    name,
+  };
+}
+

@@ -21,6 +21,7 @@ import {
   mapRollSettingsRow,
   mapScheduleRow,
   mapShotRow,
+  resolveSupabaseUserContacts,
 } from './server/supabase.ts';
 import {
   INITIAL_ALERTS,
@@ -65,12 +66,13 @@ import {
   buildSyntheticPhoneEmail,
   clearPendingSignup,
   consumePendingSignup,
-  dispatchPhoneVerificationChallenge,
+  dispatchDualAuthChallenge,
   getPendingSignup,
+  hasActiveAuthChallenge,
   isArkeselConfigured,
   isSyntheticPhoneEmail,
   stagePendingSignup,
-  verifyPhoneOtp,
+  verifyAuthOtp,
 } from './server/phoneAuth.ts';
 import { createMemoryRouter } from './server/memoryRoutes.ts';
 import { createBuilderRouter } from './server/builderRoutes.ts';
@@ -615,22 +617,30 @@ async function createAppServer() {
         password,
       });
       if (error || !data.session || !data.user) {
-        if (error?.message?.toLowerCase().includes('email not confirmed')) {
-          if (isResendConfigured() && svc && !isSyntheticPhoneEmail(loginEmail)) {
-            const linkRes = await svc.auth.admin.generateLink({
-              type: 'magiclink',
-              email: loginEmail,
+        if (error?.message?.toLowerCase().includes('email not confirmed') && svc) {
+          const existing = resolvedPhone
+            ? await findSupabaseUserByPhone(svc, resolvedPhone)
+            : await findSupabaseUserByEmail(svc, loginEmail);
+          if (existing) {
+            const contacts = await resolveSupabaseUserContacts(svc, existing);
+            const delivery = await dispatchDualAuthChallenge({
+              phone: contacts.phone || resolvedPhone || undefined,
+              email: contacts.email,
+              purpose: 'login',
+              name: contacts.name,
+              requireBoth: Boolean((contacts.phone || resolvedPhone) && contacts.email),
             });
-            const otpCode = linkRes.data?.properties?.email_otp;
-            const actionLink = linkRes.data?.properties?.action_link;
-            if (!linkRes.error && (otpCode || actionLink)) {
-              await sendAuthOtpEmail({
-                to: loginEmail,
-                code: otpCode,
-                actionLink,
-                purpose: 'signup',
-              });
+            if (!delivery.ok) {
+              return res.status(400).json({ error: delivery.error || 'Could not dispatch verification code.' });
             }
+            return res.json({
+              requiresOtp: true,
+              phone: contacts.phone || resolvedPhone || undefined,
+              email: contacts.email,
+              otpType: 'sms',
+              channels: delivery.channels,
+              provider: delivery.provider,
+            });
           }
           return res.json({
             requiresOtp: true,
@@ -644,7 +654,16 @@ async function createAppServer() {
 
       const userClient = createUserSupabaseClient(data.session.access_token);
       const profile = await ensureProfileRow(userClient, data.user);
-      const userPhone = profile.phone || resolvedPhone;
+      const contacts = svc
+        ? await resolveSupabaseUserContacts(svc, data.user)
+        : {
+            phone: profile.phone || resolvedPhone || undefined,
+            email:
+              profile.email ||
+              (!isSyntheticPhoneEmail(data.user.email) ? data.user.email : undefined),
+            name: profile.name,
+          };
+      const userPhone = contacts.phone || profile.phone || resolvedPhone;
       const phoneVerified = Boolean(
         profile.phoneVerified ||
           data.user.phone_confirmed_at ||
@@ -652,12 +671,12 @@ async function createAppServer() {
       );
 
       if (userPhone && !phoneVerified) {
-        const displayEmail = isSyntheticPhoneEmail(data.user.email) ? undefined : data.user.email;
-        const challenge = await dispatchPhoneVerificationChallenge({
+        const challenge = await dispatchDualAuthChallenge({
           phone: userPhone,
-          email: displayEmail,
+          email: contacts.email,
           purpose: 'login',
           name: profile.name,
+          requireBoth: Boolean(userPhone && contacts.email),
         });
         if (!challenge.ok) {
           return res.status(400).json({ error: challenge.error || 'Could not dispatch verification code.' });
@@ -665,8 +684,9 @@ async function createAppServer() {
         return res.json({
           requiresOtp: true,
           phone: userPhone,
-          email: displayEmail,
+          email: contacts.email,
           otpType: 'sms',
+          channels: challenge.channels,
           provider: challenge.provider,
         });
       }
@@ -714,14 +734,11 @@ async function createAppServer() {
       return res.status(400).json({ error: phoneCheck.error });
     }
 
-    let cleanEmail = '';
-    if (email && email.trim()) {
-      const emailCheck = validateStrictEmail(email);
-      if (!emailCheck.ok) {
-        return res.status(400).json({ error: emailCheck.error });
-      }
-      cleanEmail = emailCheck.normalized;
+    const emailCheck = validateStrictEmail(email || '');
+    if (!emailCheck.ok) {
+      return res.status(400).json({ error: emailCheck.error });
     }
+    const cleanEmail = emailCheck.normalized;
 
     const pwCheck = validateStrictPassword(password || '');
     if (!pwCheck.ok) {
@@ -742,7 +759,7 @@ async function createAppServer() {
       if (!svc) {
         return res.status(503).json({
           error:
-            'Transactional phone verification requires SUPABASE_SERVICE_ROLE_KEY so accounts are only created after verification succeeds.',
+            'Transactional verification requires SUPABASE_SERVICE_ROLE_KEY so accounts are only created after OTP verification succeeds.',
         });
       }
 
@@ -754,13 +771,11 @@ async function createAppServer() {
         });
       }
 
-      if (cleanEmail) {
-        const existingByEmail = await findSupabaseUserByEmail(svc, cleanEmail);
-        if (existingByEmail) {
-          return res.status(409).json({
-            error: `An account with email ${cleanEmail} already exists. Please sign in instead.`,
-          });
-        }
+      const existingByEmail = await findSupabaseUserByEmail(svc, cleanEmail);
+      if (existingByEmail) {
+        return res.status(409).json({
+          error: `An account with email ${cleanEmail} already exists. Please sign in instead.`,
+        });
       }
 
       // Stage registration in volatile memory ONLY (zero writes to Supabase auth.users or public.profiles yet)
@@ -774,30 +789,32 @@ async function createAppServer() {
         appRole: resolvedAppRole,
       });
 
-      const delivery = await dispatchPhoneVerificationChallenge({
+      const delivery = await dispatchDualAuthChallenge({
         phone: phoneCheck.normalized,
-        email: cleanEmail || undefined,
+        email: cleanEmail,
         purpose: 'signup',
         name: trimmedName,
+        requireBoth: true,
       });
 
       if (!delivery.ok) {
         // Roll back staged state cleanly; nothing was ever written to the database
-        clearPendingSignup(phoneCheck.normalized);
+        clearPendingSignup({ phone: phoneCheck.normalized, email: cleanEmail });
         return res.status(400).json({
-          error: delivery.error || 'Could not dispatch phone verification code. Account was not created.',
+          error: delivery.error || 'Could not dispatch verification code to both SMS and email. Account was not created.',
         });
       }
 
       return res.json({
         requiresOtp: true,
         phone: phoneCheck.normalized,
-        email: cleanEmail || undefined,
+        email: cleanEmail,
         otpType: 'sms',
+        channels: delivery.channels,
         provider: delivery.provider,
       });
     } catch (err) {
-      clearPendingSignup(phoneCheck.normalized);
+      clearPendingSignup({ phone: phoneCheck.normalized, email: cleanEmail });
       const message = err instanceof Error ? err.message : 'Sign-up failed. Account was not created.';
       return res.status(500).json({ error: message });
     }
@@ -819,30 +836,46 @@ async function createAppServer() {
     try {
       const svc = createServiceSupabaseClient();
 
-      if (phone?.trim() || otpType === 'sms') {
-        const phoneCheck = validateStrictPhoneE164(phone || '', countryGateway || 'GH');
+      let normalizedPhone = '';
+      if (phone?.trim()) {
+        const phoneCheck = validateStrictPhoneE164(phone.trim(), countryGateway || 'GH');
         if (!phoneCheck.ok) {
           return res.status(400).json({ error: phoneCheck.error });
         }
-        const normalizedPhone = phoneCheck.normalized;
-        const otpCheck = verifyPhoneOtp(normalizedPhone, cleanToken);
+        normalizedPhone = phoneCheck.normalized;
+      }
+      const normalizedEmail = email?.trim() ? email.trim().toLowerCase() : '';
+
+      const useDualChallenge =
+        Boolean(normalizedPhone) ||
+        otpType === 'sms' ||
+        hasActiveAuthChallenge({ phone: normalizedPhone, email: normalizedEmail });
+
+      if (useDualChallenge) {
+        const otpCheck = verifyAuthOtp({
+          phone: normalizedPhone || undefined,
+          email: normalizedEmail || undefined,
+          token: cleanToken,
+        });
         if (!otpCheck.ok) {
           return res.status(401).json({ error: otpCheck.error });
         }
         if (!svc) {
           return res.status(503).json({
-            error: 'Phone OTP session verification requires SUPABASE_SERVICE_ROLE_KEY.',
+            error: 'OTP session verification requires SUPABASE_SERVICE_ROLE_KEY.',
           });
         }
 
-        const pending = getPendingSignup(normalizedPhone);
+        const resolvedPhone = otpCheck.phone || normalizedPhone;
+        const resolvedEmail = otpCheck.email || normalizedEmail;
+        const pending = getPendingSignup({ phone: resolvedPhone, email: resolvedEmail });
         const publicClient = createPublicSupabaseClient();
 
         if (pending) {
           // Re-verify uniqueness right before atomic commit
           const dupPhone = await findSupabaseUserByPhone(svc, pending.phone);
           if (dupPhone) {
-            consumePendingSignup(normalizedPhone);
+            consumePendingSignup({ phone: pending.phone, email: pending.email });
             return res.status(409).json({
               error: `An account with phone number ${pending.phone} already exists. Please sign in instead.`,
             });
@@ -850,7 +883,7 @@ async function createAppServer() {
           if (pending.email) {
             const dupEmail = await findSupabaseUserByEmail(svc, pending.email);
             if (dupEmail) {
-              consumePendingSignup(normalizedPhone);
+              consumePendingSignup({ phone: pending.phone, email: pending.email });
               return res.status(409).json({
                 error: `An account with email ${pending.email} already exists. Please sign in instead.`,
               });
@@ -884,7 +917,7 @@ async function createAppServer() {
 
           if (createErr || !createdRes?.user) {
             return res.status(400).json({
-              error: createErr?.message || 'Could not create account after phone verification.',
+              error: createErr?.message || 'Could not create account after verification.',
             });
           }
 
@@ -910,7 +943,7 @@ async function createAppServer() {
               throw new Error(sessionRes.error?.message || 'Could not start authenticated session.');
             }
 
-            consumePendingSignup(normalizedPhone);
+            consumePendingSignup({ phone: pending.phone, email: pending.email });
             return res.json({
               session: {
                 accessToken: sessionRes.data.session.access_token,
@@ -924,7 +957,6 @@ async function createAppServer() {
               },
             });
           } catch (commitErr) {
-            // Atomic rollback: remove user and profile so no partial/broken data persists on error
             try {
               await svc.from('profiles').delete().eq('id', createdUser.id);
             } catch {
@@ -943,30 +975,41 @@ async function createAppServer() {
           }
         }
 
-        // Existing user verifying SMS OTP for sign-in, password recovery, or phone authorisation
-        const existingUser = await findSupabaseUserByPhone(svc, normalizedPhone);
+        // Existing user verifying OTP for sign-in, password recovery, or phone authorisation
+        const existingUser = resolvedPhone
+          ? await findSupabaseUserByPhone(svc, resolvedPhone)
+          : await findSupabaseUserByEmail(svc, resolvedEmail);
         if (!existingUser || !existingUser.email) {
           return res.status(404).json({
-            error: `No account registered with ${normalizedPhone}.`,
+            error: `No account registered for ${resolvedPhone || resolvedEmail}.`,
           });
         }
 
-        await svc.auth.admin.updateUserById(existingUser.id, {
-          phone: normalizedPhone,
-          phone_confirm: true,
-          user_metadata: {
-            ...(existingUser.user_metadata || {}),
-            phone: normalizedPhone,
-            phone_verified: true,
-          },
-        });
-        try {
-          await svc
-            .from('profiles')
-            .update({ phone: normalizedPhone, phone_verified: true })
-            .eq('id', existingUser.id);
-        } catch {
-          // Ignore if remote profiles schema doesn't have phone columns yet
+        const contacts = await resolveSupabaseUserContacts(svc, existingUser);
+        const verifiedPhone = resolvedPhone || contacts.phone || '';
+        if (verifiedPhone) {
+          await svc.auth.admin.updateUserById(existingUser.id, {
+            phone: verifiedPhone,
+            phone_confirm: true,
+            email_confirm: true,
+            user_metadata: {
+              ...(existingUser.user_metadata || {}),
+              phone: verifiedPhone,
+              phone_verified: true,
+            },
+          });
+          try {
+            await svc
+              .from('profiles')
+              .update({ phone: verifiedPhone, phone_verified: true })
+              .eq('id', existingUser.id);
+          } catch {
+            // Ignore if remote profiles schema doesn't have phone columns yet
+          }
+        } else {
+          await svc.auth.admin.updateUserById(existingUser.id, {
+            email_confirm: true,
+          });
         }
 
         const linkRes = await svc.auth.admin.generateLink({
@@ -986,7 +1029,7 @@ async function createAppServer() {
         });
         if (sessionRes.error || !sessionRes.data.session || !sessionRes.data.user) {
           return res.status(401).json({
-            error: sessionRes.error?.message || 'Unable to verify phone session.',
+            error: sessionRes.error?.message || 'Unable to verify session.',
           });
         }
 
@@ -1000,13 +1043,13 @@ async function createAppServer() {
           },
           profile: {
             ...profile,
-            phone: normalizedPhone,
-            phoneVerified: true,
+            phone: verifiedPhone || profile.phone,
+            phoneVerified: Boolean(verifiedPhone || profile.phoneVerified),
           },
         });
       }
 
-      // Email OTP verification path
+      // Native Supabase Email OTP verification fallback
       const supabase = createPublicSupabaseClient();
       const emailTarget = (email || '').trim();
       const candidateTypes: Array<'signup' | 'email' | 'magiclink' | 'recovery'> = Array.from(
@@ -1085,53 +1128,63 @@ async function createAppServer() {
             error: `No registered account found for ${phoneCheck.normalized}. Create a free account first.`,
           });
         }
-        const displayEmail = isSyntheticPhoneEmail(existingUser.email) ? undefined : existingUser.email;
-        const delivery = await dispatchPhoneVerificationChallenge({
-          phone: phoneCheck.normalized,
-          email: displayEmail,
+        const contacts = await resolveSupabaseUserContacts(svc, existingUser);
+        const resolvedPhone = contacts.phone || phoneCheck.normalized;
+        const delivery = await dispatchDualAuthChallenge({
+          phone: resolvedPhone,
+          email: contacts.email,
           purpose: 'login',
-          name:
-            typeof existingUser.user_metadata?.name === 'string'
-              ? existingUser.user_metadata.name
-              : undefined,
+          name: contacts.name,
+          requireBoth: Boolean(resolvedPhone && contacts.email),
         });
         if (!delivery.ok) {
           return res.status(400).json({ error: delivery.error });
         }
         return res.json({
           ok: true,
-          phone: phoneCheck.normalized,
-          email: displayEmail,
+          phone: resolvedPhone,
+          email: contacts.email,
+          channels: delivery.channels,
           provider: delivery.provider,
         });
       }
 
-      const trimmedEmail = target;
-      if (isResendConfigured() && svc) {
-        const genRes = await svc.auth.admin.generateLink({
-          type: 'magiclink',
-          email: trimmedEmail,
-        });
-        if (genRes.error) {
-          return res.status(400).json({ error: genRes.error.message });
-        }
-        const emailDelivery = await sendAuthOtpEmail({
-          to: trimmedEmail,
-          code: genRes.data?.properties?.email_otp,
-          actionLink: genRes.data?.properties?.action_link,
-          purpose: 'login',
-        });
-        if (!emailDelivery.ok) {
-          return res.status(400).json({
-            error: `Resend could not dispatch sign-in code: ${emailDelivery.error || 'Unknown error'}`,
+      const emailCheck = validateStrictEmail(target);
+      if (!emailCheck.ok) {
+        return res.status(400).json({ error: emailCheck.error });
+      }
+      const cleanEmail = emailCheck.normalized;
+
+      if (svc) {
+        const existingUser = await findSupabaseUserByEmail(svc, cleanEmail);
+        if (!existingUser) {
+          return res.status(404).json({
+            error: `No registered account found for ${cleanEmail}. Create a free account first.`,
           });
         }
-        return res.json({ ok: true, email: trimmedEmail, provider: 'resend' });
+        const contacts = await resolveSupabaseUserContacts(svc, existingUser);
+        const delivery = await dispatchDualAuthChallenge({
+          phone: contacts.phone,
+          email: cleanEmail,
+          purpose: 'login',
+          name: contacts.name,
+          requireBoth: Boolean(contacts.phone && cleanEmail),
+        });
+        if (!delivery.ok) {
+          return res.status(400).json({ error: delivery.error });
+        }
+        return res.json({
+          ok: true,
+          phone: contacts.phone,
+          email: cleanEmail,
+          channels: delivery.channels,
+          provider: delivery.provider,
+        });
       }
 
       const supabase = createPublicSupabaseClient();
       const { error } = await supabase.auth.signInWithOtp({
-        email: trimmedEmail,
+        email: cleanEmail,
         options: {
           shouldCreateUser: false,
         },
@@ -1140,7 +1193,7 @@ async function createAppServer() {
         const formatted = formatSupabaseEmailError(error.message, Boolean(svc));
         return res.status(formatted.status).json({ error: formatted.error });
       }
-      return res.json({ ok: true, email: trimmedEmail });
+      return res.json({ ok: true, email: cleanEmail, channels: ['email'] });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not dispatch 6-digit code.';
       return res.status(500).json({ error: message });
@@ -1158,79 +1211,73 @@ async function createAppServer() {
     try {
       const svc = createServiceSupabaseClient();
 
+      let normalizedPhone = '';
       if (phone?.trim()) {
         const phoneCheck = validateStrictPhoneE164(phone.trim(), countryGateway || 'GH');
         if (!phoneCheck.ok) {
           return res.status(400).json({ error: phoneCheck.error });
         }
-        const normalizedPhone = phoneCheck.normalized;
-        const pending = getPendingSignup(normalizedPhone);
-        const existingUser = !pending && svc ? await findSupabaseUserByPhone(svc, normalizedPhone) : null;
-        if (!pending && !existingUser) {
+        normalizedPhone = phoneCheck.normalized;
+      }
+      const cleanEmail = email?.trim() ? email.trim().toLowerCase() : '';
+
+      const pending = getPendingSignup({ phone: normalizedPhone, email: cleanEmail });
+      let targetPhone = pending?.phone || normalizedPhone || undefined;
+      let targetEmail = pending?.email || cleanEmail || undefined;
+      let targetName = pending?.name;
+
+      if (!pending && svc) {
+        const existingUser = targetPhone
+          ? await findSupabaseUserByPhone(svc, targetPhone)
+          : targetEmail
+            ? await findSupabaseUserByEmail(svc, targetEmail)
+            : null;
+        if (!existingUser) {
           return res.status(404).json({
-            error: 'No active phone verification session found. Submit sign-up or sign-in again.',
+            error: 'No active verification session found. Submit sign-up or sign-in again.',
           });
         }
-        const targetEmail =
-          pending?.email ||
-          (existingUser && !isSyntheticPhoneEmail(existingUser.email) ? existingUser.email : undefined) ||
-          (email?.trim() || undefined);
-        const delivery = await dispatchPhoneVerificationChallenge({
-          phone: normalizedPhone,
+        const contacts = await resolveSupabaseUserContacts(svc, existingUser);
+        targetPhone = contacts.phone || targetPhone;
+        targetEmail = contacts.email || targetEmail;
+        targetName = contacts.name || targetName;
+      } else if (!pending && !targetPhone && !targetEmail) {
+        return res.status(400).json({ error: 'Phone number or email is required.' });
+      }
+
+      if (targetPhone || (svc && targetEmail)) {
+        const delivery = await dispatchDualAuthChallenge({
+          phone: targetPhone,
           email: targetEmail,
           purpose: otpType === 'recovery' ? 'recovery' : pending ? 'signup' : 'login',
-          name:
-            pending?.name ||
-            (typeof existingUser?.user_metadata?.name === 'string'
-              ? existingUser.user_metadata.name
-              : undefined),
+          name: targetName,
+          requireBoth: Boolean(targetPhone && targetEmail),
         });
         if (!delivery.ok) {
           return res.status(400).json({ error: delivery.error });
         }
-        return res.json({ ok: true, phone: normalizedPhone, provider: delivery.provider });
-      }
-
-      if (!email?.trim()) {
-        return res.status(400).json({ error: 'Phone number or email is required.' });
-      }
-      const trimmedEmail = email.trim();
-      if (isResendConfigured() && svc) {
-        const linkType = otpType === 'recovery' ? 'recovery' : 'magiclink';
-        const genRes = await svc.auth.admin.generateLink({
-          type: linkType,
-          email: trimmedEmail,
+        return res.json({
+          ok: true,
+          phone: targetPhone,
+          email: targetEmail,
+          channels: delivery.channels,
+          provider: delivery.provider,
         });
-        if (genRes.error) {
-          return res.status(400).json({ error: genRes.error.message });
-        }
-        const emailDelivery = await sendAuthOtpEmail({
-          to: trimmedEmail,
-          code: genRes.data?.properties?.email_otp,
-          actionLink: genRes.data?.properties?.action_link,
-          purpose: otpType === 'recovery' ? 'recovery' : 'signup',
-        });
-        if (!emailDelivery.ok) {
-          return res.status(400).json({
-            error: `Resend could not resend verification code: ${emailDelivery.error || 'Unknown error'}`,
-          });
-        }
-        return res.json({ ok: true, provider: 'resend' });
       }
 
       const supabase = createPublicSupabaseClient();
       const { error } = await supabase.auth.resend({
         type: 'signup',
-        email: trimmedEmail,
+        email: targetEmail!,
       });
       if (error) {
-        const otpFallback = await supabase.auth.signInWithOtp({ email: trimmedEmail });
+        const otpFallback = await supabase.auth.signInWithOtp({ email: targetEmail! });
         if (otpFallback.error) {
           const formatted = formatSupabaseEmailError(otpFallback.error.message, Boolean(svc));
           return res.status(formatted.status).json({ error: formatted.error });
         }
       }
-      return res.json({ ok: true });
+      return res.json({ ok: true, email: targetEmail, channels: ['email'] });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not resend code.';
       return res.status(500).json({ error: message });
@@ -1262,23 +1309,37 @@ async function createAppServer() {
             error: `No account registered with ${phoneCheck.normalized}.`,
           });
         }
-        const displayEmail = isSyntheticPhoneEmail(existingUser.email) ? undefined : existingUser.email;
-        const delivery = await dispatchPhoneVerificationChallenge({
-          phone: phoneCheck.normalized,
-          email: displayEmail,
+        const contacts = await resolveSupabaseUserContacts(svc, existingUser);
+        const resolvedPhone = contacts.phone || phoneCheck.normalized;
+        let actionLink: string | undefined;
+        if (contacts.email) {
+          const genRes = await svc.auth.admin.generateLink({
+            type: 'recovery',
+            email: contacts.email,
+            options: {
+              redirectTo: redirectTo || process.env.APP_URL || 'https://www.eventsbyyou.xyz',
+            },
+          });
+          if (!genRes.error) {
+            actionLink = genRes.data?.properties?.action_link;
+          }
+        }
+        const delivery = await dispatchDualAuthChallenge({
+          phone: resolvedPhone,
+          email: contacts.email,
           purpose: 'recovery',
-          name:
-            typeof existingUser.user_metadata?.name === 'string'
-              ? existingUser.user_metadata.name
-              : undefined,
+          name: contacts.name,
+          actionLink,
+          requireBoth: Boolean(resolvedPhone && contacts.email),
         });
         if (!delivery.ok) {
           return res.status(400).json({ error: delivery.error });
         }
         return res.json({
           ok: true,
-          phone: phoneCheck.normalized,
-          email: displayEmail,
+          phone: resolvedPhone,
+          email: contacts.email,
+          channels: delivery.channels,
           provider: delivery.provider,
         });
       }
@@ -1286,34 +1347,53 @@ async function createAppServer() {
       if (!email?.trim()) {
         return res.status(400).json({ error: 'Email address or phone number is required.' });
       }
-      const trimmedEmail = email.trim();
-      if (isResendConfigured() && svc) {
+      const emailCheck = validateStrictEmail(email.trim());
+      if (!emailCheck.ok) {
+        return res.status(400).json({ error: emailCheck.error });
+      }
+      const cleanEmail = emailCheck.normalized;
+
+      if (svc) {
+        const existingUser = await findSupabaseUserByEmail(svc, cleanEmail);
+        if (!existingUser) {
+          return res.status(404).json({
+            error: `No account registered with ${cleanEmail}.`,
+          });
+        }
+        const contacts = await resolveSupabaseUserContacts(svc, existingUser);
+        let actionLink: string | undefined;
         const genRes = await svc.auth.admin.generateLink({
           type: 'recovery',
-          email: trimmedEmail,
+          email: cleanEmail,
           options: {
             redirectTo: redirectTo || process.env.APP_URL || 'https://www.eventsbyyou.xyz',
           },
         });
-        if (genRes.error) {
-          return res.status(400).json({ error: genRes.error.message });
+        if (!genRes.error) {
+          actionLink = genRes.data?.properties?.action_link;
         }
-        const emailDelivery = await sendAuthOtpEmail({
-          to: trimmedEmail,
-          code: genRes.data?.properties?.email_otp,
-          actionLink: genRes.data?.properties?.action_link,
+        const delivery = await dispatchDualAuthChallenge({
+          phone: contacts.phone,
+          email: cleanEmail,
           purpose: 'recovery',
+          name: contacts.name,
+          actionLink,
+          requireBoth: Boolean(contacts.phone && cleanEmail),
         });
-        if (!emailDelivery.ok) {
-          return res.status(400).json({
-            error: `Resend could not send recovery instructions: ${emailDelivery.error || 'Unknown error'}`,
-          });
+        if (!delivery.ok) {
+          return res.status(400).json({ error: delivery.error });
         }
-        return res.json({ ok: true, provider: 'resend' });
+        return res.json({
+          ok: true,
+          phone: contacts.phone,
+          email: cleanEmail,
+          channels: delivery.channels,
+          provider: delivery.provider,
+        });
       }
 
       const supabase = createPublicSupabaseClient();
-      const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
+      const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
         redirectTo: redirectTo || process.env.APP_URL || 'https://www.eventsbyyou.xyz',
       });
       if (error) {
