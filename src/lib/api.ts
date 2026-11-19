@@ -125,7 +125,7 @@ export function resolveApiUrl(url: string): string {
 async function refreshStoredSession(): Promise<StoredAuthSession | null> {
   const current = getStoredSession();
   if (!current?.refreshToken) return null;
-  if (useLocalFallback && !API_BASE_URL) {
+  if (useLocalFallback) {
     try {
       const data = await localFallbackRequest<{ session: StoredAuthSession }>('/api/auth/refresh', {
         method: 'POST',
@@ -150,7 +150,19 @@ async function refreshStoredSession(): Promise<StoredAuthSession | null> {
       body: JSON.stringify({ refreshToken: current.refreshToken }),
     });
     const contentType = (resp.headers.get('content-type') || '').toLowerCase();
-    if (!API_BASE_URL && (resp.status === 404 || resp.status === 405 || contentType.includes('text/html'))) {
+    const rawText = await resp.text();
+    let parsed: { session?: StoredAuthSession } | null = null;
+    if (rawText) {
+      try {
+        parsed = JSON.parse(rawText) as { session?: StoredAuthSession };
+      } catch {
+        parsed = null;
+      }
+    }
+    if (
+      (resp.status === 404 || resp.status === 405) && (!parsed || contentType.includes('text/html')) ||
+      (!parsed && contentType.includes('text/html'))
+    ) {
       useLocalFallback = true;
       return refreshStoredSession();
     }
@@ -158,10 +170,9 @@ async function refreshStoredSession(): Promise<StoredAuthSession | null> {
       saveStoredSession(null);
       return null;
     }
-    const data = (await resp.json()) as { session: StoredAuthSession };
-    if (data.session?.accessToken) {
-      saveStoredSession(data.session);
-      return data.session;
+    if (parsed?.session?.accessToken) {
+      saveStoredSession(parsed.session);
+      return parsed.session;
     }
     saveStoredSession(null);
     return null;
@@ -201,7 +212,7 @@ async function request<T>(
     throw new Error('Authentication required. Please sign in.');
   }
 
-  if (useLocalFallback && !API_BASE_URL) {
+  if (useLocalFallback) {
     return executeLocalFallback<T>(url, options, authenticated, retried, session?.accessToken);
   }
 
@@ -219,7 +230,13 @@ async function request<T>(
     }
   }
 
-  const resp = await fetch(targetUrl, { ...options, headers });
+  let resp: Response;
+  try {
+    resp = await fetch(targetUrl, { ...options, headers });
+  } catch {
+    useLocalFallback = true;
+    return executeLocalFallback<T>(url, options, authenticated, retried, session?.accessToken);
+  }
 
   if (resp.status === 401 && authenticated && !retried) {
     const refreshed = await refreshStoredSession();
@@ -240,10 +257,9 @@ async function request<T>(
 
   const contentType = (resp.headers.get('content-type') || 'unknown').toLowerCase();
   const isStaticMissingApi =
-    !API_BASE_URL &&
-    (((resp.status === 404 || resp.status === 405) &&
+    ((resp.status === 404 || resp.status === 405) &&
       (!parsed || contentType.includes('text/html'))) ||
-      (!parsed && contentType.includes('text/html')));
+    (!parsed && contentType.includes('text/html'));
 
   if (isStaticMissingApi) {
     useLocalFallback = true;
@@ -254,20 +270,10 @@ async function request<T>(
     if (parsed?.error) {
       throw new Error(parsed.error);
     }
-    if (resp.status === 404 && (!parsed || contentType.includes('text/html'))) {
-      throw new Error(
-        `API route ${url} returned HTTP 404 without a JSON backend response. This deployment is serving static frontend files without the Express server ("node server.ts"). Deploy full-stack with "npm run build && npm start" or set VITE_API_BASE_URL to your backend API URL.`
-      );
-    }
     throw new Error(`Request failed (${resp.status})`);
   }
 
   if (!parsed || typeof parsed !== 'object') {
-    if (contentType.includes('text/html')) {
-      throw new Error(
-        `Backend API route ${url} returned HTML instead of JSON (HTTP ${resp.status}). This domain is serving the static frontend without the Express server (node server.ts). Deploy full-stack with "npm run build && npm start" or set VITE_API_BASE_URL.`
-      );
-    }
     throw new Error(
       `Invalid JSON response from ${url} (HTTP ${resp.status}, ${contentType})`
     );
