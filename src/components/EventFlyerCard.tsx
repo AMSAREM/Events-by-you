@@ -3,6 +3,7 @@ import { Calendar, Check, Copy, ExternalLink, MapPin, QrCode, ShieldCheck, Gift 
 import type { DesignTheme, EventItem } from '../types/events';
 import { getCategoryPreset } from '../data/initialData';
 import { buildEventInvitationUrl } from '../lib/qr';
+import { getContrastTextColor, hexWithAlpha, normalizeHexColor } from '../lib/themeColors';
 import { MonochromePoster } from './MonochromeArtwork';
 
 interface EventFlyerCardProps {
@@ -76,6 +77,8 @@ export const EventFlyerCard: React.FC<EventFlyerCardProps> = ({
     themeOverride || event.designTheme || preset.designTheme || 'obsidian-gold';
   const flyerSrc = event.flyerUrl || preset.flyerUrl;
   const styles = THEME_STYLES[theme];
+  const customBrand = normalizeHexColor(event.brandColor ?? event.extraDataConfig?.brandColor);
+  const customBrandText = customBrand ? getContrastTextColor(customBrand) : undefined;
   const inviteUrl = buildEventInvitationUrl(event.slug || event.id);
 
   useEffect(() => {
@@ -124,7 +127,14 @@ export const EventFlyerCard: React.FC<EventFlyerCardProps> = ({
         <div className="absolute top-5 left-5 right-5 flex items-center justify-between gap-2 z-10">
           <div className="flex items-center gap-1.5 min-w-0">
             <span
-              className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-[0.14em] whitespace-nowrap ${styles.kickerClass}`}
+              className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-[0.14em] whitespace-nowrap ${
+                customBrand ? '' : styles.kickerClass
+              }`}
+              style={
+                customBrand
+                  ? { backgroundColor: customBrand, color: customBrandText }
+                  : undefined
+              }
             >
               {event.category}
             </span>
@@ -149,7 +159,10 @@ export const EventFlyerCard: React.FC<EventFlyerCardProps> = ({
 
         {/* Bottom Poster Typography Block */}
         <div className="absolute bottom-5 left-5 right-5 z-10">
-          <div className={`pt-3 border-t ${styles.accentLineClass}`}>
+          <div
+            className={`pt-3 border-t ${customBrand ? '' : styles.accentLineClass}`}
+            style={customBrand ? { borderTopColor: hexWithAlpha(customBrand, 0.55) } : undefined}
+          >
             <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-white/75 truncate">
               {event.organizer} Presents
             </p>
@@ -191,7 +204,12 @@ export const EventFlyerCard: React.FC<EventFlyerCardProps> = ({
               <button
                 type="button"
                 onClick={() => onOpenInvite(event)}
-                className="flex-1 min-w-[120px] h-9 px-3.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 transition-colors inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                className="flex-1 min-w-[120px] h-9 px-3.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:opacity-90 transition-opacity inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                style={
+                  customBrand
+                    ? { backgroundColor: customBrand, color: customBrandText }
+                    : undefined
+                }
               >
                 <ExternalLink className="w-3.5 h-3.5" />
                 <span>Open Invite</span>

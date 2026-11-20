@@ -54,8 +54,10 @@ import {
   DeterministicQrSvg,
   downloadQrSvg,
 } from '../lib/qr';
+import { resolveEventBrandColor } from '../lib/themeColors';
 import { GiftAttendantLinksCard } from './GiftAttendantLinksCard';
 import { MonochromePoster, SplineChart } from './MonochromeArtwork';
+import { ThemeColorPicker } from './ThemeColorPicker';
 import { TopUtilityBar } from './TopUtilityBar';
 
 type WorkspaceTab =
@@ -708,8 +710,15 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           {/* Event Details & Live Workspace Counters */}
           <div className="lg:col-span-7 flex flex-col justify-between gap-5 min-w-0">
             <div>
-              <div className="text-[11px] font-medium uppercase text-[#71717A] tracking-wider mb-1">
-                {event.category} · {event.designTheme || getCategoryPreset(event.category).designTheme} Theme
+              <div className="text-[11px] font-medium uppercase text-[#71717A] tracking-wider mb-1 flex items-center gap-2">
+                <span>
+                  {event.category} · {event.designTheme || getCategoryPreset(event.category).designTheme} Theme
+                </span>
+                <span
+                  className="inline-block w-2.5 h-2.5 rounded-full border border-black/15"
+                  style={{ backgroundColor: resolveEventBrandColor(event) }}
+                  title={`Brand color ${resolveEventBrandColor(event)}`}
+                />
               </div>
               <h1 className="font-display text-[26px] sm:text-[34px] leading-tight font-bold text-[#0B0B0B] tracking-[-0.03em] mb-2">
                 {event.title}
@@ -866,6 +875,33 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   </span>
                 </div>
               </div>
+
+              {isEventCreator && onUpdateEvent && (
+                <div className="pt-3 border-t border-[#E5E5EA]">
+                  <ThemeColorPicker
+                    designTheme={event.designTheme || getCategoryPreset(event.category).designTheme}
+                    brandColor={event.brandColor ?? event.extraDataConfig?.brandColor}
+                    onChangeTheme={(nextTheme) => {
+                      void onUpdateEvent({
+                        ...event,
+                        designTheme: nextTheme,
+                      });
+                    }}
+                    onChangeBrandColor={(nextColor) => {
+                      const presetCfg = getCategoryPreset(event.category).extraDataConfig;
+                      void onUpdateEvent({
+                        ...event,
+                        brandColor: nextColor,
+                        extraDataConfig: {
+                          ...(event.extraDataConfig ?? presetCfg),
+                          brandColor: nextColor,
+                        },
+                      });
+                    }}
+                    title="Live Event Theme & Brand Color"
+                  />
+                </div>
+              )}
             </section>
           )}
 

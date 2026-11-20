@@ -32,6 +32,7 @@ import { buildCameraLinkForOrigin, getDefaultMessageConfig } from '../lib/eventM
 import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
 import { EventFlyerCard } from './EventFlyerCard';
 import { MonochromePoster } from './MonochromeArtwork';
+import { ThemeColorPicker } from './ThemeColorPicker';
 
 interface CreateEventWizardScreenProps {
   profile: OrganizerProfile;
@@ -85,6 +86,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
 
   const [flyerUrl, setFlyerUrl] = useState<string>(initialPreset.flyerUrl);
   const [designTheme, setDesignTheme] = useState<DesignTheme>(initialPreset.designTheme);
+  const [brandColor, setBrandColor] = useState<string | undefined>(undefined);
   const [flyerFailed, setFlyerFailed] = useState(false);
   const [artwork, setArtwork] = useState<ArtworkVariant>('architecture');
 
@@ -206,6 +208,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     setFlyerUrl(catPreset.flyerUrl);
     setFlyerFailed(false);
     setDesignTheme(catPreset.designTheme);
+    setBrandColor(undefined);
     setValidationEnabled(catPreset.validationConfig.enabled);
     setValidationLabel(catPreset.validationConfig.label);
     setValidationOptionsText(catPreset.validationConfig.options.join(', '));
@@ -264,6 +267,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
         artwork,
         flyerUrl: flyerUrl || preset.flyerUrl,
         designTheme,
+        brandColor,
         validationConfig: {
           enabled: validationEnabled,
           label: validationLabel.trim() || preset.validationConfig.label,
@@ -277,6 +281,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
           momoNumber: momoNumber.trim() || undefined,
           momoName: profile.studio || profile.name,
           giftRegistryItems: preset.extraDataConfig.giftRegistryItems,
+          brandColor,
           customFields,
         },
         venueFormat,
@@ -334,6 +339,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     artwork,
     flyerUrl,
     designTheme,
+    brandColor,
     validationConfig: {
       enabled: validationEnabled,
       label: validationLabel,
@@ -344,6 +350,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     },
     extraDataConfig: {
       enableGiftTable,
+      brandColor,
       customFields,
     },
   };
@@ -725,35 +732,14 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                   </span>
                 </div>
 
-                {/* Editorial Theme Styles */}
-                <div>
-                  <label className="block text-xs font-semibold text-[#0B0B0B] mb-2">
-                    Graphic Design Theme
-                  </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {(
-                      [
-                        { id: 'editorial-ivory', label: 'Editorial Ivory' },
-                        { id: 'obsidian-gold', label: 'Obsidian Gold' },
-                        { id: 'swiss-grid', label: 'Swiss Grid' },
-                        { id: 'warm-monochrome', label: 'Monochrome' },
-                      ] as const
-                    ).map((t) => (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => setDesignTheme(t.id)}
-                        className={`h-10 rounded-2xl text-xs font-semibold border transition-colors ${
-                          designTheme === t.id
-                            ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
-                            : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
-                        }`}
-                      >
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                {/* Editorial Theme & Custom Brand Color Picker */}
+                <ThemeColorPicker
+                  designTheme={designTheme}
+                  brandColor={brandColor}
+                  onChangeTheme={setDesignTheme}
+                  onChangeBrandColor={setBrandColor}
+                  title="Editorial Theme & Brand Color Palette"
+                />
 
                 {/* Curated Studio Flyer Presets */}
                 <div>

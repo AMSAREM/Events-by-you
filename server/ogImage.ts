@@ -1,5 +1,6 @@
 import type { DesignTheme, EventItem } from '../src/types/events.ts';
 import { getCategoryPreset } from '../src/data/initialData.ts';
+import { getContrastTextColor, normalizeHexColor } from '../src/lib/themeColors.ts';
 
 export function escapeXml(str: string): string {
   return String(str)
@@ -86,7 +87,16 @@ const OG_THEME_PALETTE: Record<
 export function buildEventOgSvg(event: EventItem, baseUrl: string): string {
   const preset = getCategoryPreset(event.category);
   const theme: DesignTheme = event.designTheme || preset.designTheme || 'obsidian-gold';
-  const palette = OG_THEME_PALETTE[theme];
+  const basePalette = OG_THEME_PALETTE[theme];
+  const customBrand = normalizeHexColor(event.brandColor ?? event.extraDataConfig?.brandColor);
+  const palette = customBrand
+    ? {
+        ...basePalette,
+        border: customBrand,
+        accent: customBrand,
+        accentText: getContrastTextColor(customBrand),
+      }
+    : basePalette;
 
   const titleLines = wrapLines(event.title, 30, 3);
   const subtitleLines = wrapLines(event.subtitle || 'Hosted with Events App', 58, 2);

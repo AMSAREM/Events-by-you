@@ -13,6 +13,7 @@ import type {
   SystemAlert,
 } from '../src/types/events.ts';
 import { isSyntheticPhoneEmail } from './phoneAuth.ts';
+import { normalizeHexColor } from '../src/lib/themeColors.ts';
 
 export function getSupabaseConfig() {
   const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
@@ -118,7 +119,51 @@ export function mapProfileRow(row: Record<string, unknown>, fallbackEmail = ''):
   };
 }
 
+export function extractEventAttendeeMetaMap(
+  rawExtraConfig: unknown
+): Record<string, { validationGroup?: string; inviteCodeUsed?: string; giftEntry?: Attendee['giftEntry']; customResponses?: Record<string, string> }> {
+  if (!rawExtraConfig || typeof rawExtraConfig !== 'object') return {};
+  const map = (rawExtraConfig as Record<string, unknown>).__attendeeMeta;
+  if (!map || typeof map !== 'object') return {};
+  return map as Record<
+    string,
+    {
+      validationGroup?: string;
+      inviteCodeUsed?: string;
+      giftEntry?: Attendee['giftEntry'];
+      customResponses?: Record<string, string>;
+    }
+  >;
+}
+
+export function extractEventShotShootersMap(rawExtraConfig: unknown): Record<string, string> {
+  if (!rawExtraConfig || typeof rawExtraConfig !== 'object') return {};
+  const map = (rawExtraConfig as Record<string, unknown>).__shotShooters;
+  if (!map || typeof map !== 'object') return {};
+  return map as Record<string, string>;
+}
+
 export function mapEventRow(row: Record<string, unknown>): EventItem {
+  const rawExtraObj =
+    row.extra_data_config && typeof row.extra_data_config === 'object'
+      ? ({ ...(row.extra_data_config as Record<string, unknown>) })
+      : undefined;
+  const embeddedMessageConfig =
+    rawExtraObj?.__messageConfig && typeof rawExtraObj.__messageConfig === 'object'
+      ? (rawExtraObj.__messageConfig as EventItem['messageConfig'])
+      : undefined;
+
+  if (rawExtraObj) {
+    delete rawExtraObj.__messageConfig;
+    delete rawExtraObj.__attendeeMeta;
+    delete rawExtraObj.__shotShooters;
+  }
+
+  const rawExtra = rawExtraObj as EventItem['extraDataConfig'] | undefined;
+  const resolvedBrandColor = normalizeHexColor(
+    row.brand_color != null ? String(row.brand_color) : rawExtra?.brandColor
+  );
+
   return {
     id: String(row.id),
     slug: String(row.slug),
@@ -140,6 +185,7 @@ export function mapEventRow(row: Record<string, unknown>): EventItem {
     organizer: String(row.organizer ?? 'Organiser'),
     artwork: (row.artwork as EventItem['artwork']) || 'architecture',
     designTheme: (row.design_theme as EventItem['designTheme']) || undefined,
+    brandColor: resolvedBrandColor,
     broadcastError: row.broadcast_error != null ? String(row.broadcast_error) : undefined,
     flyerUrl: row.flyer_url != null ? String(row.flyer_url) : undefined,
     venueFormat:
@@ -153,20 +199,11 @@ export function mapEventRow(row: Record<string, unknown>): EventItem {
       row.validation_config && typeof row.validation_config === 'object'
         ? (row.validation_config as EventItem['validationConfig'])
         : undefined,
-    extraDataConfig:
-      row.extra_data_config && typeof row.extra_data_config === 'object'
-        ? (row.extra_data_config as EventItem['extraDataConfig'])
-        : undefined,
+    extraDataConfig: rawExtra,
     messageConfig:
       row.message_config && typeof row.message_config === 'object'
         ? (row.message_config as EventItem['messageConfig'])
-        : row.extra_data_config &&
-            typeof row.extra_data_config === 'object' &&
-            (row.extra_data_config as Record<string, unknown>).__messageConfig &&
-            typeof (row.extra_data_config as Record<string, unknown>).__messageConfig === 'object'
-          ? ((row.extra_data_config as Record<string, unknown>)
-              .__messageConfig as EventItem['messageConfig'])
-          : undefined,
+        : embeddedMessageConfig,
   };
 }
 
@@ -296,14 +333,16 @@ export async function ensureProfileRow(
   client: SupabaseClient,
   user: User
 ): Promise<OrganizerProfile> {
-  const rawUserPhone =
-    (typeof user.phone === 'string' && user.phone.trim()) ||
-    (typeof user.user_metadata?.phone === 'string' && user.user_metadata.phone.trim()) ||
-    '';
+  const phoneExplicitlyCleared = user.user_metadata?.phone === null;
+  const rawUserPhone = phoneExplicitlyCleared
+    ? ''
+    : (typeof user.user_metadata?.phone === 'string' && user.user_metadata.phone.trim()) ||
+      (typeof user.phone === 'string' && user.phone.trim()) ||
+      '';
   const resolvedPhone = rawUserPhone ? normalizePhoneE164(rawUserPhone) : '';
-  const resolvedPhoneVerified = Boolean(
-    user.phone_confirmed_at || user.user_metadata?.phone_verified
-  );
+  const resolvedPhoneVerified = phoneExplicitlyCleared
+    ? false
+    : Boolean(user.phone_confirmed_at || user.user_metadata?.phone_verified);
 
   const { data: existing, error: selectErr } = await client
     .from('profiles')

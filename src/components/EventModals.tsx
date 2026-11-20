@@ -26,6 +26,7 @@ import { getCategoryPreset } from '../data/initialData';
 import { STUDIO_FLYER_PRESETS, compressFlyerImageFile } from '../lib/flyerUpload';
 import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
 import { CircularGauge, MonochromePoster } from './MonochromeArtwork';
+import { ThemeColorPicker } from './ThemeColorPicker';
 
 interface CreateEventModalProps {
   organizerName?: string;
@@ -59,6 +60,8 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const [status, setStatus] = useState<EventStatus>('upcoming');
   const [publishQrPass, setPublishQrPass] = useState(true);
   const [artwork, setArtwork] = useState<ArtworkVariant>('architecture');
+  const [designTheme, setDesignTheme] = useState<DesignTheme>('obsidian-gold');
+  const [brandColor, setBrandColor] = useState<string | undefined>(undefined);
   const [customFlyerUrl, setCustomFlyerUrl] = useState<string>('');
   const createFlyerInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -102,9 +105,13 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       organizer: organizerName,
       artwork,
       flyerUrl: customFlyerUrl || preset.flyerUrl,
-      designTheme: preset.designTheme,
+      designTheme,
+      brandColor,
       validationConfig: preset.validationConfig,
-      extraDataConfig: preset.extraDataConfig,
+      extraDataConfig: {
+        ...preset.extraDataConfig,
+        brandColor,
+      },
       qrPassPublished: status === 'draft' ? false : publishQrPass,
     };
     onCreate(newEvent);
@@ -240,7 +247,11 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
               <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5">Category</label>
               <select
                 value={category}
-                onChange={(e) => setCategory(e.target.value)}
+                onChange={(e) => {
+                  const nextCat = e.target.value;
+                  setCategory(nextCat);
+                  setDesignTheme(getCategoryPreset(nextCat).designTheme);
+                }}
                 className="w-full h-11 px-4 rounded-2xl bg-[#F5F5F7] text-sm text-[#0B0B0B] border border-transparent focus:bg-white focus:border-[#0B0B0B] focus:outline-none"
               >
                 <option value="Events">Events &amp; Celebrations</option>
@@ -339,6 +350,17 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
             </div>
           </div>
 
+          <div className="p-3.5 rounded-2xl bg-[#F5F5F7]">
+            <ThemeColorPicker
+              compact
+              designTheme={designTheme}
+              brandColor={brandColor}
+              onChangeTheme={setDesignTheme}
+              onChangeBrandColor={setBrandColor}
+              title="Event Theme & Brand Colors"
+            />
+          </div>
+
           <div className="p-3.5 rounded-2xl bg-[#F5F5F7] flex items-center justify-between gap-3">
             <div>
               <p className="text-xs font-semibold text-[#0B0B0B]">
@@ -420,13 +442,18 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   const [designDraft, setDesignDraft] = useState<DesignTheme>(
     event.designTheme ?? preset.designTheme
   );
+  const [brandColorDraft, setBrandColorDraft] = useState<string | undefined>(
+    event.brandColor ?? event.extraDataConfig?.brandColor
+  );
   const [flyerDraft, setFlyerDraft] = useState<string>(event.flyerUrl || preset.flyerUrl);
   const [flyerSavedToast, setFlyerSavedToast] = useState(false);
   const detailFlyerInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     setFlyerDraft(event.flyerUrl || preset.flyerUrl);
-  }, [event.id, event.flyerUrl, preset.flyerUrl]);
+    setDesignDraft(event.designTheme ?? preset.designTheme);
+    setBrandColorDraft(event.brandColor ?? event.extraDataConfig?.brandColor);
+  }, [event.id, event.flyerUrl, event.designTheme, event.brandColor, event.extraDataConfig?.brandColor, preset.flyerUrl, preset.designTheme]);
 
   const pct = Math.round((event.registered / Math.max(1, event.capacity)) * 100);
   const isAtCeiling = pct >= capacityThreshold;
@@ -500,7 +527,12 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     onUpdateEvent({
       ...event,
       designTheme: designDraft,
+      brandColor: brandColorDraft,
       flyerUrl: nextFlyerUrl,
+      extraDataConfig: {
+        ...(event.extraDataConfig ?? preset.extraDataConfig),
+        brandColor: brandColorDraft,
+      },
     });
     setFlyerSavedToast(true);
     setTimeout(() => setFlyerSavedToast(false), 2200);
@@ -514,6 +546,7 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     onUpdateEvent({
       ...event,
       designTheme: designDraft,
+      brandColor: brandColorDraft,
       flyerUrl: flyerSrc,
       validationConfig: {
         ...(event.validationConfig ?? preset.validationConfig),
@@ -526,6 +559,7 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
       extraDataConfig: {
         ...(event.extraDataConfig ?? preset.extraDataConfig),
         momoNumber: momoDraft.trim() || undefined,
+        brandColor: brandColorDraft,
       },
     });
     setFlyerSavedToast(true);
@@ -836,27 +870,17 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
               onClick={handleSaveFormsAndTheme}
               className="px-3.5 py-1.5 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold"
             >
-              Save Form Config
+              Save Theme &amp; Config
             </button>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-            {(['editorial-ivory', 'obsidian-gold', 'swiss-grid', 'warm-monochrome'] as DesignTheme[]).map(
-              (themeId) => (
-                <button
-                  key={themeId}
-                  type="button"
-                  onClick={() => setDesignDraft(themeId)}
-                  className={`py-1.5 px-2.5 rounded-full text-[11px] font-semibold border capitalize ${
-                    designDraft === themeId
-                      ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
-                      : 'bg-white text-[#0B0B0B] border-[#E5E5EA]'
-                  }`}
-                >
-                  {themeId.replace('-', ' ')}
-                </button>
-              )
-            )}
-          </div>
+          <ThemeColorPicker
+            compact
+            designTheme={designDraft}
+            brandColor={brandColorDraft}
+            onChangeTheme={setDesignDraft}
+            onChangeBrandColor={setBrandColorDraft}
+            title="Poster Theme & Brand Accent Color"
+          />
           <div>
             <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
               Guest Validation Circles (comma separated)

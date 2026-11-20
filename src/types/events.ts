@@ -131,6 +131,7 @@ export interface EventExtraDataConfig {
   giftRegistryItems?: string[];
   giftLedger?: GiftTableEntry[];
   attendantLinks?: GiftTableAttendantLink[];
+  brandColor?: string;
   customFields: CustomFormField[];
 }
 
@@ -172,6 +173,7 @@ export interface EventItem {
   organizer: string;
   artwork: ArtworkVariant;
   designTheme?: DesignTheme;
+  brandColor?: string;
   broadcastError?: string;
   flyerUrl?: string;
   venueFormat?: 'in-person' | 'virtual' | 'hybrid';

@@ -27,6 +27,7 @@ import {
 } from '../data/initialData';
 import { api } from '../lib/api';
 import { EventItem, OrganizerProfile, SystemAlert } from '../types/events';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface SettingsScreenProps {
   profile: OrganizerProfile;
@@ -1241,6 +1242,23 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
+          </section>
+
+          {/* Instant App Installation (PWA) */}
+          <section className="bg-[#F5F5F7] rounded-3xl p-6 transition-all hover:bg-white hover:border hover:border-[#E5E5EA] hover:shadow-md border border-transparent">
+            <div className="mb-3">
+              <span className="text-[11px] font-medium text-[#71717A] uppercase tracking-widest block">
+                Desktop &amp; Mobile App
+              </span>
+              <h2 className="font-display text-[22px] font-bold tracking-[-0.02em] text-[#0B0B0B]">
+                Install Events App
+              </h2>
+            </div>
+            <p className="text-xs text-[#71717A] mb-4 leading-relaxed">
+              Install Events App directly onto your phone or laptop home screen for instant launch
+              and offline-ready QR gate check-ins.
+            </p>
+            <PWAInstallButton variant="card" label="Install App Now" />
           </section>
 
           {/* Developer & Arkesel Webhook Specifications */}

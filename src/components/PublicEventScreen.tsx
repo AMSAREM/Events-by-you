@@ -49,6 +49,8 @@ import {
   DeterministicQrSvg,
   downloadQrSvg,
 } from '../lib/qr';
+import { getContrastTextColor, hexWithAlpha, normalizeHexColor } from '../lib/themeColors';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface PublicEventScreenProps {
   events: EventItem[];
@@ -753,6 +755,10 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     selectedEvent.designTheme || categoryPreset.designTheme || 'obsidian-gold';
   const themeFrame = HERO_THEME_FRAME[activeDesignTheme];
   const heroFlyerSrc = selectedEvent.flyerUrl || categoryPreset.flyerUrl;
+  const customBrand = normalizeHexColor(
+    selectedEvent.brandColor ?? selectedEvent.extraDataConfig?.brandColor
+  );
+  const customBrandText = customBrand ? getContrastTextColor(customBrand) : undefined;
 
   const occupancyPct = Math.min(
     100,
@@ -1165,6 +1171,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   type="submit"
                   disabled={submitting}
                   className="w-full h-14 bg-[#0B0B0B] hover:opacity-90 active:scale-[0.99] disabled:opacity-60 text-white text-base font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
+                  style={
+                    customBrand
+                      ? { backgroundColor: customBrand, color: customBrandText }
+                      : undefined
+                  }
                 >
                   <span>
                     {submitting
@@ -1364,6 +1375,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 </select>
               </>
             )}
+            <PWAInstallButton variant="header-light" />
             <button
               type="button"
               onClick={() => setShowCheckinModal(true)}
@@ -2029,14 +2041,24 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   )}
                   <div className={`absolute inset-0 ${themeFrame.scrim}`} />
                   <div
-                    className={`absolute inset-3 sm:inset-4 rounded-[24px] border ${themeFrame.borderClass} pointer-events-none`}
+                    className={`absolute inset-3 sm:inset-4 rounded-[24px] border ${
+                      customBrand ? '' : themeFrame.borderClass
+                    } pointer-events-none`}
+                    style={customBrand ? { borderColor: hexWithAlpha(customBrand, 0.5) } : undefined}
                   />
 
                   {/* Top Designer Stamp Bar */}
                   <div className="relative z-10 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span
-                        className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full shadow-sm ${themeFrame.badgeClass}`}
+                        className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full shadow-sm ${
+                          customBrand ? '' : themeFrame.badgeClass
+                        }`}
+                        style={
+                          customBrand
+                            ? { backgroundColor: customBrand, color: customBrandText }
+                            : undefined
+                        }
                       >
                         {selectedEvent.category}
                       </span>
@@ -2068,7 +2090,12 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                             .getElementById('register-section')
                             ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                         }}
-                        className="bg-white hover:bg-zinc-100 text-[#0B0B0B] text-[11px] font-bold px-3.5 py-1.5 rounded-full shadow-sm transition-colors"
+                        className="bg-white hover:opacity-90 text-[#0B0B0B] text-[11px] font-bold px-3.5 py-1.5 rounded-full shadow-sm transition-all"
+                        style={
+                          customBrand
+                            ? { backgroundColor: customBrand, color: customBrandText }
+                            : undefined
+                        }
                       >
                         {!isQrPassPublished
                           ? 'QR Pending'
@@ -2121,7 +2148,10 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   <div className="w-full h-2 rounded-full bg-[#E2E2E4] overflow-hidden">
                     <div
                       className="h-full bg-[#0B0B0B] rounded-full transition-all duration-300"
-                      style={{ width: `${occupancyPct}%` }}
+                      style={{
+                        width: `${occupancyPct}%`,
+                        backgroundColor: customBrand || '#0B0B0B',
+                      }}
                     />
                   </div>
                 </div>
@@ -2231,7 +2261,10 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               {/* Event Overview */}
               <section className="bg-white rounded-[28px] p-5 shadow-sm space-y-3">
                 <div className="flex items-center gap-2">
-                  <span className="w-1.5 h-4 bg-[#0B0B0B] rounded-full" />
+                  <span
+                    className="w-1.5 h-4 bg-[#0B0B0B] rounded-full"
+                    style={customBrand ? { backgroundColor: customBrand } : undefined}
+                  />
                   <h3 className="text-base font-semibold text-[#0B0B0B]">
                     About this {selectedEvent.category}
                   </h3>
@@ -2422,7 +2455,14 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 <div className="flex items-start justify-between gap-2 mb-4">
                   <div>
                     <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-                      <span className="inline-block px-2.5 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[11px] font-medium tracking-wider uppercase">
+                      <span
+                        className="inline-block px-2.5 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[11px] font-medium tracking-wider uppercase"
+                        style={
+                          customBrand
+                            ? { backgroundColor: customBrand, color: customBrandText }
+                            : undefined
+                        }
+                      >
                         Fast Pass Attendee
                       </span>
                       {issuedPass.validationGroup && (

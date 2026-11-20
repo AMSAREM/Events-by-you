@@ -9,6 +9,7 @@ import {
   INITIAL_SCHEDULE,
   normalizePhoneE164,
 } from '../src/data/initialData.ts';
+import { normalizeHexColor } from '../src/lib/themeColors.ts';
 import type {
   AppRole,
   Attendee,
@@ -1138,10 +1139,14 @@ export const memoryStore = {
     const uniqueSlug = slugTaken ? `${baseSlug}-${crypto.randomBytes(2).toString('hex')}` : baseSlug;
     const uniqueEventId = `evt-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
 
+    const createdBrandColor = normalizeHexColor(
+      event.brandColor ?? event.extraDataConfig?.brandColor
+    );
     const created: EventItem = {
       ...event,
       id: uniqueEventId,
       slug: uniqueSlug,
+      brandColor: createdBrandColor,
       qrPassPublished: event.status === 'draft' ? false : Boolean(event.qrPassPublished),
     };
     db.events.set(uniqueEventId, { ...created, organizerId: userId });
@@ -1169,11 +1174,16 @@ export const memoryStore = {
       throw err;
     }
     const nextStatus = updated.status ?? existing.status;
+    const nextBrandColor =
+      updated.brandColor === undefined
+        ? existing.brandColor
+        : normalizeHexColor(updated.brandColor);
     const next = {
       ...existing,
       ...updated,
       id: eventId,
       organizerId: userId,
+      brandColor: nextBrandColor,
       qrPassPublished:
         nextStatus === 'draft'
           ? false

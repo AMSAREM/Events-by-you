@@ -875,6 +875,42 @@ export async function localFallbackRequest<T>(
     return { attendee, event: cleanEvent } as T;
   }
 
+  const publicLookupMatch = path.match(/^\/public\/events\/([^/]+)\/pass-lookup$/);
+  if (method === 'POST' && publicLookupMatch) {
+    const target = decodeURIComponent(publicLookupMatch[1]).trim().toLowerCase();
+    const raw = String(body.query || '').trim();
+    if (!raw) throw new LocalApiError('Enter your pass code, phone number, or email.', 400);
+    const evt = db.events.find(
+      (e) =>
+        (e.status === 'live' || e.status === 'upcoming') &&
+        (e.id.toLowerCase() === target || e.slug.toLowerCase() === target)
+    );
+    if (!evt) throw new LocalApiError('Event not found or no longer active.', 404);
+    const cleanLower = raw.toLowerCase();
+    const cleanCode = cleanLower.replace(/^#/, '');
+    const digitsOnly = raw.replace(/\D/g, '');
+    const normalizedLookupPhone = digitsOnly.length >= 9 ? normalizePhoneE164(raw) : '';
+    const match = db.attendees.find((att) => {
+      if (att.eventId !== evt.id) return false;
+      const attCode = att.ticketCode.toLowerCase().replace(/^#/, '');
+      const attPhone = att.phone.replace(/\s+/g, '');
+      const attDigits = att.phone.replace(/\D/g, '');
+      return (
+        attCode === cleanCode ||
+        att.email.toLowerCase() === cleanLower ||
+        (normalizedLookupPhone && attPhone === normalizedLookupPhone) ||
+        (digitsOnly.length >= 9 && attDigits.endsWith(digitsOnly.slice(-9)))
+      );
+    });
+    if (!match) {
+      throw new LocalApiError(
+        `No registered pass found for "${raw}". Use New Guest Check-In to validate your circle and generate a QR pass.`,
+        404
+      );
+    }
+    return { attendee: match } as T;
+  }
+
   const publicGiftMatch = path.match(/^\/public\/events\/([^/]+)\/gifts$/);
   if (method === 'POST' && publicGiftMatch) {
     const target = decodeURIComponent(publicGiftMatch[1]).trim().toLowerCase();
@@ -1425,6 +1461,42 @@ export async function localFallbackRequest<T>(
     }
     saveDb(db);
     return { attendee: att } as T;
+  }
+
+  if (method === 'POST' && path === '/studio/broadcast') {
+    requireRoles(user, ['creator', 'organizer']);
+    const message = String(body.message || '').trim();
+    const attendeeIds = Array.isArray(body.attendeeIds) ? body.attendeeIds.map(String) : [];
+    if (!message) throw new LocalApiError('Broadcast message text is required.', 400);
+    if (attendeeIds.length === 0) {
+      throw new LocalApiError('Select at least one recipient for the broadcast.', 400);
+    }
+    const ownedEventIds = new Set(
+      db.events.filter((e) => e.organizerId === user.id).map((e) => e.id)
+    );
+    const idSet = new Set(attendeeIds);
+    const recipients = db.attendees.filter((a) => idSet.has(a.id) && ownedEventIds.has(a.eventId));
+    if (recipients.length === 0) {
+      throw new LocalApiError('No matching attendees found in your studio.', 404);
+    }
+    const touchedIds = new Set<string>();
+    for (const att of recipients) {
+      const evt = db.events.find((e) => e.id === att.eventId);
+      if (evt) {
+        evt.smsDispatched += 1;
+        touchedIds.add(evt.id);
+      }
+    }
+    saveDb(db);
+    const updatedEvents = db.events
+      .filter((e) => touchedIds.has(e.id))
+      .map(({ organizerId: _org, ...clean }) => clean);
+    return {
+      ok: true,
+      recipientCount: recipients.length,
+      sentCount: recipients.length,
+      events: updatedEvents,
+    } as T;
   }
 
   if (method === 'POST' && path === '/studio/schedule') {

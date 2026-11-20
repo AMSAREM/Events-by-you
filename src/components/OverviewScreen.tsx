@@ -25,6 +25,7 @@ import { computeVelocitySeries, getCategoryPreset } from '../data/initialData';
 import { compressFlyerImageFile } from '../lib/flyerUpload';
 import { CircularGauge, MonochromePoster, SplineChart } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface OverviewScreenProps {
   events: EventItem[];
@@ -281,6 +282,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
               >
                 All Productions
               </button>
+              <PWAInstallButton variant="header-light" />
               {onOpenGuide && (
                 <button
                   type="button"

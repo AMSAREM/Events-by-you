@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { AppRole, NavScreen } from '../types/events';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface NavigationRailProps {
   activeScreen: NavScreen;
@@ -142,8 +143,9 @@ export const NavigationRail: React.FC<NavigationRailProps> = ({
           })}
         </nav>
 
-        {/* Bottom Settings & Log Out Controls */}
+        {/* Bottom Settings, Install App & Log Out Controls */}
         <div className="flex flex-col items-center gap-1 lg:gap-1.5 shrink-0">
+          <PWAInstallButton variant="rail" />
           <button
             type="button"
             onClick={() => onNavigate('settings')}
@@ -297,6 +299,13 @@ export const NavigationRail: React.FC<NavigationRailProps> = ({
                   <p className="text-[10px] text-zinc-400 truncate">Live showcase &amp; invitations</p>
                 </div>
               </button>
+
+              <div className="col-span-2">
+                <PWAInstallButton
+                  variant="menu-row"
+                  onActionComplete={() => setMobileSheet('none')}
+                />
+              </div>
             </div>
           </div>
         </div>

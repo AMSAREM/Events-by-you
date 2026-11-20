@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
+import http from 'node:http';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,6 +11,8 @@ import {
   createServiceSupabaseClient,
   createUserSupabaseClient,
   ensureProfileRow,
+  extractEventAttendeeMetaMap,
+  extractEventShotShootersMap,
   findSupabaseUserByEmail,
   findSupabaseUserByPhone,
   isSupabaseConfigured,
@@ -24,6 +27,7 @@ import {
   mapShotRow,
   resolveSupabaseUserContacts,
 } from './server/supabase.ts';
+import { normalizeHexColor } from './src/lib/themeColors.ts';
 import {
   INITIAL_ALERTS,
   INITIAL_ATTENDEES,
@@ -173,14 +177,156 @@ function stripOptionalEventColumns<T extends Record<string, unknown>>(
 
 function withEmbeddedMessageConfig(
   extraDataConfig: EventItem['extraDataConfig'] | undefined,
-  messageConfig: EventItem['messageConfig'] | undefined
+  messageConfig: EventItem['messageConfig'] | undefined,
+  brandColor?: string,
+  existingRawExtra?: unknown
 ): Record<string, unknown> | null {
-  if (!extraDataConfig && !messageConfig) return null;
-  const base = extraDataConfig && typeof extraDataConfig === 'object' ? { ...extraDataConfig } : {};
-  if (messageConfig && typeof messageConfig === 'object') {
-    (base as Record<string, unknown>).__messageConfig = messageConfig;
+  const normalizedColor = normalizeHexColor(brandColor);
+  const existingObj =
+    existingRawExtra && typeof existingRawExtra === 'object'
+      ? (existingRawExtra as Record<string, unknown>)
+      : {};
+  const hasIncomingExtra = Boolean(extraDataConfig && typeof extraDataConfig === 'object');
+  if (!hasIncomingExtra && !messageConfig && !normalizedColor && Object.keys(existingObj).length === 0) {
+    return null;
   }
-  return base as Record<string, unknown>;
+  const base: Record<string, unknown> = hasIncomingExtra
+    ? { ...(extraDataConfig as unknown as Record<string, unknown>) }
+    : { ...existingObj };
+
+  // Preserve server-managed or omitted collection fields so partial updates never wipe them
+  if (existingObj.__attendeeMeta !== undefined) {
+    base.__attendeeMeta = existingObj.__attendeeMeta;
+  }
+  if (existingObj.__shotShooters !== undefined) {
+    base.__shotShooters = existingObj.__shotShooters;
+  }
+  if (hasIncomingExtra) {
+    if ((extraDataConfig as EventItem['extraDataConfig'])?.giftLedger === undefined && existingObj.giftLedger !== undefined) {
+      base.giftLedger = existingObj.giftLedger;
+    }
+    if ((extraDataConfig as EventItem['extraDataConfig'])?.attendantLinks === undefined && existingObj.attendantLinks !== undefined) {
+      base.attendantLinks = existingObj.attendantLinks;
+    }
+  }
+  if (messageConfig && typeof messageConfig === 'object') {
+    base.__messageConfig = messageConfig;
+  } else if (existingObj.__messageConfig !== undefined) {
+    base.__messageConfig = existingObj.__messageConfig;
+  }
+  if (normalizedColor) {
+    base.brandColor = normalizedColor;
+  } else if (hasIncomingExtra && !(extraDataConfig as EventItem['extraDataConfig'])?.brandColor) {
+    delete base.brandColor;
+  }
+  return base;
+}
+
+function hydrateAttendeeWithEventMeta(
+  attendee: Attendee,
+  metaMap?: Record<
+    string,
+    {
+      validationGroup?: string;
+      inviteCodeUsed?: string;
+      giftEntry?: Attendee['giftEntry'];
+      customResponses?: Record<string, string>;
+    }
+  >
+): Attendee {
+  const meta = metaMap?.[attendee.id];
+  if (!meta) return attendee;
+  return {
+    ...attendee,
+    validationGroup: attendee.validationGroup ?? meta.validationGroup,
+    inviteCodeUsed: attendee.inviteCodeUsed ?? meta.inviteCodeUsed,
+    giftEntry: attendee.giftEntry ?? meta.giftEntry,
+    customResponses: attendee.customResponses ?? meta.customResponses,
+  };
+}
+
+function hydrateShotWithEventMeta(
+  shot: DisposableShot,
+  shootersMap?: Record<string, string>
+): DisposableShot {
+  const fallbackKey = shootersMap?.[shot.id];
+  if (shot.shooterKey || !fallbackKey) return shot;
+  return { ...shot, shooterKey: fallbackKey };
+}
+
+async function mergeEventAttendeeMeta(
+  client: SupabaseClient,
+  eventId: string,
+  attendeeId: string,
+  meta: {
+    validationGroup?: string;
+    inviteCodeUsed?: string;
+    giftEntry?: Attendee['giftEntry'];
+    customResponses?: Record<string, string>;
+  }
+) {
+  const hasAny =
+    Boolean(meta.validationGroup) ||
+    Boolean(meta.inviteCodeUsed) ||
+    Boolean(meta.giftEntry) ||
+    Boolean(meta.customResponses && Object.keys(meta.customResponses).length > 0);
+  if (!hasAny) return;
+  try {
+    const { data: rawRow } = await client
+      .from('events')
+      .select('extra_data_config')
+      .eq('id', eventId)
+      .maybeSingle();
+    const currentExtra =
+      rawRow && (rawRow as Record<string, unknown>).extra_data_config &&
+      typeof (rawRow as Record<string, unknown>).extra_data_config === 'object'
+        ? ({ ...((rawRow as Record<string, unknown>).extra_data_config as Record<string, unknown>) })
+        : {};
+    const currentMap = extractEventAttendeeMetaMap(currentExtra);
+    currentExtra.__attendeeMeta = {
+      ...currentMap,
+      [attendeeId]: {
+        ...(meta.validationGroup ? { validationGroup: meta.validationGroup } : {}),
+        ...(meta.inviteCodeUsed ? { inviteCodeUsed: meta.inviteCodeUsed } : {}),
+        ...(meta.giftEntry ? { giftEntry: meta.giftEntry } : {}),
+        ...(meta.customResponses && Object.keys(meta.customResponses).length > 0
+          ? { customResponses: meta.customResponses }
+          : {}),
+      },
+    };
+    await client.from('events').update({ extra_data_config: currentExtra }).eq('id', eventId);
+  } catch {
+    // Non-fatal fallback
+  }
+}
+
+async function mergeEventShotShooter(
+  client: SupabaseClient,
+  eventId: string,
+  shotId: string,
+  shooterKey: string
+) {
+  if (!shooterKey.trim()) return;
+  try {
+    const { data: rawRow } = await client
+      .from('events')
+      .select('extra_data_config')
+      .eq('id', eventId)
+      .maybeSingle();
+    const currentExtra =
+      rawRow && (rawRow as Record<string, unknown>).extra_data_config &&
+      typeof (rawRow as Record<string, unknown>).extra_data_config === 'object'
+        ? ({ ...((rawRow as Record<string, unknown>).extra_data_config as Record<string, unknown>) })
+        : {};
+    const currentMap = extractEventShotShootersMap(currentExtra);
+    currentExtra.__shotShooters = {
+      ...currentMap,
+      [shotId]: shooterKey.trim(),
+    };
+    await client.from('events').update({ extra_data_config: currentExtra }).eq('id', eventId);
+  } catch {
+    // Non-fatal fallback
+  }
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -271,6 +417,15 @@ async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
 
   if (eventsErr) throw new Error(eventsErr.message);
 
+  const attendeeMetaByEvent = new Map<string, ReturnType<typeof extractEventAttendeeMetaMap>>();
+  const shotShootersByEvent = new Map<string, Record<string, string>>();
+  for (const row of eventRows ?? []) {
+    const rec = row as Record<string, unknown>;
+    const evtId = String(rec.id);
+    attendeeMetaByEvent.set(evtId, extractEventAttendeeMetaMap(rec.extra_data_config));
+    shotShootersByEvent.set(evtId, extractEventShotShootersMap(rec.extra_data_config));
+  }
+
   const events = (eventRows ?? []).map((r) => mapEventRow(r as Record<string, unknown>));
   const eventIds = events.map((e) => e.id);
 
@@ -336,9 +491,15 @@ async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
   if (shotRes.error) throw new Error(shotRes.error.message);
   if (rollRes.error) throw new Error(rollRes.error.message);
 
-  const attendees = (attRes.data ?? []).map((r) => mapAttendeeRow(r as Record<string, unknown>));
+  const attendees = (attRes.data ?? []).map((r) => {
+    const mapped = mapAttendeeRow(r as Record<string, unknown>);
+    return hydrateAttendeeWithEventMeta(mapped, attendeeMetaByEvent.get(mapped.eventId));
+  });
   const scheduleBlocks = (schRes.data ?? []).map((r) => mapScheduleRow(r as Record<string, unknown>));
-  const disposableShots = (shotRes.data ?? []).map((r) => mapShotRow(r as Record<string, unknown>));
+  const disposableShots = (shotRes.data ?? []).map((r) => {
+    const mapped = mapShotRow(r as Record<string, unknown>);
+    return hydrateShotWithEventMeta(mapped, shotShootersByEvent.get(mapped.eventId));
+  });
 
   const rollSettings: Record<string, DisposableRollSettings> = {};
   for (const row of rollRes.data ?? []) {
@@ -359,7 +520,7 @@ async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
   };
 }
 
-export async function createExpressApp(options?: { serverless?: boolean }) {
+export async function createExpressApp(options?: { serverless?: boolean; httpServer?: http.Server }) {
   const app = express();
   app.set('trust proxy', 1);
   const jsonParser = express.json({ limit: '15mb' });
@@ -1743,7 +1904,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
       }
       const passQuery = typeof req.query.pass === 'string' ? req.query.pass.trim() : '';
       const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
-      const [shotsRes, rollRes, passRes] = await Promise.all([
+      const [shotsRes, rollRes, passRes, rawEvtRes] = await Promise.all([
         supabase
           .from('disposable_shots')
           .select('*')
@@ -1762,8 +1923,18 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
               .ilike('ticket_code', passQuery)
               .maybeSingle()
           : Promise.resolve({ data: null }),
+        supabase
+          .from('events')
+          .select('extra_data_config')
+          .eq('id', evt.id)
+          .maybeSingle(),
       ]);
-      const shots = (shotsRes.data ?? []).map((r) => mapShotRow(r as Record<string, unknown>));
+      const shotShooters = extractEventShotShootersMap(
+        (rawEvtRes.data as Record<string, unknown> | null)?.extra_data_config
+      );
+      const shots = (shotsRes.data ?? []).map((r) =>
+        hydrateShotWithEventMeta(mapShotRow(r as Record<string, unknown>), shotShooters)
+      );
       const rollSettings = rollRes.data
         ? mapRollSettingsRow(rollRes.data as Record<string, unknown>)
         : { exposuresLimit: 24 as const, darkroomMode: false };
@@ -1791,7 +1962,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         return res.status(404).json({ error: 'Event disposable camera not found.' });
       }
       const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
-      const [existingShotsRes, rollRes] = await Promise.all([
+      const [existingShotsRes, rollRes, rawEvtRes] = await Promise.all([
         supabase
           .from('disposable_shots')
           .select('*')
@@ -1801,9 +1972,17 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
           .select('*')
           .eq('event_id', evt.id)
           .maybeSingle(),
+        supabase
+          .from('events')
+          .select('extra_data_config')
+          .eq('id', evt.id)
+          .maybeSingle(),
       ]);
+      const shotShooters = extractEventShotShootersMap(
+        (rawEvtRes.data as Record<string, unknown> | null)?.extra_data_config
+      );
       const existingShots = (existingShotsRes.data ?? []).map((r) =>
-        mapShotRow(r as Record<string, unknown>)
+        hydrateShotWithEventMeta(mapShotRow(r as Record<string, unknown>), shotShooters)
       );
       const rollCfg = rollRes.data
         ? mapRollSettingsRow(rollRes.data as Record<string, unknown>)
@@ -1846,12 +2025,14 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         liked: false,
       };
 
+      let usedShooterFallback = false;
       let { data, error } = await supabase
         .from('disposable_shots')
         .insert(insertRow)
         .select('*')
         .single();
       if (error && isMissingColumnError(error)) {
+        usedShooterFallback = true;
         const { shooter_key: _sk, ...legacyShot } = insertRow;
         const retry = await supabase
           .from('disposable_shots')
@@ -1862,7 +2043,12 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         error = retry.error;
       }
       if (error) return res.status(400).json({ error: error.message });
-      return res.status(201).json({ shot: mapShotRow(data as Record<string, unknown>) });
+      const mappedShot = mapShotRow(data as Record<string, unknown>);
+      if (usedShooterFallback && effectiveKey) {
+        await mergeEventShotShooter(supabase, evt.id, mappedShot.id, effectiveKey);
+        mappedShot.shooterKey = effectiveKey;
+      }
+      return res.status(201).json({ shot: mappedShot });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save film frame.';
       return res.status(500).json({ error: message });
@@ -1962,6 +2148,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
           }
         }
 
+        let usedExtendedRpcFallback = false;
         let { data: rpcData, error: rpcErr } = await supabase.rpc('register_public_attendee', {
           p_id: attendeeId,
           p_event_id: eventId,
@@ -1979,6 +2166,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
 
         // Graceful fallback if remote RPC hasn't added the extended params yet
         if (rpcErr && rpcErr.message?.toLowerCase().includes('register_public_attendee')) {
+          usedExtendedRpcFallback = true;
           const fallbackRpc = await supabase.rpc('register_public_attendee', {
             p_id: attendeeId,
             p_event_id: eventId,
@@ -2013,6 +2201,22 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
           attendee: Record<string, unknown>;
           event: Record<string, unknown>;
         };
+
+        if (
+          usedExtendedRpcFallback ||
+          (validationGroup && payload.attendee.validation_group === undefined) ||
+          (inviteCodeUsed && payload.attendee.invite_code_used === undefined) ||
+          (giftEntry && payload.attendee.gift_entry === undefined) ||
+          (customResponses && Object.keys(customResponses).length > 0 && payload.attendee.custom_responses === undefined)
+        ) {
+          await mergeEventAttendeeMeta(supabase, eventId, attendeeId, {
+            validationGroup: validationGroup?.trim() || undefined,
+            inviteCodeUsed: inviteCodeUsed?.trim() || undefined,
+            giftEntry,
+            customResponses,
+          });
+        }
+
         const event = mapEventRow(payload.event);
 
         let replyTo: string | undefined;
@@ -2094,6 +2298,69 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         return res.status(201).json({ attendee, event: sanitizePublicEvent(event) });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Registration failed.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  // Public Pass Lookup (allows returning attendees to retrieve their QR pass from Supabase by code, email, or phone)
+  app.post(
+    '/api/public/events/:eventId/pass-lookup',
+    requireSupabaseConfiguredMiddleware,
+    async (req, res) => {
+      const { query } = (req.body || {}) as { query?: string };
+      const raw = (query || '').trim();
+      if (!raw) {
+        return res.status(400).json({ error: 'Enter your pass code, phone number, or email.' });
+      }
+      try {
+        const evt = await resolveEventForPublicOrOg(req.params.eventId);
+        if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
+          return res.status(404).json({ error: 'Event not found or no longer active.' });
+        }
+        const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
+        const [attRes, rawEvtRes] = await Promise.all([
+          supabase.from('attendees').select('*').eq('event_id', evt.id),
+          supabase.from('events').select('extra_data_config').eq('id', evt.id).maybeSingle(),
+        ]);
+        if (attRes.error) {
+          return res.status(400).json({ error: attRes.error.message });
+        }
+        const cleanLower = raw.toLowerCase();
+        const cleanCode = cleanLower.replace(/^#/, '');
+        const digitsOnly = raw.replace(/\D/g, '');
+        const normalizedLookupPhone = digitsOnly.length >= 9 ? normalizePhoneE164(raw) : '';
+        const metaMap = extractEventAttendeeMetaMap(
+          (rawEvtRes.data as Record<string, unknown> | null)?.extra_data_config
+        );
+
+        const matchedRow = (attRes.data ?? []).find((row) => {
+          const rec = row as Record<string, unknown>;
+          const code = String(rec.ticket_code ?? '').toLowerCase().replace(/^#/, '');
+          const email = String(rec.email ?? '').toLowerCase();
+          const phone = String(rec.phone ?? '');
+          const cleanPhone = phone.replace(/\s+/g, '');
+          const phoneDigits = phone.replace(/\D/g, '');
+          return (
+            code === cleanCode ||
+            email === cleanLower ||
+            (normalizedLookupPhone && cleanPhone === normalizedLookupPhone) ||
+            (digitsOnly.length >= 9 && phoneDigits.endsWith(digitsOnly.slice(-9)))
+          );
+        });
+
+        if (!matchedRow) {
+          return res.status(404).json({
+            error: `No registered pass found for "${raw}". Use New Guest Check-In to validate your circle and generate a QR pass.`,
+          });
+        }
+        const attendee = hydrateAttendeeWithEventMeta(
+          mapAttendeeRow(matchedRow as Record<string, unknown>),
+          metaMap
+        );
+        return res.json({ attendee });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unable to look up pass.';
         return res.status(500).json({ error: message });
       }
     }
@@ -2357,10 +2624,18 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
           updatePayload.email = emailCheck.normalized;
         }
       }
-      if (next.phone !== undefined && next.phone.trim()) {
-        const phoneCheck = validateStrictPhoneE164(next.phone);
-        if (!phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
-        updatePayload.phone = phoneCheck.normalized;
+      let nextPhoneNormalized: string | null | undefined = undefined;
+      if (next.phone !== undefined) {
+        if (next.phone.trim()) {
+          const phoneCheck = validateStrictPhoneE164(next.phone);
+          if (!phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
+          nextPhoneNormalized = phoneCheck.normalized;
+          updatePayload.phone = phoneCheck.normalized;
+        } else {
+          nextPhoneNormalized = null;
+          updatePayload.phone = null;
+          updatePayload.phone_verified = false;
+        }
       }
       if (next.studio !== undefined) updatePayload.studio = next.studio;
       if (next.plan !== undefined) updatePayload.plan = next.plan;
@@ -2368,7 +2643,9 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
       if (next.capacityAlertThreshold !== undefined) {
         updatePayload.capacity_alert_threshold = next.capacityAlertThreshold;
       }
-      if (next.avatarUrl !== undefined) updatePayload.avatar_url = next.avatarUrl;
+      if (next.avatarUrl !== undefined) {
+        updatePayload.avatar_url = next.avatarUrl && next.avatarUrl.trim() ? next.avatarUrl.trim() : null;
+      }
       if (next.replyToEmail !== undefined) updatePayload.reply_to_email = next.replyToEmail;
       if (next.timezone !== undefined) updatePayload.timezone = next.timezone;
       if (next.twoFactorEnabled !== undefined) {
@@ -2384,19 +2661,82 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         .single();
 
       if (error && isMissingColumnError(error)) {
-        const { phone: _dropPhone, sender_id: _dropSender, ...legacyUpdate } = updatePayload;
+        const {
+          phone: _dropPhone,
+          phone_verified: _dropPhoneVer,
+          app_role: _dropAppRole,
+          ...withoutMissingCols
+        } = updatePayload;
         const retry = await req
           .supabase!.from('profiles')
-          .update(legacyUpdate)
+          .update(withoutMissingCols)
           .eq('id', req.user!.id)
           .select('*')
           .single();
         data = retry.data;
         error = retry.error;
+        if (error && isMissingColumnError(error)) {
+          const { sender_id: _dropSender, ...minimalUpdate } = withoutMissingCols;
+          const retry2 = await req
+            .supabase!.from('profiles')
+            .update(minimalUpdate)
+            .eq('id', req.user!.id)
+            .select('*')
+            .single();
+          data = retry2.data;
+          error = retry2.error;
+        }
       }
 
       if (error) return res.status(400).json({ error: error.message });
-      return res.json({ profile: mapProfileRow(data as Record<string, unknown>, req.user!.email ?? '') });
+
+      // Persist name/studio/phone into Supabase Auth user_metadata so phone changes survive sessions even if profiles.phone column is absent
+      const svc = createServiceSupabaseClient();
+      if (svc) {
+        try {
+          const existingMeta =
+            req.user?.user_metadata && typeof req.user.user_metadata === 'object'
+              ? { ...req.user.user_metadata }
+              : {};
+          if (next.name !== undefined) existingMeta.name = next.name;
+          if (next.studio !== undefined) existingMeta.studio = next.studio;
+          if (nextPhoneNormalized !== undefined) {
+            existingMeta.phone = nextPhoneNormalized;
+            if (nextPhoneNormalized === null) {
+              existingMeta.phone_verified = false;
+            }
+          }
+          await svc.auth.admin.updateUserById(req.user!.id, {
+            user_metadata: existingMeta,
+          });
+        } catch {
+          // Non-fatal metadata sync
+        }
+      }
+
+      const mapped = mapProfileRow(data as Record<string, unknown>, req.user!.email ?? '');
+      if (nextPhoneNormalized === null) {
+        mapped.phone = undefined;
+        mapped.phoneVerified = false;
+      } else if (nextPhoneNormalized && !mapped.phone) {
+        mapped.phone = nextPhoneNormalized;
+      } else if (
+        nextPhoneNormalized === undefined &&
+        !mapped.phone &&
+        req.user?.user_metadata?.phone !== null
+      ) {
+        const metaPhone =
+          (typeof req.user?.user_metadata?.phone === 'string' && req.user.user_metadata.phone.trim()) ||
+          (typeof req.user?.phone === 'string' && req.user.phone.trim()) ||
+          '';
+        if (metaPhone) {
+          mapped.phone = normalizePhoneE164(metaPhone);
+          mapped.phoneVerified = Boolean(
+            req.user?.phone_confirmed_at || req.user?.user_metadata?.phone_verified
+          );
+        }
+      }
+      return res.json({ profile: mapped });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update profile.';
       return res.status(500).json({ error: message });
@@ -2567,7 +2907,11 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         sender_id: event.senderId ?? null,
         qr_pass_published: event.status === 'draft' ? false : Boolean(event.qrPassPublished),
         validation_config: event.validationConfig ?? null,
-        extra_data_config: withEmbeddedMessageConfig(event.extraDataConfig, event.messageConfig),
+        extra_data_config: withEmbeddedMessageConfig(
+          event.extraDataConfig,
+          event.messageConfig,
+          event.brandColor
+        ),
         message_config: event.messageConfig ?? null,
       };
 
@@ -2624,6 +2968,13 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
   app.patch('/api/studio/events/:id', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const updated = req.body as EventItem;
     try {
+      const { data: existingEvtRow } = await req
+        .supabase!.from('events')
+        .select('extra_data_config')
+        .eq('id', req.params.id)
+        .eq('organizer_id', req.user!.id)
+        .maybeSingle();
+
       const updatePayload: Record<string, unknown> = {
         slug: updated.slug,
         title: updated.title,
@@ -2645,7 +2996,12 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         venue_format: updated.venueFormat ?? 'in-person',
         sender_id: updated.senderId ?? null,
         validation_config: updated.validationConfig ?? null,
-        extra_data_config: withEmbeddedMessageConfig(updated.extraDataConfig, updated.messageConfig),
+        extra_data_config: withEmbeddedMessageConfig(
+          updated.extraDataConfig,
+          updated.messageConfig,
+          updated.brandColor,
+          (existingEvtRow as Record<string, unknown> | null)?.extra_data_config
+        ),
         message_config: updated.messageConfig ?? null,
       };
       if (updated.status === 'draft') {
@@ -3133,12 +3489,14 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         custom_responses: attendee.customResponses ?? null,
       };
 
+      let usedLegacyAttendeeFallback = false;
       let { data: inserted, error: attErr } = await client
         .from('attendees')
         .insert(attInsertPayload)
         .select('*')
         .single();
-      if (attErr && attErr.message?.includes('column')) {
+      if (attErr && isMissingColumnError(attErr)) {
+        usedLegacyAttendeeFallback = true;
         const {
           validation_group: _vg,
           invite_code_used: _ic,
@@ -3160,6 +3518,17 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         return res.status(400).json({ error: attErr.message });
       }
 
+      const insertedId = String((inserted as Record<string, unknown>).id);
+      if (usedLegacyAttendeeFallback) {
+        const adminOrClient = createServiceSupabaseClient() ?? client;
+        await mergeEventAttendeeMeta(adminOrClient, eventId, insertedId, {
+          validationGroup: attendee.validationGroup,
+          inviteCodeUsed: attendee.inviteCodeUsed,
+          giftEntry: attendee.giftEntry,
+          customResponses: attendee.customResponses,
+        });
+      }
+
       const evtRec = evt as Record<string, unknown>;
       const { data: updatedEvt, error: evtUpdErr } = await client
         .from('events')
@@ -3177,8 +3546,16 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
 
       if (evtUpdErr) return res.status(400).json({ error: evtUpdErr.message });
 
+      const mappedAtt = mapAttendeeRow(inserted as Record<string, unknown>);
+      if (usedLegacyAttendeeFallback) {
+        mappedAtt.validationGroup = mappedAtt.validationGroup ?? attendee.validationGroup;
+        mappedAtt.inviteCodeUsed = mappedAtt.inviteCodeUsed ?? attendee.inviteCodeUsed;
+        mappedAtt.giftEntry = mappedAtt.giftEntry ?? attendee.giftEntry;
+        mappedAtt.customResponses = mappedAtt.customResponses ?? attendee.customResponses;
+      }
+
       return res.status(201).json({
-        attendee: mapAttendeeRow(inserted as Record<string, unknown>),
+        attendee: mappedAtt,
         event: mapEventRow(updatedEvt as Record<string, unknown>),
         cameraUrl: studioResolvedMsg.cameraUrl,
         dispatchedMessage: studioResolvedMsg.text,
@@ -3227,7 +3604,13 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         await client.from('events').update({ checked_in: nextTotal }).eq('id', eventId);
       }
 
-      const mappedAttendee = mapAttendeeRow(updatedAtt as Record<string, unknown>);
+      const attMetaMap = evtRow
+        ? extractEventAttendeeMetaMap((evtRow as Record<string, unknown>).extra_data_config)
+        : undefined;
+      const mappedAttendee = hydrateAttendeeWithEventMeta(
+        mapAttendeeRow(updatedAtt as Record<string, unknown>),
+        attMetaMap
+      );
       let checkInMessageSent = false;
       let cameraUrl: string | undefined;
       let dispatchedMessage: string | undefined;
@@ -3325,6 +3708,131 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
     }
   );
 
+  app.post(
+    '/api/studio/broadcast',
+    requireSupabaseAuth,
+    requireRole('creator', 'organizer'),
+    async (req: AuthedRequest, res) => {
+      const { attendeeIds, message } = req.body as {
+        eventId?: string;
+        attendeeIds?: string[];
+        message?: string;
+      };
+      const cleanMessage = (message || '').trim();
+      if (!cleanMessage) {
+        return res.status(400).json({ error: 'Broadcast message text is required.' });
+      }
+      if (!Array.isArray(attendeeIds) || attendeeIds.length === 0) {
+        return res.status(400).json({ error: 'Select at least one recipient for the broadcast.' });
+      }
+      try {
+        const client = req.supabase!;
+        const [{ data: ownedEvents, error: evtsErr }, { data: orgProf }, { data: targetAttRows, error: attErr }] =
+          await Promise.all([
+            client.from('events').select('*').eq('organizer_id', req.user!.id),
+            client.from('profiles').select('reply_to_email, sender_id').eq('id', req.user!.id).maybeSingle(),
+            client.from('attendees').select('*').in('id', attendeeIds),
+          ]);
+        if (evtsErr) return res.status(400).json({ error: evtsErr.message });
+        if (attErr) return res.status(400).json({ error: attErr.message });
+
+        const eventById = new Map<string, Record<string, unknown>>();
+        for (const r of ownedEvents ?? []) {
+          const rec = r as Record<string, unknown>;
+          eventById.set(String(rec.id), rec);
+        }
+
+        const ownedAttendees = (targetAttRows ?? [])
+          .map((r) => mapAttendeeRow(r as Record<string, unknown>))
+          .filter((att) => eventById.has(att.eventId));
+
+        if (ownedAttendees.length === 0) {
+          return res.status(404).json({ error: 'No matching attendees found in your studio.' });
+        }
+
+        const profRec = orgProf as Record<string, unknown> | null;
+        const replyTo = typeof profRec?.reply_to_email === 'string' ? profRec.reply_to_email : undefined;
+        const orgSenderId =
+          typeof profRec?.sender_id === 'string' && profRec.sender_id.trim()
+            ? profRec.sender_id.trim()
+            : undefined;
+
+        const countsByEvent = new Map<string, number>();
+        let sentCount = 0;
+
+        await Promise.all(
+          ownedAttendees.map(async (att) => {
+            const rawEvt = eventById.get(att.eventId)!;
+            const evtMapped = mapEventRow(rawEvt);
+            const personalizedText = cleanMessage
+              .replace(/\{name\}/gi, att.name)
+              .replace(/\{event\}/gi, evtMapped.title)
+              .replace(/\{ticket_code\}/gi, att.ticketCode);
+            const cameraUrl = `${resolveBaseUrl(req)}/e/${encodeURIComponent(evtMapped.slug || evtMapped.id)}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
+
+            const [smsRes, emailRes] = await Promise.all([
+              att.phone
+                ? dispatchOptionalArkeselSms(
+                    normalizePhoneE164(att.phone),
+                    evtMapped.title,
+                    att.ticketCode,
+                    evtMapped.senderId || orgSenderId,
+                    personalizedText
+                  )
+                : Promise.resolve('Pending' as const),
+              isResendConfigured() && att.email?.includes('@')
+                ? sendCheckInWelcomeEmail({
+                    to: att.email.trim(),
+                    attendeeName: att.name,
+                    eventTitle: evtMapped.title,
+                    eventDate: evtMapped.date,
+                    eventVenue: evtMapped.venue,
+                    eventCity: evtMapped.city,
+                    ticketCode: att.ticketCode,
+                    organizerName: evtMapped.organizer,
+                    welcomeMessage: personalizedText,
+                    cameraUrl,
+                    replyTo,
+                  })
+                : Promise.resolve({ ok: false, skipped: true }),
+            ]);
+
+            if (smsRes !== 'Pending' || emailRes.ok) {
+              sentCount += 1;
+            }
+            countsByEvent.set(att.eventId, (countsByEvent.get(att.eventId) ?? 0) + 1);
+          })
+        );
+
+        const updatedEvents: EventItem[] = [];
+        for (const [evtId, count] of countsByEvent.entries()) {
+          const rawEvt = eventById.get(evtId)!;
+          const nextDispatched = Number(rawEvt.sms_dispatched ?? 0) + count;
+          const { data: updEvt } = await client
+            .from('events')
+            .update({ sms_dispatched: nextDispatched })
+            .eq('id', evtId)
+            .eq('organizer_id', req.user!.id)
+            .select('*')
+            .single();
+          if (updEvt) {
+            updatedEvents.push(mapEventRow(updEvt as Record<string, unknown>));
+          }
+        }
+
+        return res.json({
+          ok: true,
+          recipientCount: ownedAttendees.length,
+          sentCount,
+          events: updatedEvents,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Broadcast dispatch failed.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
   app.post('/api/studio/schedule', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const block = req.body as ScheduleBlock;
     try {
@@ -3412,12 +3920,16 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
     const shot = req.body as DisposableShot;
     try {
       const client = req.supabase!;
-      const [existingShotsRes, rollRes] = await Promise.all([
+      const [existingShotsRes, rollRes, rawEvtRes] = await Promise.all([
         client.from('disposable_shots').select('*').eq('event_id', shot.eventId),
         client.from('disposable_roll_settings').select('*').eq('event_id', shot.eventId).maybeSingle(),
+        client.from('events').select('extra_data_config').eq('id', shot.eventId).maybeSingle(),
       ]);
+      const shotShooters = extractEventShotShootersMap(
+        (rawEvtRes.data as Record<string, unknown> | null)?.extra_data_config
+      );
       const existingShots = (existingShotsRes.data ?? []).map((r) =>
-        mapShotRow(r as Record<string, unknown>)
+        hydrateShotWithEventMeta(mapShotRow(r as Record<string, unknown>), shotShooters)
       );
       const rollCfg = rollRes.data
         ? mapRollSettingsRow(rollRes.data as Record<string, unknown>)
@@ -3459,12 +3971,14 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         liked: Boolean(shot.liked),
       };
 
+      let usedShooterFallback = false;
       let { data, error } = await client
         .from('disposable_shots')
         .insert(shotPayload)
         .select('*')
         .single();
       if (error && isMissingColumnError(error)) {
+        usedShooterFallback = true;
         const { shooter_key: _sk, ...legacyShot } = shotPayload;
         const retry = await client
           .from('disposable_shots')
@@ -3475,7 +3989,13 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         error = retry.error;
       }
       if (error) return res.status(400).json({ error: error.message });
-      return res.status(201).json({ shot: mapShotRow(data as Record<string, unknown>) });
+      const mappedShot = mapShotRow(data as Record<string, unknown>);
+      if (usedShooterFallback && effectiveKey) {
+        const adminOrClient = createServiceSupabaseClient() ?? client;
+        await mergeEventShotShooter(adminOrClient, shot.eventId, mappedShot.id, effectiveKey);
+        mappedShot.shooterKey = effectiveKey;
+      }
+      return res.status(201).json({ shot: mappedShot });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save film frame.';
       return res.status(500).json({ error: message });
@@ -4078,7 +4598,11 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : true,
+        ws: options?.httpServer ? { server: options.httpServer } : false,
+      },
       appType: 'spa',
     });
 
@@ -4175,13 +4699,15 @@ const isServerlessRuntime =
   Boolean(process.env.VERCEL) || process.env.EVENTS_SERVERLESS === '1' || !isEntryServerFile;
 
 if (!isServerlessRuntime) {
-  createExpressApp({ serverless: false })
+  const httpServer = http.createServer();
+  createExpressApp({ serverless: false, httpServer })
     .then((app) => {
+      httpServer.on('request', app);
       const PORT = Number(process.env.PORT) || 3000;
       const modeLabel = isSupabaseConfigured()
         ? 'Supabase single source of truth'
         : 'In-memory store (Supabase env vars not set)';
-      app.listen(PORT, '0.0.0.0', () => {
+      httpServer.listen(PORT, '0.0.0.0', () => {
         console.log(`Events App server listening on http://0.0.0.0:${PORT} (${modeLabel})`);
       });
     })

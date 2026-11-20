@@ -1,5 +1,16 @@
-import {createRoot} from 'react-dom/client';
+import { createRoot } from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
+import { OfflineIndicator } from './components/PWAInstallButton.tsx';
 import './index.css';
 
-createRoot(document.getElementById('root')!).render(<App />);
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  registerSW({ immediate: true });
+}
+
+createRoot(document.getElementById('root')!).render(
+  <>
+    <App />
+    <OfflineIndicator />
+  </>
+);

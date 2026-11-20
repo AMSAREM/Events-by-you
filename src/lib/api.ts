@@ -497,6 +497,15 @@ export const api = {
         }
       ),
 
+    lookupPass: (eventId: string, query: string) =>
+      request<{ attendee: Attendee }>(
+        `/api/public/events/${encodeURIComponent(eventId)}/pass-lookup`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ query }),
+        }
+      ),
+
     getCameraRoll: (slugOrId: string, passCode?: string) =>
       request<{
         event: EventItem;
@@ -686,6 +695,22 @@ export const api = {
       request<{ attendee: Attendee }>(
         `/api/studio/attendees/${encodeURIComponent(attendeeId)}/retry-payment`,
         { method: 'PATCH' },
+        true
+      ),
+
+    broadcastUpdate: (payload: {
+      eventId?: string;
+      attendeeIds: string[];
+      message: string;
+    }) =>
+      request<{
+        ok: boolean;
+        recipientCount: number;
+        sentCount: number;
+        events: EventItem[];
+      }>(
+        '/api/studio/broadcast',
+        { method: 'POST', body: JSON.stringify(payload) },
         true
       ),
 

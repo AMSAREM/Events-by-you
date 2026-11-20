@@ -30,6 +30,7 @@ import { Attendee, EventItem } from '../types/events';
 import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
 import { DeterministicQrSvg, buildEventInvitationUrl } from '../lib/qr';
 import { EventFlyerCard } from './EventFlyerCard';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface LandingScreenProps {
   featuredEvent?: EventItem | null;
@@ -153,20 +154,20 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
     <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col overflow-x-clip">
       {/* FIXED TOP HEADER */}
       <header className="fixed top-0 inset-x-0 w-full z-50 bg-[#F5F5F7]/88 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] pt-[env(safe-area-inset-top)]">
-        <div className="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-10 xl:px-12 py-2.5 md:py-0 md:h-20 flex flex-wrap md:flex-nowrap items-center justify-between gap-x-2.5 sm:gap-x-4 lg:gap-x-6 gap-y-2">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5 md:py-0 md:h-20 flex flex-wrap md:flex-nowrap xl:grid xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center justify-between gap-x-3 lg:gap-x-5 gap-y-2">
           <button
             type="button"
             onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-            className="flex items-center gap-2 sm:gap-2.5 text-left shrink-0 min-w-0"
+            className="xl:justify-self-start flex items-center gap-2.5 text-left shrink-0 min-w-0 group rounded-xl py-1 pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B0B0B]/20"
           >
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center shrink-0 shadow-[0_2px_8px_rgba(11,11,11,0.16)] transition-transform duration-150 group-hover:scale-[1.03]">
               <Layers className="w-4 h-4" />
             </div>
             <div className="flex flex-col min-w-0">
               <span className="font-display text-sm sm:text-base font-bold text-[#1A1C1D] tracking-tight leading-none whitespace-nowrap">
                 Events App
               </span>
-              <span className="hidden sm:block md:hidden lg:block text-[11px] font-medium text-[#71717A] whitespace-nowrap mt-0.5 truncate">
+              <span className="hidden xl:block text-[11px] font-medium text-[#71717A] whitespace-nowrap mt-0.5 truncate">
                 Weddings · Church · Corporate · Tech
               </span>
             </div>
@@ -174,50 +175,51 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
 
           <nav
             aria-label="Primary navigation"
-            className="order-3 md:order-2 w-full md:w-auto min-w-0 flex items-center md:justify-center gap-3.5 sm:gap-5 md:gap-4 lg:gap-7 overflow-x-auto border-t border-[#E5E5EA]/70 md:border-t-0 pt-2 md:pt-0 pb-0.5 md:pb-0 text-xs md:text-[13px] lg:text-sm"
+            className="order-3 md:order-2 xl:justify-self-center w-full md:w-auto min-w-0 flex items-center md:justify-center gap-1 sm:gap-1.5 md:gap-0.5 lg:gap-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden border-t border-black/[0.06] md:border md:border-black/[0.06] md:bg-white/75 md:rounded-full md:p-1 md:shadow-[0_1px_3px_rgba(0,0,0,0.04)] pt-2 md:pt-1 pb-0.5 md:pb-1 text-xs lg:text-[13px]"
           >
             <button
               type="button"
               onClick={() => scrollToSection('live-preview')}
-              className="text-[#0B0B0B] font-semibold whitespace-nowrap shrink-0 py-0.5"
+              className="text-[#0B0B0B] font-semibold bg-black/[0.05] md:bg-[#F5F5F7] rounded-full px-3 py-1.5 whitespace-nowrap shrink-0 transition-colors"
             >
               Product
             </button>
             <button
               type="button"
               onClick={() => scrollToSection('how-it-works')}
-              className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0 py-0.5"
+              className="text-[#444748] hover:text-[#0B0B0B] hover:bg-black/[0.04] rounded-full px-2.5 lg:px-3 py-1.5 font-medium transition-colors whitespace-nowrap shrink-0"
             >
               How It Works
             </button>
             <button
               type="button"
               onClick={() => scrollToSection('features')}
-              className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0 py-0.5"
+              className="text-[#444748] hover:text-[#0B0B0B] hover:bg-black/[0.04] rounded-full px-2.5 lg:px-3 py-1.5 font-medium transition-colors whitespace-nowrap shrink-0"
             >
               Features
             </button>
             <button
               type="button"
               onClick={() => scrollToSection('pricing')}
-              className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0 py-0.5"
+              className="text-[#444748] hover:text-[#0B0B0B] hover:bg-black/[0.04] rounded-full px-2.5 lg:px-3 py-1.5 font-medium transition-colors whitespace-nowrap shrink-0"
             >
               Pricing
             </button>
             <button
               type="button"
               onClick={() => scrollToSection('community-showcase')}
-              className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0 py-0.5"
+              className="text-[#444748] hover:text-[#0B0B0B] hover:bg-black/[0.04] rounded-full px-2.5 lg:px-3 py-1.5 font-medium transition-colors whitespace-nowrap shrink-0"
             >
               Live Events
             </button>
           </nav>
 
-          <div className="order-2 md:order-3 flex items-center gap-1.5 sm:gap-2.5 lg:gap-3 shrink-0">
+          <div className="order-2 md:order-3 xl:justify-self-end flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <PWAInstallButton variant="header-dark" className="h-9" />
             <button
               type="button"
               onClick={() => (isSignedIn && onSignOut ? onSignOut() : onNavigateSignIn())}
-              className="inline-flex text-xs md:text-[13px] lg:text-sm font-medium text-[#444748] hover:text-[#0B0B0B] transition-colors px-2 sm:px-2.5 lg:px-3 py-1.5 whitespace-nowrap shrink-0"
+              className="inline-flex items-center justify-center h-9 rounded-full text-xs lg:text-[13px] font-medium text-[#444748] hover:text-[#0B0B0B] hover:bg-black/[0.05] transition-colors px-2.5 sm:px-3 whitespace-nowrap shrink-0"
             >
               {isSignedIn ? 'Log Out' : 'Sign In'}
             </button>
@@ -226,7 +228,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               onClick={() =>
                 onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignUp()
               }
-              className="inline-flex items-center justify-center bg-[#0B0B0B] text-white text-xs font-semibold px-3.5 sm:px-4 lg:px-5 py-2 sm:py-2.5 rounded-full hover:bg-neutral-800 transition-colors shadow-[0_12px_32px_-8px_rgba(11,11,11,0.16)] whitespace-nowrap shrink-0"
+              className="inline-flex items-center justify-center h-9 bg-[#0B0B0B] text-white text-xs font-semibold px-3.5 sm:px-4 lg:px-5 rounded-full hover:bg-neutral-800 active:scale-[0.98] transition-all shadow-[0_6px_16px_-4px_rgba(11,11,11,0.22)] whitespace-nowrap shrink-0"
             >
               <span className="lg:hidden">{isSignedIn ? 'Studio' : 'Create Event'}</span>
               <span className="hidden lg:inline">
@@ -351,6 +353,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         <span>Disposable Camera</span>
                       </button>
                     )}
+                    <PWAInstallButton variant="hero" className="w-full sm:w-auto" />
                     <button
                       type="button"
                       onClick={() =>
