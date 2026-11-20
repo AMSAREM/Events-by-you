@@ -31,6 +31,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  GiftTableAttendantLink,
   GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
@@ -655,7 +656,11 @@ export const memoryStore = {
   getPublicEvents(): EventItem[] {
     return Array.from(db.events.values())
       .filter((e) => e.status === 'live' || e.status === 'upcoming')
-      .map(({ organizerId: _org, ...rest }) => rest)
+      .map(({ organizerId: _org, ...rest }) => {
+        if (!rest.extraDataConfig?.attendantLinks) return rest;
+        const { attendantLinks: _att, ...extraRest } = rest.extraDataConfig;
+        return { ...rest, extraDataConfig: extraRest };
+      })
       .sort((a, b) => {
         const aCustom = a.flyerUrl?.startsWith('data:') ? 1 : 0;
         const bCustom = b.flyerUrl?.startsWith('data:') ? 1 : 0;
@@ -671,7 +676,9 @@ export const memoryStore = {
         (evt.id.toLowerCase() === target || evt.slug.toLowerCase() === target)
       ) {
         const { organizerId: _org, ...rest } = evt;
-        return rest;
+        if (!rest.extraDataConfig?.attendantLinks) return rest;
+        const { attendantLinks: _att, ...extraRest } = rest.extraDataConfig;
+        return { ...rest, extraDataConfig: extraRest };
       }
     }
     return null;
@@ -795,7 +802,115 @@ export const memoryStore = {
     if (stored) {
       db.events.set(evt.id, { ...stored, extraDataConfig: updatedEvt.extraDataConfig });
     }
-    return { gift, event: updatedEvt };
+    const { attendantLinks: _att, ...pubExtra } = updatedEvt.extraDataConfig!;
+    return {
+      gift,
+      event: recordedVia === 'public-table' ? { ...updatedEvt, extraDataConfig: pubExtra } : updatedEvt,
+    };
+  },
+
+  getGiftDeskSession(
+    slugOrId: string,
+    token: string
+  ): { event: EventItem; attendant: Omit<GiftTableAttendantLink, 'token'> } {
+    const target = slugOrId.trim().toLowerCase();
+    let matchedEvt: EventItem | null = null;
+    for (const evt of db.events.values()) {
+      if (
+        (evt.status === 'live' || evt.status === 'upcoming') &&
+        (evt.id.toLowerCase() === target || evt.slug.toLowerCase() === target)
+      ) {
+        const { organizerId: _org, ...rest } = evt;
+        matchedEvt = rest;
+        break;
+      }
+    }
+    if (!matchedEvt) {
+      throw Object.assign(new Error('Event Gift Table not found.'), { status: 404 });
+    }
+    const links = Array.isArray(matchedEvt.extraDataConfig?.attendantLinks)
+      ? matchedEvt.extraDataConfig!.attendantLinks!
+      : [];
+    const link = links.find((l) => l.token === token.trim());
+    if (!link) {
+      throw Object.assign(new Error('Gift Table attendant link not found.'), { status: 404 });
+    }
+    if (!link.active) {
+      throw Object.assign(new Error('This Gift Table attendant link has been paused by the organiser.'), {
+        status: 403,
+      });
+    }
+    const { token: _secret, ...safeAttendant } = link;
+    const { attendantLinks: _att, ...pubExtra } = matchedEvt.extraDataConfig ?? {
+      enableGiftTable: true,
+      customFields: [],
+    };
+    return {
+      event: { ...matchedEvt, extraDataConfig: pubExtra },
+      attendant: safeAttendant,
+    };
+  },
+
+  recordGiftDeskEntry(
+    slugOrId: string,
+    token: string,
+    payload: Partial<GiftTableEntry>
+  ): { gift: GiftTableEntry; event: EventItem; attendant: Omit<GiftTableAttendantLink, 'token'> } {
+    const { event: matchedEvt, attendant } = this.getGiftDeskSession(slugOrId, token);
+    const stored = db.events.get(matchedEvt.id);
+    if (!stored) {
+      throw Object.assign(new Error('Event Gift Table not found.'), { status: 404 });
+    }
+    const giverName = (payload.giverName || '').trim();
+    if (!giverName) {
+      throw Object.assign(new Error('Giver or donor name is required.'), { status: 400 });
+    }
+    const giftType: GiftTableEntry['giftType'] =
+      payload.giftType === 'cash-momo' || payload.giftType === 'registry-item' || payload.giftType === 'blessing-only'
+        ? payload.giftType
+        : 'cash-momo';
+    const nowIso = new Date().toISOString();
+    const gift: GiftTableEntry = {
+      id: `gift-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+      eventId: stored.id,
+      giverName,
+      giverPhone: payload.giverPhone?.trim() ? normalizePhoneE164(payload.giverPhone.trim()) : undefined,
+      giftType,
+      currency: payload.currency === 'USD' ? 'USD' : 'GHS',
+      amount: giftType === 'cash-momo' ? Math.max(1, Number(payload.amount) || 0) : undefined,
+      registryItem:
+        giftType === 'registry-item'
+          ? payload.registryItem?.trim() || stored.extraDataConfig?.giftRegistryItems?.[0] || 'Registry Gift'
+          : undefined,
+      side: payload.side?.trim() || undefined,
+      message: payload.message?.trim() || undefined,
+      recordedVia: 'gift-desk',
+      recordedBy: attendant.attendantName,
+      attendantLinkId: attendant.id,
+      createdAt: nowIso,
+    };
+    const existingExtra = stored.extraDataConfig ?? { enableGiftTable: true, customFields: [] };
+    const prevLedger = Array.isArray(existingExtra.giftLedger) ? existingExtra.giftLedger : [];
+    const prevLinks = Array.isArray(existingExtra.attendantLinks) ? existingExtra.attendantLinks : [];
+    const nextLinks = prevLinks.map((l) =>
+      l.id === attendant.id ? { ...l, recordedCount: (l.recordedCount ?? 0) + 1, lastUsedAt: nowIso } : l
+    );
+    const updatedLink = nextLinks.find((l) => l.id === attendant.id)!;
+    stored.extraDataConfig = {
+      ...existingExtra,
+      enableGiftTable: true,
+      giftLedger: [gift, ...prevLedger],
+      attendantLinks: nextLinks,
+    };
+    db.events.set(stored.id, stored);
+    const { organizerId: _org, ...clean } = stored;
+    const { attendantLinks: _att, ...pubExtra } = clean.extraDataConfig!;
+    const { token: _secret, ...safeAttendant } = updatedLink;
+    return {
+      gift,
+      event: { ...clean, extraDataConfig: pubExtra },
+      attendant: safeAttendant,
+    };
   },
 
   registerPublicAttendee(payload: {
@@ -1089,6 +1204,89 @@ export const memoryStore = {
       throw err;
     }
     existing.qrPassPublished = Boolean(published);
+    db.events.set(eventId, existing);
+    const { organizerId: _org, ...clean } = existing;
+    return clean;
+  },
+
+  createGiftAttendantLink(
+    userId: string,
+    eventId: string,
+    payload: { attendantName: string; roleLabel?: string; phone?: string }
+  ): { link: GiftTableAttendantLink; event: EventItem } {
+    const existing = db.events.get(eventId);
+    if (!existing) throw Object.assign(new Error('Event not found.'), { status: 404 });
+    if (existing.organizerId !== userId) {
+      throw Object.assign(new Error('Only the event creator can manage Gift Table links.'), { status: 403 });
+    }
+    const attendantName = (payload.attendantName || '').trim();
+    if (!attendantName) {
+      throw Object.assign(new Error('Attendant or desk representative name is required.'), { status: 400 });
+    }
+    const link: GiftTableAttendantLink = {
+      id: `glink-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+      eventId,
+      token: `gd_${crypto.randomBytes(8).toString('hex')}`,
+      attendantName,
+      roleLabel: payload.roleLabel?.trim() || 'Gift Table Attendant',
+      phone: payload.phone?.trim() ? normalizePhoneE164(payload.phone.trim()) : undefined,
+      active: true,
+      recordedCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+    const prevExtra = existing.extraDataConfig ?? { enableGiftTable: true, customFields: [] };
+    existing.extraDataConfig = {
+      ...prevExtra,
+      enableGiftTable: true,
+      attendantLinks: [link, ...(prevExtra.attendantLinks ?? [])],
+    };
+    db.events.set(eventId, existing);
+    const { organizerId: _org, ...clean } = existing;
+    return { link, event: clean };
+  },
+
+  toggleGiftAttendantLink(
+    userId: string,
+    eventId: string,
+    linkId: string,
+    active?: boolean
+  ): { link: GiftTableAttendantLink; event: EventItem } {
+    const existing = db.events.get(eventId);
+    if (!existing) throw Object.assign(new Error('Event not found.'), { status: 404 });
+    if (existing.organizerId !== userId) {
+      throw Object.assign(new Error('Only the event creator can manage Gift Table links.'), { status: 403 });
+    }
+    const prevExtra = existing.extraDataConfig ?? { enableGiftTable: true, customFields: [] };
+    const prevLinks = Array.isArray(prevExtra.attendantLinks) ? prevExtra.attendantLinks : [];
+    const target = prevLinks.find((l) => l.id === linkId);
+    if (!target) {
+      throw Object.assign(new Error('Gift Table attendant link not found.'), { status: 404 });
+    }
+    const nextLink: GiftTableAttendantLink = {
+      ...target,
+      active: active !== undefined ? Boolean(active) : !target.active,
+    };
+    existing.extraDataConfig = {
+      ...prevExtra,
+      attendantLinks: prevLinks.map((l) => (l.id === linkId ? nextLink : l)),
+    };
+    db.events.set(eventId, existing);
+    const { organizerId: _org, ...clean } = existing;
+    return { link: nextLink, event: clean };
+  },
+
+  deleteGiftAttendantLink(userId: string, eventId: string, linkId: string): EventItem {
+    const existing = db.events.get(eventId);
+    if (!existing) throw Object.assign(new Error('Event not found.'), { status: 404 });
+    if (existing.organizerId !== userId) {
+      throw Object.assign(new Error('Only the event creator can manage Gift Table links.'), { status: 403 });
+    }
+    const prevExtra = existing.extraDataConfig ?? { enableGiftTable: true, customFields: [] };
+    const prevLinks = Array.isArray(prevExtra.attendantLinks) ? prevExtra.attendantLinks : [];
+    existing.extraDataConfig = {
+      ...prevExtra,
+      attendantLinks: prevLinks.filter((l) => l.id !== linkId),
+    };
     db.events.set(eventId, existing);
     const { organizerId: _org, ...clean } = existing;
     return clean;

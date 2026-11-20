@@ -138,6 +138,12 @@ export function buildEventInvitationUrl(slugOrId: string, tab?: 'checkin' | 'reg
   return tab ? `${base}?tab=${tab}` : base;
 }
 
+export function buildGiftDeskUrl(slugOrId: string, deskToken: string): string {
+  const base = buildEventInvitationUrl(slugOrId, 'gifts');
+  const cleanToken = deskToken.trim();
+  return cleanToken ? `${base}?desk=${encodeURIComponent(cleanToken)}` : base;
+}
+
 export function buildEventCameraUrl(
   slugOrId: string,
   guestName?: string,

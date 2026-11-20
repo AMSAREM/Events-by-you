@@ -44,6 +44,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  GiftTableAttendantLink,
   GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
@@ -1681,6 +1682,15 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
   // PUBLIC ROUTES (Single Source of Truth in Supabase)
   // =========================================================================
 
+  const sanitizePublicEvent = (evt: EventItem): EventItem => {
+    if (!evt.extraDataConfig?.attendantLinks) return evt;
+    const { attendantLinks: _attLinks, ...restExtra } = evt.extraDataConfig;
+    return {
+      ...evt,
+      extraDataConfig: restExtra,
+    };
+  };
+
   app.get('/api/public/events', async (_req, res) => {
     if (!isSupabaseConfigured()) {
       return res.status(503).json({
@@ -1701,7 +1711,9 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
       if (error) {
         return res.status(500).json({ error: error.message, events: [] });
       }
-      const events = (data ?? []).map((r) => mapEventRow(r as Record<string, unknown>));
+      const events = (data ?? []).map((r) =>
+        sanitizePublicEvent(mapEventRow(r as Record<string, unknown>))
+      );
       return res.json({ events });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load events.';
@@ -1720,7 +1732,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
     if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
       return res.status(404).json({ error: 'Event invitation not found or no longer active.' });
     }
-    return res.json({ event: evt });
+    return res.json({ event: sanitizePublicEvent(evt) });
   });
 
   app.get('/api/public/camera/:slugOrId', requireSupabaseConfiguredMiddleware, async (req, res) => {
@@ -1764,7 +1776,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
             tier: String(passRow.tier || 'General'),
           }
         : null;
-      return res.json({ event: evt, shots, rollSettings, verifiedPass });
+      return res.json({ event: sanitizePublicEvent(evt), shots, rollSettings, verifiedPass });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load disposable camera.';
       return res.status(500).json({ error: message });
@@ -2079,7 +2091,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
           custom_responses: payload.attendee.custom_responses ?? customResponses ?? null,
         });
 
-        return res.status(201).json({ attendee, event });
+        return res.status(201).json({ attendee, event: sanitizePublicEvent(event) });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Registration failed.';
         return res.status(500).json({ error: message });
@@ -2157,10 +2169,153 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         }
         return res.status(201).json({
           gift: giftEntry,
-          event: mapEventRow(updatedRow as Record<string, unknown>),
+          event: sanitizePublicEvent(mapEventRow(updatedRow as Record<string, unknown>)),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to record gift table entry.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  // Appointed Gift Table Attendant Link Validation (for people manning the gift desk)
+  app.get(
+    '/api/public/events/:slugOrId/gift-desk/:token',
+    requireSupabaseConfiguredMiddleware,
+    async (req, res) => {
+      try {
+        const evt = await resolveEventForPublicOrOg(req.params.slugOrId);
+        if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
+          return res.status(404).json({ error: 'Event Gift Table not found.' });
+        }
+        const token = req.params.token.trim();
+        const links = Array.isArray(evt.extraDataConfig?.attendantLinks)
+          ? evt.extraDataConfig!.attendantLinks!
+          : [];
+        const matchedLink = links.find((l) => l.token === token);
+        if (!matchedLink) {
+          return res.status(404).json({
+            error: 'Gift Table attendant link was not found or has been deleted.',
+          });
+        }
+        if (!matchedLink.active) {
+          return res.status(403).json({
+            error: 'This Gift Table attendant link has been paused by the organiser.',
+            paused: true,
+          });
+        }
+        const { token: _secret, ...safeAttendant } = matchedLink;
+        return res.json({
+          event: sanitizePublicEvent(evt),
+          attendant: safeAttendant,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to verify gift desk link.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  // Appointed Gift Table Attendant Recording (receives gifts on behalf of organiser)
+  app.post(
+    '/api/public/events/:slugOrId/gift-desk/:token',
+    requireSupabaseConfiguredMiddleware,
+    async (req, res) => {
+      try {
+        const evt = await resolveEventForPublicOrOg(req.params.slugOrId);
+        if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
+          return res.status(404).json({ error: 'Event Gift Table not found.' });
+        }
+        const token = req.params.token.trim();
+        const adminClient = createServiceSupabaseClient() ?? createPublicSupabaseClient();
+        const { data: rawRow } = await adminClient
+          .from('events')
+          .select('extra_data_config')
+          .eq('id', evt.id)
+          .maybeSingle();
+        const currentExtra =
+          rawRow && (rawRow as Record<string, unknown>).extra_data_config &&
+          typeof (rawRow as Record<string, unknown>).extra_data_config === 'object'
+            ? ((rawRow as Record<string, unknown>).extra_data_config as Record<string, unknown>)
+            : ({ ...(evt.extraDataConfig ?? { enableGiftTable: true, customFields: [] }) } as Record<string, unknown>);
+        const currentLinks = Array.isArray(currentExtra.attendantLinks)
+          ? (currentExtra.attendantLinks as GiftTableAttendantLink[])
+          : [];
+        const matchedLink = currentLinks.find((l) => l.token === token);
+        if (!matchedLink) {
+          return res.status(404).json({ error: 'Gift Table attendant link not found.' });
+        }
+        if (!matchedLink.active) {
+          return res.status(403).json({
+            error: 'This Gift Table attendant link has been paused by the organiser.',
+          });
+        }
+
+        const body = req.body as Partial<GiftTableEntry>;
+        const giverName = (body.giverName || '').trim();
+        if (!giverName) {
+          return res.status(400).json({ error: 'Giver or donor name is required.' });
+        }
+        const giftType: GiftTableEntry['giftType'] =
+          body.giftType === 'cash-momo' ||
+          body.giftType === 'registry-item' ||
+          body.giftType === 'blessing-only'
+            ? body.giftType
+            : 'cash-momo';
+        const nowIso = new Date().toISOString();
+        const giftEntry: GiftTableEntry = {
+          id: `gift-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+          eventId: evt.id,
+          giverName,
+          giverPhone: body.giverPhone?.trim() ? normalizePhoneE164(body.giverPhone.trim()) : undefined,
+          giftType,
+          currency: body.currency === 'USD' ? 'USD' : 'GHS',
+          amount: giftType === 'cash-momo' ? Math.max(1, Number(body.amount) || 0) : undefined,
+          registryItem:
+            giftType === 'registry-item'
+              ? body.registryItem?.trim() || evt.extraDataConfig?.giftRegistryItems?.[0] || 'Registry Gift'
+              : undefined,
+          side: body.side?.trim() || undefined,
+          message: body.message?.trim() || undefined,
+          recordedVia: 'gift-desk',
+          recordedBy: matchedLink.attendantName,
+          attendantLinkId: matchedLink.id,
+          createdAt: nowIso,
+        };
+
+        const currentLedger = Array.isArray(currentExtra.giftLedger)
+          ? (currentExtra.giftLedger as GiftTableEntry[])
+          : [];
+        const updatedLinks = currentLinks.map((l) =>
+          l.id === matchedLink.id
+            ? { ...l, recordedCount: (l.recordedCount ?? 0) + 1, lastUsedAt: nowIso }
+            : l
+        );
+        const updatedMatched = updatedLinks.find((l) => l.id === matchedLink.id)!;
+
+        const nextExtra = {
+          ...currentExtra,
+          enableGiftTable: true,
+          giftLedger: [giftEntry, ...currentLedger],
+          attendantLinks: updatedLinks,
+        };
+        const { data: updatedRow, error: updErr } = await adminClient
+          .from('events')
+          .update({ extra_data_config: nextExtra })
+          .eq('id', evt.id)
+          .select('*')
+          .single();
+        if (updErr) {
+          return res.status(400).json({ error: updErr.message });
+        }
+        const { token: _secret, ...safeAttendant } = updatedMatched;
+        return res.status(201).json({
+          gift: giftEntry,
+          event: sanitizePublicEvent(mapEventRow(updatedRow as Record<string, unknown>)),
+          attendant: safeAttendant,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to log desk gift entry.';
         return res.status(500).json({ error: message });
       }
     }
@@ -2629,6 +2784,10 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
           side: body.side?.trim() || undefined,
           message: body.message?.trim() || undefined,
           recordedVia: 'gift-desk',
+          recordedBy:
+            (body.recordedBy || '').trim() ||
+            (req.user?.user_metadata?.name as string | undefined) ||
+            'Organiser Desk',
           createdAt: new Date().toISOString(),
         };
         const rawExtra =
@@ -2659,6 +2818,183 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to log gift desk entry.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  // Create Gift Table Attendant Link (for people appointed to man the Gift Table)
+  app.post(
+    '/api/studio/events/:eventId/gift-links',
+    requireSupabaseAuth,
+    requireRole('creator', 'organizer'),
+    async (req: AuthedRequest, res) => {
+      try {
+        const client = req.supabase!;
+        const { data: evtRow, error: evtErr } = await client
+          .from('events')
+          .select('*')
+          .eq('id', req.params.eventId)
+          .eq('organizer_id', req.user!.id)
+          .maybeSingle();
+        if (evtErr || !evtRow) {
+          return res.status(404).json({ error: 'Event not found in studio.' });
+        }
+        const body = req.body as { attendantName?: string; roleLabel?: string; phone?: string };
+        const attendantName = (body.attendantName || '').trim();
+        if (!attendantName) {
+          return res.status(400).json({ error: 'Attendant or desk representative name is required.' });
+        }
+        const evtMapped = mapEventRow(evtRow as Record<string, unknown>);
+        const newLink: GiftTableAttendantLink = {
+          id: `glink-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+          eventId: evtMapped.id,
+          token: `gd_${crypto.randomBytes(8).toString('hex')}`,
+          attendantName,
+          roleLabel: body.roleLabel?.trim() || 'Gift Table Attendant',
+          phone: body.phone?.trim() ? normalizePhoneE164(body.phone.trim()) : undefined,
+          active: true,
+          recordedCount: 0,
+          createdAt: new Date().toISOString(),
+        };
+        const rawExtra =
+          (evtRow as Record<string, unknown>).extra_data_config &&
+          typeof (evtRow as Record<string, unknown>).extra_data_config === 'object'
+            ? ((evtRow as Record<string, unknown>).extra_data_config as Record<string, unknown>)
+            : ({ ...(evtMapped.extraDataConfig ?? { enableGiftTable: true, customFields: [] }) } as Record<string, unknown>);
+        const currentLinks = Array.isArray(rawExtra.attendantLinks)
+          ? (rawExtra.attendantLinks as GiftTableAttendantLink[])
+          : [];
+        const nextExtra = {
+          ...rawExtra,
+          enableGiftTable: true,
+          attendantLinks: [newLink, ...currentLinks],
+        };
+        const { data: updatedRow, error: updErr } = await client
+          .from('events')
+          .update({ extra_data_config: nextExtra })
+          .eq('id', evtMapped.id)
+          .eq('organizer_id', req.user!.id)
+          .select('*')
+          .single();
+        if (updErr) {
+          return res.status(400).json({ error: updErr.message });
+        }
+        return res.status(201).json({
+          link: newLink,
+          event: mapEventRow(updatedRow as Record<string, unknown>),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to create attendant link.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  // Toggle Gift Table Attendant Link Active/Paused
+  app.patch(
+    '/api/studio/events/:eventId/gift-links/:linkId',
+    requireSupabaseAuth,
+    requireRole('creator', 'organizer'),
+    async (req: AuthedRequest, res) => {
+      try {
+        const client = req.supabase!;
+        const { data: evtRow, error: evtErr } = await client
+          .from('events')
+          .select('*')
+          .eq('id', req.params.eventId)
+          .eq('organizer_id', req.user!.id)
+          .maybeSingle();
+        if (evtErr || !evtRow) {
+          return res.status(404).json({ error: 'Event not found in studio.' });
+        }
+        const evtMapped = mapEventRow(evtRow as Record<string, unknown>);
+        const rawExtra =
+          (evtRow as Record<string, unknown>).extra_data_config &&
+          typeof (evtRow as Record<string, unknown>).extra_data_config === 'object'
+            ? ((evtRow as Record<string, unknown>).extra_data_config as Record<string, unknown>)
+            : ({ ...(evtMapped.extraDataConfig ?? { enableGiftTable: true, customFields: [] }) } as Record<string, unknown>);
+        const currentLinks = Array.isArray(rawExtra.attendantLinks)
+          ? (rawExtra.attendantLinks as GiftTableAttendantLink[])
+          : [];
+        const existing = currentLinks.find((l) => l.id === req.params.linkId);
+        if (!existing) {
+          return res.status(404).json({ error: 'Gift Table attendant link not found.' });
+        }
+        const requestedActive = (req.body as { active?: boolean } | undefined)?.active;
+        const nextActive = requestedActive !== undefined ? Boolean(requestedActive) : !existing.active;
+        const updatedLink: GiftTableAttendantLink = { ...existing, active: nextActive };
+        const nextExtra = {
+          ...rawExtra,
+          attendantLinks: currentLinks.map((l) => (l.id === existing.id ? updatedLink : l)),
+        };
+        const { data: updatedRow, error: updErr } = await client
+          .from('events')
+          .update({ extra_data_config: nextExtra })
+          .eq('id', evtMapped.id)
+          .eq('organizer_id', req.user!.id)
+          .select('*')
+          .single();
+        if (updErr) {
+          return res.status(400).json({ error: updErr.message });
+        }
+        return res.json({
+          link: updatedLink,
+          event: mapEventRow(updatedRow as Record<string, unknown>),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to update attendant link.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  // Delete Gift Table Attendant Link
+  app.delete(
+    '/api/studio/events/:eventId/gift-links/:linkId',
+    requireSupabaseAuth,
+    requireRole('creator', 'organizer'),
+    async (req: AuthedRequest, res) => {
+      try {
+        const client = req.supabase!;
+        const { data: evtRow, error: evtErr } = await client
+          .from('events')
+          .select('*')
+          .eq('id', req.params.eventId)
+          .eq('organizer_id', req.user!.id)
+          .maybeSingle();
+        if (evtErr || !evtRow) {
+          return res.status(404).json({ error: 'Event not found in studio.' });
+        }
+        const evtMapped = mapEventRow(evtRow as Record<string, unknown>);
+        const rawExtra =
+          (evtRow as Record<string, unknown>).extra_data_config &&
+          typeof (evtRow as Record<string, unknown>).extra_data_config === 'object'
+            ? ((evtRow as Record<string, unknown>).extra_data_config as Record<string, unknown>)
+            : ({ ...(evtMapped.extraDataConfig ?? { enableGiftTable: true, customFields: [] }) } as Record<string, unknown>);
+        const currentLinks = Array.isArray(rawExtra.attendantLinks)
+          ? (rawExtra.attendantLinks as GiftTableAttendantLink[])
+          : [];
+        const nextExtra = {
+          ...rawExtra,
+          attendantLinks: currentLinks.filter((l) => l.id !== req.params.linkId),
+        };
+        const { data: updatedRow, error: updErr } = await client
+          .from('events')
+          .update({ extra_data_config: nextExtra })
+          .eq('id', evtMapped.id)
+          .eq('organizer_id', req.user!.id)
+          .select('*')
+          .single();
+        if (updErr) {
+          return res.status(400).json({ error: updErr.message });
+        }
+        return res.json({
+          ok: true,
+          event: mapEventRow(updatedRow as Record<string, unknown>),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to delete attendant link.';
         return res.status(500).json({ error: message });
       }
     }

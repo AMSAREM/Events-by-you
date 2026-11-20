@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Compass,
+  Gift,
   ImagePlus,
   Pencil,
   Plus,
@@ -38,6 +39,7 @@ interface OverviewScreenProps {
   onUpdateEvent?: (updated: EventItem) => Promise<void> | void;
   onNavigateAttendees: (eventId?: string) => void;
   onOpenQrScanner: (eventId?: string, code?: string) => void;
+  onOpenGiftTable?: (eventId?: string) => void;
   onNavigateEvents: () => void;
   onNavigateSettings: () => void;
   onOpenPlans: () => void;
@@ -58,6 +60,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
   onUpdateEvent,
   onNavigateAttendees,
   onOpenQrScanner,
+  onOpenGiftTable,
   onNavigateEvents,
   onNavigateSettings,
   onOpenPlans,
@@ -251,6 +254,16 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                 <UserPlus className="w-4 h-4" />
                 Check-In Registration
               </button>
+              {onOpenGiftTable && (
+                <button
+                  type="button"
+                  onClick={() => onOpenGiftTable(featuredEvent?.id)}
+                  className="px-4 py-2.5 rounded-full bg-white/95 border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                >
+                  <Gift className="w-3.5 h-3.5" />
+                  Gift Table
+                </button>
+              )}
               {isEventCreator && (
                 <button
                   type="button"

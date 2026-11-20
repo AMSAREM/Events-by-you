@@ -33,6 +33,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  GiftTableAttendantLink,
   GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
@@ -769,10 +770,17 @@ export async function localFallbackRequest<T>(
   }
 
   // Public events
+  const sanitizePublicEventItem = (raw: EventItem & { organizerId?: string }): EventItem => {
+    const { organizerId: _org, ...rest } = raw;
+    if (!rest.extraDataConfig?.attendantLinks) return rest;
+    const { attendantLinks: _att, ...pubExtra } = rest.extraDataConfig;
+    return { ...rest, extraDataConfig: pubExtra };
+  };
+
   if (method === 'GET' && path === '/public/events') {
     const events = db.events
       .filter((e) => e.status === 'live' || e.status === 'upcoming')
-      .map(({ organizerId: _org, ...rest }) => rest);
+      .map((e) => sanitizePublicEventItem(e));
     return { events } as T;
   }
 
@@ -787,8 +795,7 @@ export async function localFallbackRequest<T>(
     if (!matched) {
       throw new LocalApiError('Event invitation not found or no longer active.', 404);
     }
-    const { organizerId: _org, ...clean } = matched;
-    return { event: clean } as T;
+    return { event: sanitizePublicEventItem(matched) } as T;
   }
 
   const publicRegMatch = path.match(/^\/public\/events\/([^/]+)\/register$/);
@@ -906,8 +913,74 @@ export async function localFallbackRequest<T>(
       giftLedger: [gift, ...(existingExtra.giftLedger ?? [])],
     };
     saveDb(db);
-    const { organizerId: _org, ...cleanEvent } = evt;
-    return { gift, event: cleanEvent } as T;
+    return { gift, event: sanitizePublicEventItem(evt) } as T;
+  }
+
+  const publicDeskMatch = path.match(/^\/public\/events\/([^/]+)\/gift-desk\/([^/]+)$/);
+  if (publicDeskMatch) {
+    const target = decodeURIComponent(publicDeskMatch[1]).trim().toLowerCase();
+    const token = decodeURIComponent(publicDeskMatch[2]).trim();
+    const evt = db.events.find(
+      (e) =>
+        (e.status === 'live' || e.status === 'upcoming') &&
+        (e.id.toLowerCase() === target || e.slug.toLowerCase() === target)
+    );
+    if (!evt) throw new LocalApiError('Event Gift Table not found.', 404);
+    const links = Array.isArray(evt.extraDataConfig?.attendantLinks)
+      ? evt.extraDataConfig!.attendantLinks!
+      : [];
+    const link = links.find((l) => l.token === token);
+    if (!link) throw new LocalApiError('Gift Table attendant link not found.', 404);
+    if (!link.active) {
+      throw new LocalApiError('This Gift Table attendant link has been paused by the organiser.', 403);
+    }
+    if (method === 'GET') {
+      const { token: _secret, ...safeAttendant } = link;
+      return { event: sanitizePublicEventItem(evt), attendant: safeAttendant } as T;
+    }
+    if (method === 'POST') {
+      const payload = body as Partial<GiftTableEntry>;
+      const giverName = String(payload.giverName || '').trim();
+      if (!giverName) throw new LocalApiError('Giver or donor name is required.', 400);
+      const giftType: GiftTableEntry['giftType'] =
+        payload.giftType === 'cash-momo' || payload.giftType === 'registry-item' || payload.giftType === 'blessing-only'
+          ? payload.giftType
+          : 'cash-momo';
+      const nowIso = new Date().toISOString();
+      const gift: GiftTableEntry = {
+        id: `gift-${Date.now()}-${randomHex(2)}`,
+        eventId: evt.id,
+        giverName,
+        giverPhone: payload.giverPhone?.trim() ? normalizePhoneE164(payload.giverPhone.trim()) : undefined,
+        giftType,
+        currency: payload.currency === 'USD' ? 'USD' : 'GHS',
+        amount: giftType === 'cash-momo' ? Math.max(1, Number(payload.amount) || 0) : undefined,
+        registryItem:
+          giftType === 'registry-item'
+            ? payload.registryItem?.trim() || evt.extraDataConfig?.giftRegistryItems?.[0] || 'Registry Gift'
+            : undefined,
+        side: payload.side?.trim() || undefined,
+        message: payload.message?.trim() || undefined,
+        recordedVia: 'gift-desk',
+        recordedBy: link.attendantName,
+        attendantLinkId: link.id,
+        createdAt: nowIso,
+      };
+      const existingExtra = evt.extraDataConfig ?? { enableGiftTable: true, customFields: [] };
+      const updatedLinks = links.map((l) =>
+        l.id === link.id ? { ...l, recordedCount: (l.recordedCount ?? 0) + 1, lastUsedAt: nowIso } : l
+      );
+      const updatedLink = updatedLinks.find((l) => l.id === link.id)!;
+      evt.extraDataConfig = {
+        ...existingExtra,
+        enableGiftTable: true,
+        giftLedger: [gift, ...(existingExtra.giftLedger ?? [])],
+        attendantLinks: updatedLinks,
+      };
+      saveDb(db);
+      const { token: _secret, ...safeAttendant } = updatedLink;
+      return { gift, event: sanitizePublicEventItem(evt), attendant: safeAttendant } as T;
+    }
   }
 
   // Public Disposable Camera routes
@@ -1216,6 +1289,71 @@ export async function localFallbackRequest<T>(
     saveDb(db);
     const { organizerId: _org, ...cleanEvent } = evt;
     return { gift, event: cleanEvent } as T;
+  }
+
+  const studioGiftLinksCreateMatch = path.match(/^\/studio\/events\/([^/]+)\/gift-links$/);
+  if (method === 'POST' && studioGiftLinksCreateMatch) {
+    requireRoles(user, ['creator', 'organizer']);
+    const eventId = decodeURIComponent(studioGiftLinksCreateMatch[1]);
+    const evt = db.events.find((e) => e.id === eventId && e.organizerId === user.id);
+    if (!evt) throw new LocalApiError('Event not found.', 404);
+    const attendantName = String(body.attendantName || '').trim();
+    if (!attendantName) throw new LocalApiError('Attendant name is required.', 400);
+    const link: GiftTableAttendantLink = {
+      id: `glink-${Date.now()}-${randomHex(2)}`,
+      eventId: evt.id,
+      token: `gd_${randomHex(8)}`,
+      attendantName,
+      roleLabel: body.roleLabel ? String(body.roleLabel).trim() : 'Gift Table Attendant',
+      phone: body.phone ? normalizePhoneE164(String(body.phone).trim()) : undefined,
+      active: true,
+      recordedCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+    const existingExtra = evt.extraDataConfig ?? { enableGiftTable: true, customFields: [] };
+    evt.extraDataConfig = {
+      ...existingExtra,
+      enableGiftTable: true,
+      attendantLinks: [link, ...(existingExtra.attendantLinks ?? [])],
+    };
+    saveDb(db);
+    const { organizerId: _org, ...cleanEvent } = evt;
+    return { link, event: cleanEvent } as T;
+  }
+
+  const studioGiftLinkItemMatch = path.match(/^\/studio\/events\/([^/]+)\/gift-links\/([^/]+)$/);
+  if (studioGiftLinkItemMatch) {
+    requireRoles(user, ['creator', 'organizer']);
+    const eventId = decodeURIComponent(studioGiftLinkItemMatch[1]);
+    const linkId = decodeURIComponent(studioGiftLinkItemMatch[2]);
+    const evt = db.events.find((e) => e.id === eventId && e.organizerId === user.id);
+    if (!evt) throw new LocalApiError('Event not found.', 404);
+    const existingExtra = evt.extraDataConfig ?? { enableGiftTable: true, customFields: [] };
+    const links = Array.isArray(existingExtra.attendantLinks) ? existingExtra.attendantLinks : [];
+    if (method === 'PATCH') {
+      const target = links.find((l) => l.id === linkId);
+      if (!target) throw new LocalApiError('Gift Table attendant link not found.', 404);
+      const nextLink: GiftTableAttendantLink = {
+        ...target,
+        active: body.active !== undefined ? Boolean(body.active) : !target.active,
+      };
+      evt.extraDataConfig = {
+        ...existingExtra,
+        attendantLinks: links.map((l) => (l.id === linkId ? nextLink : l)),
+      };
+      saveDb(db);
+      const { organizerId: _org, ...cleanEvent } = evt;
+      return { link: nextLink, event: cleanEvent } as T;
+    }
+    if (method === 'DELETE') {
+      evt.extraDataConfig = {
+        ...existingExtra,
+        attendantLinks: links.filter((l) => l.id !== linkId),
+      };
+      saveDb(db);
+      const { organizerId: _org, ...cleanEvent } = evt;
+      return { ok: true, event: cleanEvent } as T;
+    }
   }
 
   const evtMatch = path.match(/^\/studio\/events\/([^/]+)$/);

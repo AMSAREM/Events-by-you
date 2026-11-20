@@ -22,10 +22,12 @@ import {
   MessageSquare,
   Navigation,
   QrCode,
+  Search,
   Share2,
   ShieldCheck,
   Sparkles,
   User,
+  UserCheck,
   Users,
   Wallet,
   X,
@@ -34,13 +36,16 @@ import {
   Attendee,
   DesignTheme,
   EventItem,
+  GiftTableAttendantLink,
   GiftTableEntry,
   ScheduleBlock,
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
+import { api } from '../lib/api';
 import {
   buildEventInvitationUrl,
   buildEventOgImageUrl,
+  buildGiftDeskUrl,
   DeterministicQrSvg,
   downloadQrSvg,
 } from '../lib/qr';
@@ -51,6 +56,7 @@ interface PublicEventScreenProps {
   scheduleBlocks?: ScheduleBlock[];
   initialEventId?: string;
   initialFocus?: 'top' | 'register' | 'checkin' | 'gifts';
+  initialDeskToken?: string;
   isLoadingEvents?: boolean;
   isSignedIn?: boolean;
   hasSetEvent?: boolean;
@@ -60,6 +66,7 @@ interface PublicEventScreenProps {
   onNavigateSignUp?: () => void;
   onCreateEvent?: () => void;
   onFocusModeChange?: (mode: 'top' | 'checkin' | 'gifts', event: EventItem) => void;
+  onGiftEventSync?: (updatedEvent: EventItem) => void;
   onRegisterAttendee: (eventId: string, attendee: Attendee) => Promise<Attendee | void> | void;
   onSubmitGiftTableEntry?: (
     eventId: string,
@@ -117,12 +124,14 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   scheduleBlocks = [],
   initialEventId,
   initialFocus = 'top',
+  initialDeskToken,
   isLoadingEvents = false,
   isSignedIn = false,
   onBackHome,
   onSelectEvent,
   onOpenStudio,
   onFocusModeChange,
+  onGiftEventSync,
   onRegisterAttendee,
   onSubmitGiftTableEntry,
   onOpenDisposableCamera,
@@ -150,13 +159,43 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     events.find((e) => e.id === selectedEventId) ?? activeEvents[0] ?? events[0];
 
   const [screenMode, setScreenMode] = useState<'top' | 'checkin' | 'gifts'>(
-    initialFocus === 'checkin' ? 'checkin' : initialFocus === 'gifts' ? 'gifts' : 'top'
+    initialDeskToken
+      ? 'gifts'
+      : initialFocus === 'checkin'
+        ? 'checkin'
+        : initialFocus === 'gifts'
+          ? 'gifts'
+          : 'top'
   );
   const standaloneCheckin = screenMode === 'checkin';
   const standaloneGifts = screenMode === 'gifts';
   const [showCheckinModal, setShowCheckinModal] = useState(false);
 
+  const [deskToken, setDeskToken] = useState<string>(initialDeskToken || '');
+  const [deskAttendant, setDeskAttendant] = useState<Omit<GiftTableAttendantLink, 'token'> | null>(
+    null
+  );
+  const [deskLoading, setDeskLoading] = useState(false);
+  const [deskError, setDeskError] = useState<string | null>(null);
+  const [deskSearch, setDeskSearch] = useState('');
+
   useEffect(() => {
+    setDeskToken(initialDeskToken || '');
+    if (initialDeskToken) {
+      setScreenMode('gifts');
+      setShowCheckinModal(false);
+    } else {
+      setDeskAttendant(null);
+      setDeskError(null);
+    }
+  }, [initialDeskToken]);
+
+  useEffect(() => {
+    if (initialDeskToken) {
+      setScreenMode('gifts');
+      setShowCheckinModal(false);
+      return;
+    }
     if (initialFocus === 'checkin') {
       setScreenMode('checkin');
       setShowCheckinModal(false);
@@ -175,7 +214,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     } else if (initialFocus === 'top') {
       setScreenMode('top');
     }
-  }, [initialFocus, selectedEvent]);
+  }, [initialFocus, initialDeskToken, selectedEvent]);
 
   const categoryPreset = useMemo(
     () => getCategoryPreset(selectedEvent?.category || 'Events'),
@@ -270,8 +309,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   );
 
   const giftsStandaloneUrl = useMemo(
-    () => buildEventInvitationUrl(selectedEvent?.slug ?? selectedEvent?.id ?? 'event', 'gifts'),
-    [selectedEvent?.slug, selectedEvent?.id]
+    () =>
+      deskToken
+        ? buildGiftDeskUrl(selectedEvent?.slug ?? selectedEvent?.id ?? 'event', deskToken)
+        : buildEventInvitationUrl(selectedEvent?.slug ?? selectedEvent?.id ?? 'event', 'gifts'),
+    [selectedEvent?.slug, selectedEvent?.id, deskToken]
   );
 
   const ogImageUrl = useMemo(
@@ -279,10 +321,47 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     [selectedEvent?.slug, selectedEvent?.id]
   );
 
+  useEffect(() => {
+    if (!standaloneGifts || !deskToken || !selectedEvent) return;
+    let cancelled = false;
+    setDeskLoading(true);
+    setDeskError(null);
+    api.public
+      .getGiftDeskSession(selectedEvent.slug || selectedEvent.id, deskToken)
+      .then((res) => {
+        if (cancelled) return;
+        setDeskAttendant(res.attendant);
+        setDeskError(null);
+        if (res.event) {
+          onGiftEventSync?.(res.event);
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setDeskAttendant(null);
+        setDeskError(
+          err instanceof Error
+            ? err.message
+            : 'This Gift Table attendant link is paused or invalid.'
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setDeskLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [standaloneGifts, deskToken, selectedEvent?.id, selectedEvent?.slug]);
+
   const switchScreenMode = (mode: 'top' | 'checkin' | 'gifts') => {
     setScreenMode(mode);
     setGiftReceipt(null);
     setGiftError(null);
+    if (mode !== 'gifts' && deskToken) {
+      setDeskToken('');
+      setDeskAttendant(null);
+      setDeskError(null);
+    }
     if (selectedEvent) {
       onFocusModeChange?.(mode, selectedEvent);
     }
@@ -330,6 +409,12 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const handleGiftTableSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEvent || giftSubmitting) return;
+    if (deskToken && !deskAttendant) {
+      setGiftError(
+        deskError || 'This Gift Table attendant link is paused or invalid. Please ask the organiser.'
+      );
+      return;
+    }
     if (!giftGiverName.trim()) {
       setGiftError('Please enter your name or family name.');
       return;
@@ -338,14 +423,14 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       setGiftError('Please enter a valid cash or MoMo gift amount.');
       return;
     }
-    if (!onSubmitGiftTableEntry) {
+    if (!deskToken && !onSubmitGiftTableEntry) {
       setGiftError('Gift Table submissions are currently unavailable.');
       return;
     }
     setGiftError(null);
     setGiftSubmitting(true);
     try {
-      const result = await onSubmitGiftTableEntry(selectedEvent.id, {
+      const payload = {
         giverName: giftGiverName.trim(),
         giverPhone: giftGiverPhone.trim() ? normalizePhoneE164(giftGiverPhone.trim()) : undefined,
         giftType: giftMode,
@@ -357,27 +442,32 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             : undefined,
         side: giftSide.trim() || undefined,
         message: giftMessage.trim() || undefined,
-      });
-      if (result?.gift) {
-        setGiftReceipt(result.gift);
-      } else {
-        setGiftReceipt({
-          id: `gift-${Date.now()}`,
-          eventId: selectedEvent.id,
-          giverName: giftGiverName.trim(),
-          giverPhone: giftGiverPhone.trim() || undefined,
-          giftType: giftMode,
-          currency: giftCurrency,
-          amount: giftMode === 'cash-momo' ? Math.max(1, Number(giftAmount) || 0) : undefined,
-          registryItem:
-            giftMode === 'registry-item'
-              ? giftItem || extraDataConfig.giftRegistryItems?.[0] || 'Registry Gift'
-              : undefined,
-          side: giftSide.trim() || undefined,
-          message: giftMessage.trim() || undefined,
-          recordedVia: 'public-table',
-          createdAt: new Date().toISOString(),
-        });
+      };
+
+      if (deskToken && deskAttendant) {
+        const deskRes = await api.public.submitGiftDeskEntry(
+          selectedEvent.slug || selectedEvent.id,
+          deskToken,
+          payload
+        );
+        setDeskAttendant(deskRes.attendant);
+        if (deskRes.event) {
+          onGiftEventSync?.(deskRes.event);
+        }
+        setGiftReceipt(deskRes.gift);
+      } else if (onSubmitGiftTableEntry) {
+        const result = await onSubmitGiftTableEntry(selectedEvent.id, payload);
+        if (result?.gift) {
+          setGiftReceipt(result.gift);
+        } else {
+          setGiftReceipt({
+            id: `gift-${Date.now()}`,
+            eventId: selectedEvent.id,
+            ...payload,
+            recordedVia: 'public-table',
+            createdAt: new Date().toISOString(),
+          });
+        }
       }
       setGiftMessage('');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -386,6 +476,49 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     } finally {
       setGiftSubmitting(false);
     }
+  };
+
+  const handleExportDeskCsv = () => {
+    if (!selectedEvent) return;
+    const ledger = extraDataConfig.giftLedger ?? [];
+    const headers = [
+      'GiverName',
+      'Phone',
+      'GiftType',
+      'Amount',
+      'Currency',
+      'RegistryItem',
+      'Side',
+      'Message',
+      'Source',
+      'RecordedBy',
+      'CreatedAt',
+    ];
+    const rows = ledger.map((g) => [
+      g.giverName,
+      g.giverPhone || '',
+      g.giftType,
+      g.amount !== undefined ? String(g.amount) : '',
+      g.currency || 'GHS',
+      g.registryItem || '',
+      g.side || '',
+      (g.message || '').replace(/"/g, '""'),
+      g.recordedVia || 'public-table',
+      g.recordedBy || '',
+      g.createdAt,
+    ]);
+    const csv = [headers.join(','), ...rows.map((r) => r.map((c) => `"${c}"`).join(','))].join(
+      '\n'
+    );
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${selectedEvent.slug || selectedEvent.id}-gift-desk.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setShareToast(`Exported ${ledger.length} gift desk entries`);
+    setTimeout(() => setShareToast(null), 2200);
   };
 
   const handleLookupExistingPass = (e: React.FormEvent) => {
@@ -1298,30 +1431,99 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   </button>
                 </div>
 
-                {/* Standalone Gift Table Hero Card */}
+                {/* Standalone Gift Table / Appointed Gift Desk Hero Card */}
                 <section className="bg-[#0B0B0B] text-white rounded-[32px] p-5 sm:p-7 shadow-xl space-y-4">
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div className="space-y-1.5 min-w-0">
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white text-[#0B0B0B] text-[10px] font-bold uppercase tracking-wider">
-                        <Gift className="w-3 h-3" />
-                        Standalone Gift Table Activity
+                        {deskAttendant ? (
+                          <>
+                            <UserCheck className="w-3 h-3" />
+                            <span>
+                              Appointed Gift Desk · Managed by {deskAttendant.attendantName}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <Gift className="w-3 h-3" />
+                            <span>Standalone Gift Table Activity</span>
+                          </>
+                        )}
                       </span>
                       <h2 className="font-display text-xl sm:text-2xl font-bold text-white">
-                        {extraDataConfig.giftTitle || `${selectedEvent.title} — Gift Table`}
+                        {deskAttendant
+                          ? `${selectedEvent.title} — Manned Gift Desk`
+                          : extraDataConfig.giftTitle || `${selectedEvent.title} — Gift Table`}
                       </h2>
                       <p className="text-xs text-zinc-300 leading-relaxed max-w-xl">
-                        Gift pledges, Mobile Money envelopes, and well-wishes are completely separate from guest registration, walk-ins, and gate check-in.
+                        {deskAttendant
+                          ? `You are operating an appointed Gift Table link${
+                              deskAttendant.roleLabel ? ` (${deskAttendant.roleLabel})` : ''
+                            }. All envelopes, MoMo transfers, and gifts you record are credited to your desk automatically.`
+                          : 'Gift pledges, Mobile Money envelopes, and well-wishes are completely separate from guest registration, walk-ins, and gate check-in.'}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={handleShare}
-                      className="px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold inline-flex items-center gap-1.5 shrink-0"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                      <span>Copy /e/{selectedEvent.slug}/gifts</span>
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {deskAttendant && (
+                        <button
+                          type="button"
+                          onClick={handleExportDeskCsv}
+                          className="px-3.5 py-2 rounded-full bg-white text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Desk CSV</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleShare}
+                        className="px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold inline-flex items-center gap-1.5"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>
+                          {deskAttendant ? 'Copy Desk URL' : `Copy /e/${selectedEvent.slug}/gifts`}
+                        </span>
+                      </button>
+                    </div>
                   </div>
+
+                  {deskAttendant && (
+                    <div className="grid grid-cols-3 gap-2.5">
+                      <div className="p-3 rounded-2xl bg-white/10 border border-white/10">
+                        <span className="text-[10px] uppercase tracking-wider text-zinc-400 block">
+                          Total Entries
+                        </span>
+                        <span className="text-base sm:text-lg font-bold text-white tabular-nums">
+                          {extraDataConfig.giftLedger?.length ?? 0}
+                        </span>
+                      </div>
+                      <div className="p-3 rounded-2xl bg-white/10 border border-white/10">
+                        <span className="text-[10px] uppercase tracking-wider text-zinc-400 block">
+                          Logged by You
+                        </span>
+                        <span className="text-base sm:text-lg font-bold text-white tabular-nums">
+                          {deskAttendant.recordedCount ?? 0}
+                        </span>
+                      </div>
+                      <div className="p-3 rounded-2xl bg-white/10 border border-white/10">
+                        <span className="text-[10px] uppercase tracking-wider text-zinc-400 block">
+                          Cash / MoMo (GHS)
+                        </span>
+                        <span className="text-base sm:text-lg font-bold text-white tabular-nums">
+                          {(extraDataConfig.giftLedger ?? [])
+                            .reduce(
+                              (sum, g) =>
+                                sum +
+                                (g.giftType === 'cash-momo' && (g.currency || 'GHS') === 'GHS'
+                                  ? g.amount || 0
+                                  : 0),
+                              0
+                            )
+                            .toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   {extraDataConfig.momoNumber && (
                     <div className="p-3.5 rounded-2xl bg-white/10 border border-white/15 flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -1348,256 +1550,343 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   )}
                 </section>
 
-                {/* Standalone Gift Table Form or Receipt */}
-                <section className="bg-white rounded-[32px] p-6 sm:p-7 shadow-md border border-[#E5E5EA]/70 space-y-5">
-                  {giftReceipt ? (
-                    <div className="text-center space-y-4 py-2">
-                      <div className="w-14 h-14 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
-                        <Check className="w-7 h-7" />
-                      </div>
+                {deskToken && deskLoading && (
+                  <div className="p-4 rounded-2xl bg-white border border-[#E5E5EA] flex items-center gap-2.5 text-xs text-[#52525B]">
+                    <Loader2 className="w-4 h-4 animate-spin text-[#0B0B0B]" />
+                    <span>Validating Gift Desk attendant access...</span>
+                  </div>
+                )}
+
+                {deskToken && deskError && !deskLoading && (
+                  <section className="p-6 rounded-[28px] bg-red-50 border border-red-200 space-y-3">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
                       <div className="space-y-1">
-                        <span className="inline-block px-3 py-1 rounded-full bg-[#F5F5F7] text-[11px] font-semibold text-[#0B0B0B]">
-                          Gift Table Receipt · Standalone Activity
-                        </span>
-                        <h3 className="font-display text-2xl font-bold text-[#0B0B0B]">
-                          Thank you, {giftReceipt.giverName}!
+                        <h3 className="text-sm font-bold text-red-900">
+                          Gift Desk Link Paused or Invalid
                         </h3>
-                        <p className="text-xs text-[#71717A] max-w-md mx-auto">
-                          Your gift entry has been recorded on the {selectedEvent.title} Gift Ledger. Attendance &amp; gate check-in remain completely separate.
+                        <p className="text-xs text-red-700 leading-relaxed">
+                          {deskError} Contact the event organiser to resume this attendant link or issue a fresh desk URL.
                         </p>
-                      </div>
-                      <div className="max-w-md mx-auto p-4 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] text-left text-xs space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[#71717A]">Gift Type</span>
-                          <span className="font-bold text-[#0B0B0B]">
-                            {giftReceipt.giftType === 'cash-momo'
-                              ? `${giftReceipt.currency || 'GHS'} ${giftReceipt.amount?.toLocaleString()}`
-                              : giftReceipt.giftType === 'registry-item'
-                                ? giftReceipt.registryItem
-                                : 'Well-Wishes Note'}
-                          </span>
-                        </div>
-                        {giftReceipt.side && (
-                          <div className="flex items-center justify-between">
-                            <span className="text-[#71717A]">Side / Honoring</span>
-                            <span className="font-semibold text-[#0B0B0B]">{giftReceipt.side}</span>
-                          </div>
-                        )}
-                        {giftReceipt.message && (
-                          <p className="pt-1 text-[11px] text-[#444748] italic">
-                            &ldquo;{giftReceipt.message}&rdquo;
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap justify-center gap-2.5 pt-2">
-                        <button
-                          type="button"
-                          onClick={() => setGiftReceipt(null)}
-                          className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold"
-                        >
-                          Record Another Gift
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => switchScreenMode('top')}
-                          className="px-5 py-2.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-xs font-semibold"
-                        >
-                          Back to Event Page
-                        </button>
                       </div>
                     </div>
-                  ) : (
-                    <form onSubmit={handleGiftTableSubmit} className="space-y-4">
-                      <div>
-                        <h3 className="font-display text-xl font-bold text-[#0B0B0B]">
-                          Record a Gift, Envelope or Well-Wishes
-                        </h3>
-                        <p className="text-xs text-[#71717A] mt-0.5">
-                          No gate registration or attendee ticket is required to leave a gift or blessing.
-                        </p>
-                      </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeskToken('');
+                        setDeskError(null);
+                        switchScreenMode('gifts');
+                      }}
+                      className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold"
+                    >
+                      Open Public Gift Table Instead
+                    </button>
+                  </section>
+                )}
 
-                      {giftError && (
-                        <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 flex items-start gap-2.5 text-xs text-red-700">
-                          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                          <span>{giftError}</span>
+                {/* Standalone Gift Table Form or Receipt */}
+                {(!deskToken || deskAttendant) && (
+                  <section className="bg-white rounded-[32px] p-6 sm:p-7 shadow-md border border-[#E5E5EA]/70 space-y-5">
+                    {giftReceipt ? (
+                      <div className="text-center space-y-4 py-2">
+                        <div className="w-14 h-14 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
+                          <Check className="w-7 h-7" />
                         </div>
-                      )}
-
-                      <div className="grid grid-cols-3 gap-2">
-                        {(
-                          [
-                            { id: 'cash-momo', label: 'MoMo / Cash' },
-                            { id: 'registry-item', label: 'Registry Gift' },
-                            { id: 'blessing-only', label: 'Wishes Note' },
-                          ] as const
-                        ).map((opt) => (
+                        <div className="space-y-1">
+                          <span className="inline-block px-3 py-1 rounded-full bg-[#F5F5F7] text-[11px] font-semibold text-[#0B0B0B]">
+                            {giftReceipt.recordedBy
+                              ? `Gift Desk Receipt · Recorded by ${giftReceipt.recordedBy}`
+                              : 'Gift Table Receipt · Standalone Activity'}
+                          </span>
+                          <h3 className="font-display text-2xl font-bold text-[#0B0B0B]">
+                            Thank you, {giftReceipt.giverName}!
+                          </h3>
+                          <p className="text-xs text-[#71717A] max-w-md mx-auto">
+                            Your gift entry has been recorded on the {selectedEvent.title} Gift Ledger. Attendance &amp; gate check-in remain completely separate.
+                          </p>
+                        </div>
+                        <div className="max-w-md mx-auto p-4 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] text-left text-xs space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[#71717A]">Gift Type</span>
+                            <span className="font-bold text-[#0B0B0B]">
+                              {giftReceipt.giftType === 'cash-momo'
+                                ? `${giftReceipt.currency || 'GHS'} ${giftReceipt.amount?.toLocaleString()}`
+                                : giftReceipt.giftType === 'registry-item'
+                                  ? giftReceipt.registryItem
+                                  : 'Well-Wishes Note'}
+                            </span>
+                          </div>
+                          {giftReceipt.recordedBy && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-[#71717A]">Desk Attendant</span>
+                              <span className="font-semibold text-[#0B0B0B]">
+                                {giftReceipt.recordedBy}
+                              </span>
+                            </div>
+                          )}
+                          {giftReceipt.side && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-[#71717A]">Side / Honoring</span>
+                              <span className="font-semibold text-[#0B0B0B]">{giftReceipt.side}</span>
+                            </div>
+                          )}
+                          {giftReceipt.message && (
+                            <p className="pt-1 text-[11px] text-[#444748] italic">
+                              &ldquo;{giftReceipt.message}&rdquo;
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap justify-center gap-2.5 pt-2">
                           <button
-                            key={opt.id}
                             type="button"
-                            onClick={() => setGiftMode(opt.id)}
-                            className={`py-2.5 px-3 rounded-xl text-xs font-semibold border transition-colors ${
-                              giftMode === opt.id
-                                ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
-                                : 'bg-[#F5F5F7] text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
-                            }`}
+                            onClick={() => setGiftReceipt(null)}
+                            className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold"
                           >
-                            {opt.label}
+                            {deskAttendant ? 'Record Next Desk Gift' : 'Record Another Gift'}
                           </button>
-                        ))}
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                            Giver / Family Name <span className="text-red-500">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            required
-                            value={giftGiverName}
-                            onChange={(e) => setGiftGiverName(e.target.value)}
-                            placeholder="Your full name or family name"
-                            className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-medium text-[#0B0B0B]"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                            Phone Number (Optional)
-                          </label>
-                          <input
-                            type="tel"
-                            value={giftGiverPhone}
-                            onChange={(e) => setGiftGiverPhone(e.target.value)}
-                            placeholder="+233 XX XXX XXXX"
-                            className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B]"
-                          />
-                        </div>
-                      </div>
-
-                      {giftMode === 'cash-momo' && (
-                        <div className="flex gap-2">
-                          <select
-                            value={giftCurrency}
-                            onChange={(e) => setGiftCurrency(e.target.value as 'GHS' | 'USD')}
-                            aria-label="Gift currency"
-                            className="h-11 px-3 rounded-xl bg-[#F5F5F7] text-xs font-bold text-[#0B0B0B]"
+                          <button
+                            type="button"
+                            onClick={() => switchScreenMode('top')}
+                            className="px-5 py-2.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-xs font-semibold"
                           >
-                            <option value="GHS">GHS</option>
-                            <option value="USD">USD</option>
-                          </select>
-                          <input
-                            type="number"
-                            min={1}
-                            required
-                            value={giftAmount}
-                            onChange={(e) => setGiftAmount(e.target.value)}
-                            placeholder="Envelope / MoMo amount"
-                            className="flex-1 h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-mono font-semibold text-[#0B0B0B]"
-                          />
-                        </div>
-                      )}
-
-                      {giftMode === 'registry-item' && (
-                        <div>
-                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                            Select Gift Table Registry Item
-                          </label>
-                          <select
-                            value={giftItem}
-                            onChange={(e) => setGiftItem(e.target.value)}
-                            className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-medium text-[#0B0B0B]"
-                          >
-                            {(
-                              extraDataConfig.giftRegistryItems &&
-                              extraDataConfig.giftRegistryItems.length > 0
-                                ? extraDataConfig.giftRegistryItems
-                                : ['Cash Envelope Blessing', 'Gift Hamper', 'Keepsake Item']
-                            ).map((item) => (
-                              <option key={item} value={item}>
-                                {item}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                            Honoring / Side (Optional)
-                          </label>
-                          <input
-                            type="text"
-                            value={giftSide}
-                            onChange={(e) => setGiftSide(e.target.value)}
-                            placeholder="e.g. Bride's Family, Friends, Colleagues"
-                            className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                            Well-Wishes Message (Optional)
-                          </label>
-                          <input
-                            type="text"
-                            value={giftMessage}
-                            onChange={(e) => setGiftMessage(e.target.value)}
-                            placeholder="Write a personal note or blessing..."
-                            className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
-                          />
+                            Back to Event Page
+                          </button>
                         </div>
                       </div>
+                    ) : (
+                      <form onSubmit={handleGiftTableSubmit} className="space-y-4">
+                        <div>
+                          <h3 className="font-display text-xl font-bold text-[#0B0B0B]">
+                            {deskAttendant
+                              ? `Log Physical Envelope, MoMo or Gift (${deskAttendant.attendantName})`
+                              : 'Record a Gift, Envelope or Well-Wishes'}
+                          </h3>
+                          <p className="text-xs text-[#71717A] mt-0.5">
+                            No gate registration or attendee ticket is required to leave or log a gift.
+                          </p>
+                        </div>
 
-                      <button
-                        type="submit"
-                        disabled={giftSubmitting}
-                        className="w-full h-13 bg-[#0B0B0B] hover:opacity-90 disabled:opacity-60 text-white text-sm font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
-                      >
-                        <Gift className="w-4 h-4" />
-                        <span>{giftSubmitting ? 'Recording Gift...' : 'Submit Standalone Gift Entry'}</span>
-                      </button>
-                    </form>
-                  )}
-                </section>
+                        {giftError && (
+                          <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 flex items-start gap-2.5 text-xs text-red-700">
+                            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                            <span>{giftError}</span>
+                          </div>
+                        )}
 
-                {/* Live Public Gift Ledger / Well-Wishes Wall */}
+                        <div className="grid grid-cols-3 gap-2">
+                          {(
+                            [
+                              { id: 'cash-momo', label: 'MoMo / Cash' },
+                              { id: 'registry-item', label: 'Registry Gift' },
+                              { id: 'blessing-only', label: 'Wishes Note' },
+                            ] as const
+                          ).map((opt) => (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() => setGiftMode(opt.id)}
+                              className={`py-2.5 px-3 rounded-xl text-xs font-semibold border transition-colors ${
+                                giftMode === opt.id
+                                  ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                                  : 'bg-[#F5F5F7] text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                              Giver / Family Name <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={giftGiverName}
+                              onChange={(e) => setGiftGiverName(e.target.value)}
+                              placeholder="Giver full name or family name"
+                              className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-medium text-[#0B0B0B]"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                              Phone Number (Optional)
+                            </label>
+                            <input
+                              type="tel"
+                              value={giftGiverPhone}
+                              onChange={(e) => setGiftGiverPhone(e.target.value)}
+                              placeholder="+233 XX XXX XXXX"
+                              className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B]"
+                            />
+                          </div>
+                        </div>
+
+                        {giftMode === 'cash-momo' && (
+                          <div className="flex gap-2">
+                            <select
+                              value={giftCurrency}
+                              onChange={(e) => setGiftCurrency(e.target.value as 'GHS' | 'USD')}
+                              aria-label="Gift currency"
+                              className="h-11 px-3 rounded-xl bg-[#F5F5F7] text-xs font-bold text-[#0B0B0B]"
+                            >
+                              <option value="GHS">GHS</option>
+                              <option value="USD">USD</option>
+                            </select>
+                            <input
+                              type="number"
+                              min={1}
+                              required
+                              value={giftAmount}
+                              onChange={(e) => setGiftAmount(e.target.value)}
+                              placeholder="Envelope / MoMo amount"
+                              className="flex-1 h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-mono font-semibold text-[#0B0B0B]"
+                            />
+                          </div>
+                        )}
+
+                        {giftMode === 'registry-item' && (
+                          <div>
+                            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                              Select Gift Table Registry Item
+                            </label>
+                            <select
+                              value={giftItem}
+                              onChange={(e) => setGiftItem(e.target.value)}
+                              className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-medium text-[#0B0B0B]"
+                            >
+                              {(
+                                extraDataConfig.giftRegistryItems &&
+                                extraDataConfig.giftRegistryItems.length > 0
+                                  ? extraDataConfig.giftRegistryItems
+                                  : ['Cash Envelope Blessing', 'Gift Hamper', 'Keepsake Item']
+                              ).map((item) => (
+                                <option key={item} value={item}>
+                                  {item}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                              Honoring / Side (Optional)
+                            </label>
+                            <input
+                              type="text"
+                              value={giftSide}
+                              onChange={(e) => setGiftSide(e.target.value)}
+                              placeholder="e.g. Bride's Family, Friends, Colleagues"
+                              className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                              Well-Wishes Message (Optional)
+                            </label>
+                            <input
+                              type="text"
+                              value={giftMessage}
+                              onChange={(e) => setGiftMessage(e.target.value)}
+                              placeholder="Write a personal note or blessing..."
+                              className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                            />
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={giftSubmitting}
+                          className="w-full h-13 bg-[#0B0B0B] hover:opacity-90 disabled:opacity-60 text-white text-sm font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
+                        >
+                          <Gift className="w-4 h-4" />
+                          <span>
+                            {giftSubmitting
+                              ? 'Recording Gift...'
+                              : deskAttendant
+                                ? `Log Desk Gift as ${deskAttendant.attendantName}`
+                                : 'Submit Standalone Gift Entry'}
+                          </span>
+                        </button>
+                      </form>
+                    )}
+                  </section>
+                )}
+
+                {/* Live Public Gift Ledger / Attendant Desk Ledger */}
                 {(extraDataConfig.giftLedger?.length ?? 0) > 0 && (
                   <section className="bg-white rounded-[28px] p-5 sm:p-6 shadow-sm space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-bold text-[#0B0B0B]">
-                        Gift Table Well-Wishes Wall
-                      </h3>
-                      <span className="text-[11px] text-[#71717A] tabular-nums">
-                        {extraDataConfig.giftLedger?.length ?? 0} entries
-                      </span>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm font-bold text-[#0B0B0B]">
+                          {deskAttendant ? 'Live Gift Desk Ledger' : 'Gift Table Well-Wishes Wall'}
+                        </h3>
+                        <span className="text-[11px] text-[#71717A] tabular-nums">
+                          {extraDataConfig.giftLedger?.length ?? 0} entries
+                        </span>
+                      </div>
+                      {deskAttendant && (
+                        <div className="relative sm:w-56">
+                          <Search className="w-3.5 h-3.5 text-[#71717A] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                          <input
+                            type="text"
+                            value={deskSearch}
+                            onChange={(e) => setDeskSearch(e.target.value)}
+                            placeholder="Search giver or note..."
+                            className="w-full h-9 pl-8 pr-3 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none"
+                          />
+                        </div>
+                      )}
                     </div>
                     <div className="space-y-2">
-                      {(extraDataConfig.giftLedger ?? []).slice(0, 8).map((entry) => (
-                        <div
-                          key={entry.id}
-                          className="p-3.5 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-                        >
-                          <div className="min-w-0">
-                            <p className="text-xs font-bold text-[#0B0B0B] truncate">
-                              {entry.giverName}
-                              {entry.side ? ` · ${entry.side}` : ''}
-                            </p>
-                            {entry.message && (
-                              <p className="text-[11px] text-[#444748] mt-0.5 italic">
-                                &ldquo;{entry.message}&rdquo;
-                              </p>
-                            )}
+                      {(extraDataConfig.giftLedger ?? [])
+                        .filter((entry) => {
+                          if (!deskAttendant || !deskSearch.trim()) return true;
+                          const q = deskSearch.trim().toLowerCase();
+                          return (
+                            entry.giverName.toLowerCase().includes(q) ||
+                            (entry.side || '').toLowerCase().includes(q) ||
+                            (entry.message || '').toLowerCase().includes(q) ||
+                            (entry.recordedBy || '').toLowerCase().includes(q)
+                          );
+                        })
+                        .slice(0, deskAttendant ? 50 : 8)
+                        .map((entry) => (
+                          <div
+                            key={entry.id}
+                            className="p-3.5 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <p className="text-xs font-bold text-[#0B0B0B] truncate">
+                                  {entry.giverName}
+                                  {entry.side ? ` · ${entry.side}` : ''}
+                                </p>
+                                {entry.recordedBy && (
+                                  <span className="px-2 py-0.5 rounded-full bg-white border border-[#E5E5EA] text-[10px] font-mono text-[#52525B]">
+                                    Desk · {entry.recordedBy}
+                                  </span>
+                                )}
+                              </div>
+                              {entry.message && (
+                                <p className="text-[11px] text-[#444748] mt-0.5 italic">
+                                  &ldquo;{entry.message}&rdquo;
+                                </p>
+                              )}
+                            </div>
+                            <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] shrink-0 self-start sm:self-center">
+                              {entry.giftType === 'cash-momo'
+                                ? `${entry.currency || 'GHS'} ${entry.amount?.toLocaleString()}`
+                                : entry.giftType === 'registry-item'
+                                  ? entry.registryItem || 'Registry Gift'
+                                  : 'Well-Wishes'}
+                            </span>
                           </div>
-                          <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] shrink-0 self-start sm:self-center">
-                            {entry.giftType === 'cash-momo'
-                              ? `${entry.currency || 'GHS'} ${entry.amount?.toLocaleString()}`
-                              : entry.giftType === 'registry-item'
-                                ? entry.registryItem || 'Registry Gift'
-                                : 'Well-Wishes'}
-                          </span>
-                        </div>
-                      ))}
+                        ))}
                     </div>
                   </section>
                 )}

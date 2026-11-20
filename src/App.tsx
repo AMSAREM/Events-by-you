@@ -51,6 +51,7 @@ import { CreateEventWizardScreen } from './components/CreateEventWizardScreen';
 import { SettingsScreen } from './components/SettingsScreen';
 import { QrGateScannerScreen } from './components/QrGateScannerScreen';
 import { DisposableCameraScreen } from './components/DisposableCameraScreen';
+import { GiftTableScreen } from './components/GiftTableScreen';
 import { AppsCreatorConsoleScreen } from './components/AppsCreatorConsoleScreen';
 import { LegalScreen } from './components/LegalScreen';
 import { EventDetailModal } from './components/EventModals';
@@ -74,12 +75,14 @@ function parseInvitationFromLocation(): {
   focus?: 'top' | 'register' | 'checkin' | 'camera' | 'gifts';
   guest?: string;
   pass?: string;
+  desk?: string;
 } {
   if (typeof window === 'undefined') return {};
   const pathname = window.location.pathname;
   const params = new URLSearchParams(window.location.search);
   const guest = params.get('guest')?.trim() || undefined;
   const pass = params.get('pass')?.trim() || params.get('code')?.trim() || undefined;
+  const desk = params.get('desk')?.trim() || params.get('token')?.trim() || undefined;
 
   const cameraMatch = pathname.match(/^\/e\/([^/]+)\/camera\/?$/i);
   if (cameraMatch && cameraMatch[1]) {
@@ -94,9 +97,9 @@ function parseInvitationFromLocation(): {
     return { slugOrId: cameraQuery, focus: 'camera', guest, pass };
   }
 
-  const giftsMatch = pathname.match(/^\/e\/([^/]+)\/gifts\/?$/i);
+  const giftsMatch = pathname.match(/^\/e\/([^/]+)\/(?:gifts|gift-desk)\/?$/i);
   if (giftsMatch && giftsMatch[1]) {
-    return { slugOrId: decodeURIComponent(giftsMatch[1]), focus: 'gifts', guest, pass };
+    return { slugOrId: decodeURIComponent(giftsMatch[1]), focus: 'gifts', guest, pass, desk };
   }
 
   const checkinMatch = pathname.match(/^\/e\/([^/]+)\/checkin\/?$/i);
@@ -108,7 +111,7 @@ function parseInvitationFromLocation(): {
   const focus: 'top' | 'register' | 'checkin' | 'camera' | 'gifts' =
     tab === 'camera'
       ? 'camera'
-      : tab === 'gifts' || tab === 'gift'
+      : tab === 'gifts' || tab === 'gift' || Boolean(desk)
         ? 'gifts'
         : tab === 'checkin' || tab === 'qr'
           ? 'checkin'
@@ -116,11 +119,11 @@ function parseInvitationFromLocation(): {
             ? 'register'
             : 'top';
   if (match && match[1]) {
-    return { slugOrId: decodeURIComponent(match[1]), focus, guest, pass };
+    return { slugOrId: decodeURIComponent(match[1]), focus, guest, pass, desk };
   }
   const eventQuery = params.get('event')?.trim();
   if (eventQuery) {
-    return { slugOrId: eventQuery, focus, guest, pass };
+    return { slugOrId: eventQuery, focus, guest, pass, desk };
   }
   return {};
 }
@@ -200,6 +203,7 @@ export default function App() {
 
   const [studioSubScreen, setStudioSubScreen] = useState<StudioSubScreen>(null);
   const [csvExportEventId, setCsvExportEventId] = useState<string | undefined>(undefined);
+  const [giftTableEventId, setGiftTableEventId] = useState<string | undefined>(undefined);
   const [checkinEventId, setCheckinEventId] = useState<string | undefined>(undefined);
   const [checkinPrefillCode, setCheckinPrefillCode] = useState<string | undefined>(undefined);
   const [cameraEventId, setCameraEventId] = useState<string | undefined>(() => {
@@ -233,6 +237,9 @@ export default function App() {
     const focus = parseInvitationFromLocation().focus;
     return focus === 'register' || focus === 'checkin' || focus === 'gifts' ? focus : 'top';
   });
+  const [publicPreviewDeskToken, setPublicPreviewDeskToken] = useState<string | undefined>(
+    () => parseInvitationFromLocation().desk
+  );
   const [publicEventsLoading, setPublicEventsLoading] = useState<boolean>(true);
 
   const notifyError = useCallback((err: unknown, fallback: string) => {
@@ -438,7 +445,8 @@ export default function App() {
   const openEventInvitation = useCallback(
     (
       evtOrSlug?: EventItem | string,
-      focus: 'top' | 'register' | 'checkin' | 'gifts' = 'top'
+      focus: 'top' | 'register' | 'checkin' | 'gifts' = 'top',
+      deskToken?: string
     ) => {
       const slugOrId =
         typeof evtOrSlug === 'string' ? evtOrSlug : evtOrSlug?.slug || evtOrSlug?.id;
@@ -446,16 +454,20 @@ export default function App() {
         typeof evtOrSlug === 'string' ? evtOrSlug : evtOrSlug?.id || slugOrId;
       setPublicPreviewEventId(targetId);
       setPublicPreviewFocus(focus);
+      setPublicPreviewDeskToken(focus === 'gifts' ? deskToken : undefined);
       setRoute('demo-event');
       if (slugOrId) {
+        const cleanSlug = encodeURIComponent(slugOrId);
         const nextPath =
           focus === 'checkin'
-            ? `/e/${encodeURIComponent(slugOrId)}/checkin`
+            ? `/e/${cleanSlug}/checkin`
             : focus === 'gifts'
-              ? `/e/${encodeURIComponent(slugOrId)}/gifts`
+              ? deskToken
+                ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(deskToken)}`
+                : `/e/${cleanSlug}/gifts`
               : focus === 'register'
-                ? `/e/${encodeURIComponent(slugOrId)}?tab=register`
-                : `/e/${encodeURIComponent(slugOrId)}`;
+                ? `/e/${cleanSlug}?tab=register`
+                : `/e/${cleanSlug}`;
         syncBrowserPath(nextPath);
       }
       if (focus === 'top' || focus === 'checkin' || focus === 'gifts') {
@@ -483,6 +495,7 @@ export default function App() {
             ? invite.focus
             : 'top'
         );
+        setPublicPreviewDeskToken(invite.desk);
         setRoute('demo-event');
         return;
       }
@@ -1057,6 +1070,29 @@ export default function App() {
     setEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
     setPublicEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
     return res;
+  };
+
+  const handleCreateGiftAttendantLink = async (
+    eventId: string,
+    payload: { attendantName: string; roleLabel?: string; phone?: string }
+  ) => {
+    const res = await api.studio.createGiftAttendantLink(eventId, payload);
+    setEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
+    return res.link;
+  };
+
+  const handleToggleGiftAttendantLink = async (
+    eventId: string,
+    linkId: string,
+    active?: boolean
+  ) => {
+    const res = await api.studio.toggleGiftAttendantLink(eventId, linkId, active);
+    setEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
+  };
+
+  const handleDeleteGiftAttendantLink = async (eventId: string, linkId: string) => {
+    const res = await api.studio.deleteGiftAttendantLink(eventId, linkId);
+    setEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
   };
 
   const handleStudioRegisterAttendee = async (eventId: string, attendee: Attendee) => {
@@ -1742,6 +1778,7 @@ export default function App() {
           scheduleBlocks={safeScheduleBlocks}
           initialEventId={publicPreviewEventId}
           initialFocus={publicPreviewFocus}
+          initialDeskToken={publicPreviewDeskToken}
           isLoadingEvents={publicEventsLoading}
           isSignedIn={isSignedIn}
           hasSetEvent={hasSetEvent}
@@ -1753,20 +1790,48 @@ export default function App() {
               publicPreviewFocus === 'checkin'
                 ? `/e/${cleanSlug}/checkin`
                 : publicPreviewFocus === 'gifts'
-                  ? `/e/${cleanSlug}/gifts`
+                  ? publicPreviewDeskToken
+                    ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(publicPreviewDeskToken)}`
+                    : `/e/${cleanSlug}/gifts`
                   : `/e/${cleanSlug}`
             );
           }}
           onFocusModeChange={(mode, evt) => {
             setPublicPreviewFocus(mode);
+            if (mode !== 'gifts') {
+              setPublicPreviewDeskToken(undefined);
+            }
             const cleanSlug = encodeURIComponent(evt.slug || evt.id);
             syncBrowserPath(
               mode === 'checkin'
                 ? `/e/${cleanSlug}/checkin`
                 : mode === 'gifts'
-                  ? `/e/${cleanSlug}/gifts`
+                  ? publicPreviewDeskToken && mode === 'gifts'
+                    ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(publicPreviewDeskToken)}`
+                    : `/e/${cleanSlug}/gifts`
                   : `/e/${cleanSlug}`
             );
+          }}
+          onGiftEventSync={(updatedEvt) => {
+            setPublicEvents((prev) => prev.map((e) => (e.id === updatedEvt.id ? updatedEvt : e)));
+            if (isSignedIn) {
+              setEvents((prev) =>
+                prev.map((e) =>
+                  e.id === updatedEvt.id
+                    ? {
+                        ...updatedEvt,
+                        extraDataConfig: e.extraDataConfig
+                          ? {
+                              ...e.extraDataConfig,
+                              ...(updatedEvt.extraDataConfig ?? {}),
+                              attendantLinks: e.extraDataConfig.attendantLinks,
+                            }
+                          : updatedEvt.extraDataConfig,
+                      }
+                    : e
+                )
+              );
+            }
           }}
           onOpenStudio={() =>
             requireSignedIn({
@@ -2048,6 +2113,12 @@ export default function App() {
               onToggleCheckIn={handleToggleCheckIn}
               onRegisterAttendee={handleStudioRegisterAttendee}
               onRecordGiftEntry={handleStudioRecordGiftTableEntry}
+              onCreateGiftAttendantLink={handleCreateGiftAttendantLink}
+              onToggleGiftAttendantLink={handleToggleGiftAttendantLink}
+              onDeleteGiftAttendantLink={handleDeleteGiftAttendantLink}
+              onPreviewDeskLink={(slugOrId, token) =>
+                openEventInvitation(slugOrId, 'gifts', token)
+              }
               onToggleScheduleBlock={handleToggleScheduleBlock}
               onAddScheduleBlock={handleAddScheduleBlock}
               onDeleteScheduleBlock={handleDeleteScheduleBlock}
@@ -2078,6 +2149,12 @@ export default function App() {
                   onUpdateEvent={handleUpdateEvent}
                   onNavigateAttendees={handleNavigateAttendees}
                   onOpenQrScanner={(evtId, code) => openQrScanner(evtId, code)}
+                  onOpenGiftTable={(evtId) => {
+                    setGiftTableEventId(evtId);
+                    setWorkspaceEventId(null);
+                    setStudioSubScreen(null);
+                    setActiveScreen('gifts');
+                  }}
                   onNavigateEvents={() => setActiveScreen('events')}
                   onNavigateSettings={() => setActiveScreen('settings')}
                   onOpenPlans={openBillingScreen}
@@ -2118,6 +2195,27 @@ export default function App() {
                   onDevelopRoll={handleDevelopRoll}
                   onUpdateRollSettings={handleUpdateRollSettings}
                   onManageEvent={handleOpenWorkspace}
+                  onNavigateSettings={() => setActiveScreen('settings')}
+                  onResolveAlert={handleResolveAlert}
+                />
+              )}
+
+              {activeScreen === 'gifts' && (
+                <GiftTableScreen
+                  events={safeEvents}
+                  alerts={safeAlerts}
+                  profile={profile}
+                  initialEventId={giftTableEventId}
+                  onOpenCreateModal={openCreateWizard}
+                  onEditEventModal={(evt) => setSelectedEventId(evt.id)}
+                  onManageEvent={handleOpenWorkspace}
+                  onPreviewPublicGiftTable={(evt, deskToken) =>
+                    openEventInvitation(evt, 'gifts', deskToken)
+                  }
+                  onRecordGiftEntry={handleStudioRecordGiftTableEntry}
+                  onCreateGiftAttendantLink={handleCreateGiftAttendantLink}
+                  onToggleGiftAttendantLink={handleToggleGiftAttendantLink}
+                  onDeleteGiftAttendantLink={handleDeleteGiftAttendantLink}
                   onNavigateSettings={() => setActiveScreen('settings')}
                   onResolveAlert={handleResolveAlert}
                 />

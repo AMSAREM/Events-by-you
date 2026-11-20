@@ -14,6 +14,7 @@ export type NavScreen =
   | 'overview'
   | 'checkin'
   | 'camera'
+  | 'gifts'
   | 'events'
   | 'schedule'
   | 'attendees'
@@ -92,6 +93,19 @@ export interface CustomFormField {
   options?: string[];
 }
 
+export interface GiftTableAttendantLink {
+  id: string;
+  eventId: string;
+  token: string;
+  attendantName: string;
+  roleLabel?: string;
+  phone?: string;
+  active: boolean;
+  recordedCount?: number;
+  createdAt: string;
+  lastUsedAt?: string;
+}
+
 export interface GiftTableEntry {
   id: string;
   eventId: string;
@@ -104,6 +118,8 @@ export interface GiftTableEntry {
   side?: string;
   message?: string;
   recordedVia?: 'public-table' | 'gift-desk';
+  recordedBy?: string;
+  attendantLinkId?: string;
   createdAt: string;
 }
 
@@ -114,6 +130,7 @@ export interface EventExtraDataConfig {
   momoName?: string;
   giftRegistryItems?: string[];
   giftLedger?: GiftTableEntry[];
+  attendantLinks?: GiftTableAttendantLink[];
   customFields: CustomFormField[];
 }
 

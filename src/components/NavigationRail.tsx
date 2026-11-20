@@ -5,6 +5,7 @@ import {
   CalendarPlus,
   Camera,
   CreditCard,
+  Gift,
   Globe,
   Home,
   Layers,
@@ -33,6 +34,7 @@ const NAV_ITEMS: { id: NavScreen; label: string; shortLabel: string; icon: React
   { id: 'overview', label: 'Overview', shortLabel: 'Home', icon: Home },
   { id: 'checkin', label: 'Check-In & QR Scanner', shortLabel: 'Scan', icon: QrCode },
   { id: 'camera', label: 'Disposable Camera', shortLabel: 'Camera', icon: Camera },
+  { id: 'gifts', label: 'Gift Table', shortLabel: 'Gifts', icon: Gift },
   { id: 'events', label: 'Events', shortLabel: 'Events', icon: Layers },
   { id: 'schedule', label: 'Schedule', shortLabel: 'Schedule', icon: CalendarDays },
   { id: 'attendees', label: 'Attendees', shortLabel: 'Guests', icon: Users },
@@ -253,6 +255,20 @@ export const NavigationRail: React.FC<NavigationRailProps> = ({
 
               <button
                 type="button"
+                onClick={() => handleMobileNavigate('gifts')}
+                className="flex items-center gap-2.5 p-3 rounded-2xl bg-white/8 hover:bg-white/14 text-white text-left transition-colors"
+              >
+                <div className="w-8 h-8 rounded-xl bg-white/12 flex items-center justify-center shrink-0">
+                  <Gift className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold truncate">Gift Table</p>
+                  <p className="text-[10px] text-zinc-400 truncate">Desk &amp; attendant links</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => handleMobileNavigate('attendees')}
                 className="flex items-center gap-2.5 p-3 rounded-2xl bg-white/8 hover:bg-white/14 text-white text-left transition-colors"
               >
@@ -271,14 +287,14 @@ export const NavigationRail: React.FC<NavigationRailProps> = ({
                   setMobileSheet('none');
                   onBackToPublicHome();
                 }}
-                className="flex items-center gap-2.5 p-3 rounded-2xl bg-white/8 hover:bg-white/14 text-white text-left transition-colors"
+                className="col-span-2 flex items-center gap-2.5 p-3 rounded-2xl bg-white/8 hover:bg-white/14 text-white text-left transition-colors"
               >
                 <div className="w-8 h-8 rounded-xl bg-white/12 flex items-center justify-center shrink-0">
                   <Globe className="w-4 h-4" />
                 </div>
                 <div className="min-w-0">
                   <p className="text-xs font-semibold truncate">Public Site</p>
-                  <p className="text-[10px] text-zinc-400 truncate">Live showcase</p>
+                  <p className="text-[10px] text-zinc-400 truncate">Live showcase &amp; invitations</p>
                 </div>
               </button>
             </div>

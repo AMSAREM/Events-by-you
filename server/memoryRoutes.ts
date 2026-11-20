@@ -738,6 +738,34 @@ export function createMemoryRouter() {
     }
   });
 
+  router.get('/public/events/:slugOrId/gift-desk/:token', (req, res) => {
+    try {
+      const result = memoryStore.getGiftDeskSession(req.params.slugOrId, req.params.token);
+      return res.json(result);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({
+        error: err instanceof Error ? err.message : 'Failed to verify gift desk link.',
+      });
+    }
+  });
+
+  router.post('/public/events/:slugOrId/gift-desk/:token', (req, res) => {
+    try {
+      const result = memoryStore.recordGiftDeskEntry(
+        req.params.slugOrId,
+        req.params.token,
+        req.body as Partial<GiftTableEntry>
+      );
+      return res.status(201).json(result);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({
+        error: err instanceof Error ? err.message : 'Failed to log desk gift entry.',
+      });
+    }
+  });
+
   // Public Disposable Camera Routes (for guests clicking SMS/email camera link)
   router.get('/public/camera/:slugOrId', (req, res) => {
     const passQuery = typeof req.query.pass === 'string' ? req.query.pass.trim() : undefined;
@@ -895,6 +923,55 @@ export function createMemoryRouter() {
       return res.json({ ok: true });
     } catch (err) {
       return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to delete event.' });
+    }
+  });
+
+  router.post('/studio/events/:eventId/gift-links', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    try {
+      const result = memoryStore.createGiftAttendantLink(
+        req.user!.id,
+        req.params.eventId,
+        req.body as { attendantName: string; roleLabel?: string; phone?: string }
+      );
+      return res.status(201).json(result);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({
+        error: err instanceof Error ? err.message : 'Failed to create attendant link.',
+      });
+    }
+  });
+
+  router.patch('/studio/events/:eventId/gift-links/:linkId', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    try {
+      const result = memoryStore.toggleGiftAttendantLink(
+        req.user!.id,
+        req.params.eventId,
+        req.params.linkId,
+        (req.body as { active?: boolean } | undefined)?.active
+      );
+      return res.json(result);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({
+        error: err instanceof Error ? err.message : 'Failed to update attendant link.',
+      });
+    }
+  });
+
+  router.delete('/studio/events/:eventId/gift-links/:linkId', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    try {
+      const event = memoryStore.deleteGiftAttendantLink(
+        req.user!.id,
+        req.params.eventId,
+        req.params.linkId
+      );
+      return res.json({ ok: true, event });
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({
+        error: err instanceof Error ? err.message : 'Failed to delete attendant link.',
+      });
     }
   });
 

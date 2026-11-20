@@ -30,6 +30,7 @@ import {
   Attendee,
   AttendeeTier,
   EventItem,
+  GiftTableAttendantLink,
   GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
@@ -53,6 +54,7 @@ import {
   DeterministicQrSvg,
   downloadQrSvg,
 } from '../lib/qr';
+import { GiftAttendantLinksCard } from './GiftAttendantLinksCard';
 import { MonochromePoster, SplineChart } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
 
@@ -83,6 +85,17 @@ interface EventWorkspaceScreenProps {
     eventId: string,
     gift: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
   ) => Promise<{ gift: GiftTableEntry; event: EventItem }> | void;
+  onCreateGiftAttendantLink?: (
+    eventId: string,
+    payload: { attendantName: string; roleLabel?: string; phone?: string }
+  ) => Promise<GiftTableAttendantLink | void>;
+  onToggleGiftAttendantLink?: (
+    eventId: string,
+    linkId: string,
+    active?: boolean
+  ) => Promise<void>;
+  onDeleteGiftAttendantLink?: (eventId: string, linkId: string) => Promise<void>;
+  onPreviewDeskLink?: (slugOrId: string, token: string) => void;
   onToggleScheduleBlock: (blockId: string) => void;
   onAddScheduleBlock: (block: ScheduleBlock) => void;
   onDeleteScheduleBlock?: (blockId: string) => void;
@@ -110,6 +123,10 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   onToggleCheckIn,
   onRegisterAttendee,
   onRecordGiftEntry,
+  onCreateGiftAttendantLink,
+  onToggleGiftAttendantLink,
+  onDeleteGiftAttendantLink,
+  onPreviewDeskLink,
   onToggleScheduleBlock,
   onAddScheduleBlock,
   onDeleteScheduleBlock,
@@ -361,7 +378,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   };
 
   const handleExportGiftsCsv = () => {
-    const headers = ['GiverName', 'Phone', 'GiftType', 'Amount', 'Currency', 'RegistryItem', 'Side', 'Message', 'Source', 'CreatedAt'];
+    const headers = ['GiverName', 'Phone', 'GiftType', 'Amount', 'Currency', 'RegistryItem', 'Side', 'Message', 'Source', 'RecordedBy', 'CreatedAt'];
     const rows = giftLedger.map((g) => [
       g.giverName,
       g.giverPhone || '',
@@ -372,6 +389,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
       g.side || '',
       (g.message || '').replace(/"/g, '""'),
       g.recordedVia || 'public-table',
+      g.recordedBy || '',
       g.createdAt,
     ]);
     const csv = [headers.join(','), ...rows.map((r) => r.map((c) => `"${c}"`).join(','))].join(
@@ -1494,6 +1512,18 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 </div>
               </div>
 
+              {onCreateGiftAttendantLink && onToggleGiftAttendantLink && onDeleteGiftAttendantLink && (
+                <GiftAttendantLinksCard
+                  event={event}
+                  canManage={isEventCreator}
+                  onCreateLink={onCreateGiftAttendantLink}
+                  onToggleLink={onToggleGiftAttendantLink}
+                  onDeleteLink={onDeleteGiftAttendantLink}
+                  onPreviewDeskLink={onPreviewDeskLink}
+                  onToast={triggerToast}
+                />
+              )}
+
               {onRecordGiftEntry && (
                 <form
                   onSubmit={handleRecordDeskGift}
@@ -1620,8 +1650,12 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                               {entry.side}
                             </span>
                           )}
-                          <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[10px] font-mono text-[#71717A]">
-                            {entry.recordedVia === 'gift-desk' ? 'Venue Desk' : 'Public Table'}
+                          <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[10px] font-mono text-[#0B0B0B]">
+                            {entry.recordedVia === 'gift-desk'
+                              ? entry.recordedBy
+                                ? `Desk · ${entry.recordedBy}`
+                                : 'Venue Desk'
+                              : 'Public Table'}
                           </span>
                         </div>
                         {entry.message && (

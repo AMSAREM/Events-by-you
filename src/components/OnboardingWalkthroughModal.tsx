@@ -94,13 +94,13 @@ export const OnboardingWalkthroughModal: React.FC<OnboardingWalkthroughModalProp
     {
       id: 'gift-table',
       badge: 'Step 3 of 5 · Standalone Gift Table',
-      title: 'Dedicated Gift Table Separate from Registration',
+      title: 'Dedicated Gift Table & Appointed Attendant Links',
       summary:
-        'Wedding & celebration Gift Tables run on their own standalone route (/e/slug/gifts) and workspace tab—completely separate from Walk-In registration, attendee rosters, and gate check-in seats.',
+        'Open Gift Table directly from the Nav Bar or Hero Quick Actions—completely separate from Walk-In registration, attendee rosters, and gate check-in seats.',
       highlights: [
-        'Guests can send MoMo/cash pledges, gift items, and well-wishes without creating a ticket pass.',
-        'Record physical cash envelopes at the venue reception desk directly inside the Gift Table tab.',
-        'Export your Gift Table ledger cleanly without mixing it with attendee CSV manifests.',
+        'Create unique Gift Desk links (/e/slug/gifts?desk=...) for people manning the physical Gift Table or receiving MoMo gifts without sharing studio login access.',
+        'Guests can also send MoMo/cash pledges, registry gifts, and well-wishes directly on /e/slug/gifts.',
+        'Track which attendant recorded each gift and export Gift Table CSV ledgers separately from attendee manifests.',
       ],
       actionLabel: 'Continue Walkthrough',
       icon: Gift,

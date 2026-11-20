@@ -16,6 +16,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  GiftTableAttendantLink,
   GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
@@ -533,6 +534,31 @@ export const api = {
         `/api/public/events/${encodeURIComponent(slugOrId)}/gifts`,
         { method: 'POST', body: JSON.stringify(payload) }
       ),
+
+    getGiftDeskSession: (slugOrId: string, token: string) =>
+      request<{
+        event: EventItem;
+        attendant: Omit<GiftTableAttendantLink, 'token'>;
+      }>(
+        `/api/public/events/${encodeURIComponent(slugOrId)}/gift-desk/${encodeURIComponent(token)}`
+      ),
+
+    submitGiftDeskEntry: (
+      slugOrId: string,
+      token: string,
+      payload: Omit<
+        GiftTableEntry,
+        'id' | 'eventId' | 'createdAt' | 'recordedVia' | 'recordedBy' | 'attendantLinkId'
+      >
+    ) =>
+      request<{
+        gift: GiftTableEntry;
+        event: EventItem;
+        attendant: Omit<GiftTableAttendantLink, 'token'>;
+      }>(
+        `/api/public/events/${encodeURIComponent(slugOrId)}/gift-desk/${encodeURIComponent(token)}`,
+        { method: 'POST', body: JSON.stringify(payload) }
+      ),
   },
 
   studio: {
@@ -629,6 +655,30 @@ export const api = {
       request<{ gift: GiftTableEntry; event: EventItem }>(
         `/api/studio/events/${encodeURIComponent(eventId)}/gifts`,
         { method: 'POST', body: JSON.stringify(payload) },
+        true
+      ),
+
+    createGiftAttendantLink: (
+      eventId: string,
+      payload: { attendantName: string; roleLabel?: string; phone?: string }
+    ) =>
+      request<{ link: GiftTableAttendantLink; event: EventItem }>(
+        `/api/studio/events/${encodeURIComponent(eventId)}/gift-links`,
+        { method: 'POST', body: JSON.stringify(payload) },
+        true
+      ),
+
+    toggleGiftAttendantLink: (eventId: string, linkId: string, active?: boolean) =>
+      request<{ link: GiftTableAttendantLink; event: EventItem }>(
+        `/api/studio/events/${encodeURIComponent(eventId)}/gift-links/${encodeURIComponent(linkId)}`,
+        { method: 'PATCH', body: JSON.stringify({ active }) },
+        true
+      ),
+
+    deleteGiftAttendantLink: (eventId: string, linkId: string) =>
+      request<{ ok: boolean; event: EventItem }>(
+        `/api/studio/events/${encodeURIComponent(eventId)}/gift-links/${encodeURIComponent(linkId)}`,
+        { method: 'DELETE' },
         true
       ),
 
