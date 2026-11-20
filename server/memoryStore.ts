@@ -770,6 +770,24 @@ export const memoryStore = {
     return null;
   },
 
+  getPublicCameraRoll(slugOrId: string): {
+    event: EventItem;
+    shots: DisposableShot[];
+    rollSettings: DisposableRollSettings;
+  } | null {
+    const evt =
+      this.getPublicEventBySlugOrId(slugOrId) || this.getAnyEventBySlugOrId(slugOrId);
+    if (!evt) return null;
+    const shots = Array.from(db.disposableShots.values())
+      .filter((s) => s.eventId === evt.id)
+      .sort((a, b) => b.frameNumber - a.frameNumber);
+    const rollSettings = db.rollSettings.get(evt.id) ?? {
+      exposuresLimit: 24,
+      darkroomMode: false,
+    };
+    return { event: evt, shots, rollSettings };
+  },
+
   registerPublicAttendee(payload: {
     id: string;
     eventId: string;
@@ -920,6 +938,77 @@ export const memoryStore = {
     }
     user.profile = { ...user.profile, ...safePatch };
     return user.profile;
+  },
+
+  deleteAccount(userId: string): { email?: string; phone?: string } {
+    const user = db.users.get(userId);
+    if (!user) {
+      const err = new Error('Account not found.');
+      (err as Error & { status?: number }).status = 404;
+      throw err;
+    }
+
+    const ownedEventIds = new Set<string>();
+    for (const [evtId, evt] of db.events) {
+      if (evt.organizerId === userId) {
+        ownedEventIds.add(evtId);
+        db.events.delete(evtId);
+        db.rollSettings.delete(evtId);
+        platformRuntime.duplicateBlocksByEvent.delete(evtId);
+      }
+    }
+
+    if (ownedEventIds.size > 0) {
+      for (const [id, att] of db.attendees) {
+        if (ownedEventIds.has(att.eventId)) db.attendees.delete(id);
+      }
+      for (const [id, blk] of db.scheduleBlocks) {
+        if (ownedEventIds.has(blk.eventId)) db.scheduleBlocks.delete(id);
+      }
+      for (const [id, shot] of db.disposableShots) {
+        if (ownedEventIds.has(shot.eventId)) db.disposableShots.delete(id);
+      }
+      platformRuntime.flags.pausedEventIds = platformRuntime.flags.pausedEventIds.filter(
+        (id) => !ownedEventIds.has(id)
+      );
+    }
+
+    for (const [id, al] of db.alerts) {
+      if (al.organizerId === userId) db.alerts.delete(id);
+    }
+
+    const ownedAppIds = new Set<string>();
+    for (const [id, app] of db.creatorApps) {
+      if (app.organizerId === userId) {
+        ownedAppIds.add(id);
+        db.creatorApps.delete(id);
+      }
+    }
+    if (ownedAppIds.size > 0) {
+      for (const [id, log] of db.creatorAppLogs) {
+        if (ownedAppIds.has(log.appId)) db.creatorAppLogs.delete(id);
+      }
+    }
+
+    for (const [token, session] of db.sessionsByAccessToken) {
+      if (session.userId === userId) db.sessionsByAccessToken.delete(token);
+    }
+    for (const [token, session] of db.sessionsByRefreshToken) {
+      if (session.userId === userId) db.sessionsByRefreshToken.delete(token);
+    }
+
+    for (const [emailKey, mappedId] of db.userIdByEmail) {
+      if (mappedId === userId) db.userIdByEmail.delete(emailKey);
+    }
+    for (const [phoneKey, mappedId] of db.userIdByPhone) {
+      if (mappedId === userId) db.userIdByPhone.delete(phoneKey);
+    }
+
+    db.users.delete(userId);
+    return {
+      email: user.email || user.profile.email || undefined,
+      phone: user.profile.phone || undefined,
+    };
   },
 
   createEvent(userId: string, event: EventItem, blocks: ScheduleBlock[] = []) {
@@ -1143,8 +1232,85 @@ export const memoryStore = {
   addShot(userId: string, shot: DisposableShot): DisposableShot {
     const evt = db.events.get(shot.eventId);
     if (!evt || evt.organizerId !== userId) throw new Error('Event not found.');
+    const existingEventShots = Array.from(db.disposableShots.values()).filter(
+      (s) => s.eventId === evt.id
+    );
+    const rollCfg = db.rollSettings.get(evt.id) ?? { exposuresLimit: 24, darkroomMode: false };
+    if (existingEventShots.length >= rollCfg.exposuresLimit) {
+      const err = new Error(`Film roll full (${rollCfg.exposuresLimit}/${rollCfg.exposuresLimit} exposures).`);
+      (err as Error & { status?: number }).status = 403;
+      throw err;
+    }
+    const effectiveKey = (shot.shooterKey || '').trim();
+    const normalizedAuthor = (shot.capturedBy || 'Guest').trim().toLowerCase();
+    const userShotCount = existingEventShots.filter((s) =>
+      effectiveKey && s.shooterKey
+        ? s.shooterKey === effectiveKey
+        : s.capturedBy.trim().toLowerCase() === normalizedAuthor
+    ).length;
+    if (userShotCount >= 5) {
+      const err = new Error('Camera limit reached: each user is allowed up to 5 pictures per event.');
+      (err as Error & { status?: number }).status = 403;
+      throw err;
+    }
     db.disposableShots.set(shot.id, shot);
     return shot;
+  },
+
+  addPublicShot(slugOrId: string, shot: DisposableShot): DisposableShot {
+    const evtMeta =
+      this.getPublicEventBySlugOrId(slugOrId) || this.getAnyEventBySlugOrId(slugOrId);
+    if (!evtMeta) {
+      const err = new Error('Event camera roll not found.');
+      (err as Error & { status?: number }).status = 404;
+      throw err;
+    }
+    const existingEventShots = Array.from(db.disposableShots.values()).filter(
+      (s) => s.eventId === evtMeta.id
+    );
+    const rollCfg = db.rollSettings.get(evtMeta.id) ?? { exposuresLimit: 24, darkroomMode: false };
+    if (existingEventShots.length >= rollCfg.exposuresLimit) {
+      const err = new Error(`Film roll full (${rollCfg.exposuresLimit}/${rollCfg.exposuresLimit} exposures).`);
+      (err as Error & { status?: number }).status = 403;
+      throw err;
+    }
+    const effectiveKey = (shot.shooterKey || '').trim();
+    const normalizedAuthor = (shot.capturedBy || 'Guest').trim().toLowerCase();
+    const userShotCount = existingEventShots.filter((s) =>
+      effectiveKey && s.shooterKey
+        ? s.shooterKey === effectiveKey
+        : s.capturedBy.trim().toLowerCase() === normalizedAuthor
+    ).length;
+    if (userShotCount >= 5) {
+      const err = new Error('Camera limit reached: each user is allowed up to 5 pictures per event.');
+      (err as Error & { status?: number }).status = 403;
+      throw err;
+    }
+    const nextFrame =
+      existingEventShots.reduce((max, s) => Math.max(max, s.frameNumber), 0) + 1;
+    const saved: DisposableShot = {
+      ...shot,
+      id: shot.id || `shot-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      eventId: evtMeta.id,
+      frameNumber: nextFrame,
+      developed: !rollCfg.darkroomMode,
+    };
+    db.disposableShots.set(saved.id, saved);
+    return saved;
+  },
+
+  togglePublicLikeShot(shotId: string): DisposableShot {
+    const shot = db.disposableShots.get(shotId);
+    if (!shot) {
+      const err = new Error('Shot not found.');
+      (err as Error & { status?: number }).status = 404;
+      throw err;
+    }
+    const liked = !Boolean(shot.liked);
+    const likes = liked ? shot.likes + 1 : Math.max(0, shot.likes - 1);
+    const updated = { ...shot, liked, likes };
+    db.disposableShots.set(shotId, updated);
+    return updated;
   },
 
   toggleLikeShot(userId: string, shotId: string): DisposableShot {

@@ -918,6 +918,82 @@ export async function localFallbackRequest<T>(
     return { attendee, event: cleanEvent } as T;
   }
 
+  // Public Disposable Camera routes
+  const publicCamMatch = path.match(/^\/public\/camera\/([^/]+)$/);
+  if (method === 'GET' && publicCamMatch) {
+    const target = decodeURIComponent(publicCamMatch[1]).trim().toLowerCase();
+    const matched = db.events.find(
+      (e) => e.id.toLowerCase() === target || e.slug.toLowerCase() === target
+    );
+    if (!matched) {
+      throw new LocalApiError('Event disposable camera not found.', 404);
+    }
+    const { organizerId: _org, ...cleanEvent } = matched;
+    const shots = db.disposableShots
+      .filter((s) => s.eventId === matched.id)
+      .sort((a, b) => b.frameNumber - a.frameNumber);
+    const rollSettings = db.rollSettings[matched.id] ?? {
+      exposuresLimit: 24,
+      darkroomMode: false,
+    };
+    return { event: cleanEvent, shots, rollSettings } as T;
+  }
+
+  const publicCamShotMatch = path.match(/^\/public\/camera\/([^/]+)\/shots$/);
+  if (method === 'POST' && publicCamShotMatch) {
+    const target = decodeURIComponent(publicCamShotMatch[1]).trim().toLowerCase();
+    const matched = db.events.find(
+      (e) => e.id.toLowerCase() === target || e.slug.toLowerCase() === target
+    );
+    if (!matched) {
+      throw new LocalApiError('Event disposable camera not found.', 404);
+    }
+    const shot = body as unknown as DisposableShot;
+    const existingEventShots = db.disposableShots.filter((s) => s.eventId === matched.id);
+    const rollCfg = db.rollSettings[matched.id] ?? { exposuresLimit: 24, darkroomMode: false };
+    if (existingEventShots.length >= rollCfg.exposuresLimit) {
+      throw new LocalApiError(
+        `Film roll full (${rollCfg.exposuresLimit}/${rollCfg.exposuresLimit} exposures).`,
+        403
+      );
+    }
+    const effectiveKey = (shot.shooterKey || '').trim();
+    const normalizedAuthor = (shot.capturedBy || 'Guest').trim().toLowerCase();
+    const userShotCount = existingEventShots.filter((s) =>
+      effectiveKey && s.shooterKey
+        ? s.shooterKey === effectiveKey
+        : s.capturedBy.trim().toLowerCase() === normalizedAuthor
+    ).length;
+    if (userShotCount >= 5) {
+      throw new LocalApiError(
+        'Camera limit reached: each user is allowed up to 5 pictures per event.',
+        403
+      );
+    }
+    const nextFrame = existingEventShots.reduce((max, s) => Math.max(max, s.frameNumber), 0) + 1;
+    const saved: DisposableShot = {
+      ...shot,
+      id: shot.id || `shot-${Date.now()}-${randomHex(2)}`,
+      eventId: matched.id,
+      frameNumber: nextFrame,
+      developed: !rollCfg.darkroomMode,
+    };
+    db.disposableShots.unshift(saved);
+    saveDb(db);
+    return { shot: saved } as T;
+  }
+
+  const publicCamLikeMatch = path.match(/^\/public\/camera\/shots\/([^/]+)\/like$/);
+  if (method === 'PATCH' && publicCamLikeMatch) {
+    const shotId = decodeURIComponent(publicCamLikeMatch[1]);
+    const shot = db.disposableShots.find((s) => s.id === shotId);
+    if (!shot) throw new LocalApiError('Shot not found.', 404);
+    shot.liked = !shot.liked;
+    shot.likes = shot.liked ? shot.likes + 1 : Math.max(0, shot.likes - 1);
+    saveDb(db);
+    return { shot } as T;
+  }
+
   // Authenticated Studio & Builder routes
   const user = getAuthenticatedUser(db, accessToken);
 
@@ -945,6 +1021,46 @@ export async function localFallbackRequest<T>(
     user.profile = { ...user.profile, ...safePatch };
     saveDb(db);
     return { profile: user.profile } as T;
+  }
+
+  if (method === 'DELETE' && path === '/studio/account') {
+    requireRoles(user, ['creator', 'organizer', 'gate_staff']);
+    const confirmation = typeof body.confirmation === 'string' ? body.confirmation : undefined;
+    if (confirmation !== undefined && confirmation.trim().toUpperCase() !== 'DELETE') {
+      throw new LocalApiError('Type DELETE to confirm permanent account deletion.', 400);
+    }
+    const ownedEventIds = new Set(
+      db.events.filter((e) => e.organizerId === user.id).map((e) => e.id)
+    );
+    db.events = db.events.filter((e) => e.organizerId !== user.id);
+    db.attendees = db.attendees.filter((a) => !ownedEventIds.has(a.eventId));
+    db.scheduleBlocks = db.scheduleBlocks.filter((b) => !ownedEventIds.has(b.eventId));
+    db.disposableShots = db.disposableShots.filter((s) => !ownedEventIds.has(s.eventId));
+    for (const evtId of ownedEventIds) {
+      delete db.rollSettings[evtId];
+      delete db.duplicateBlocksByEvent[evtId];
+    }
+    db.alerts = db.alerts.filter((a) => a.organizerId !== user.id);
+    const ownedAppIds = new Set(
+      db.creatorApps.filter((a) => a.organizerId === user.id).map((a) => a.id)
+    );
+    db.creatorApps = db.creatorApps.filter((a) => a.organizerId !== user.id);
+    db.creatorAppLogs = db.creatorAppLogs.filter((l) => !ownedAppIds.has(l.appId));
+
+    for (const [tok, sess] of Object.entries(db.sessions)) {
+      if (sess.userId === user.id) delete db.sessions[tok];
+    }
+    for (const [key, pending] of Object.entries(db.pendingSignups)) {
+      if (
+        (user.email && pending.email.toLowerCase() === user.email.toLowerCase()) ||
+        (user.profile.phone && pending.phone === user.profile.phone)
+      ) {
+        delete db.pendingSignups[key];
+      }
+    }
+    delete db.users[user.id];
+    saveDb(db);
+    return { ok: true, deletedUserId: user.id } as T;
   }
 
   if (method === 'POST' && path === '/studio/events') {
@@ -1049,7 +1165,12 @@ export async function localFallbackRequest<T>(
       evt.checkedIn = Math.max(0, evt.checkedIn + (att.checkedIn ? 1 : -1));
     }
     saveDb(db);
-    return { attendee: att } as T;
+    const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://www.eventsbyyou.xyz';
+    const cameraUrl =
+      att.checkedIn && evt
+        ? `${origin}/e/${encodeURIComponent(evt.slug || evt.id)}/camera?guest=${encodeURIComponent(att.name)}`
+        : undefined;
+    return { attendee: att, checkInMessageSent: Boolean(att.checkedIn && evt), cameraUrl } as T;
   }
 
   const retryPayMatch = path.match(/^\/studio\/attendees\/([^/]+)\/retry-payment$/);
@@ -1112,6 +1233,27 @@ export async function localFallbackRequest<T>(
   // Camera
   if (method === 'POST' && path === '/studio/camera/shots') {
     const shot = body as unknown as DisposableShot;
+    const existingEventShots = db.disposableShots.filter((s) => s.eventId === shot.eventId);
+    const rollCfg = db.rollSettings[shot.eventId] ?? { exposuresLimit: 24, darkroomMode: false };
+    if (existingEventShots.length >= rollCfg.exposuresLimit) {
+      throw new LocalApiError(
+        `Film roll full (${rollCfg.exposuresLimit}/${rollCfg.exposuresLimit} exposures).`,
+        403
+      );
+    }
+    const effectiveKey = (shot.shooterKey || '').trim();
+    const normalizedAuthor = (shot.capturedBy || 'Guest').trim().toLowerCase();
+    const userShotCount = existingEventShots.filter((s) =>
+      effectiveKey && s.shooterKey
+        ? s.shooterKey === effectiveKey
+        : s.capturedBy.trim().toLowerCase() === normalizedAuthor
+    ).length;
+    if (userShotCount >= 5) {
+      throw new LocalApiError(
+        'Camera limit reached: each user is allowed up to 5 pictures per event.',
+        403
+      );
+    }
     db.disposableShots.unshift(shot);
     saveDb(db);
     return { shot } as T;

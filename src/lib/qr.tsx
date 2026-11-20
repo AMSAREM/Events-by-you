@@ -137,6 +137,22 @@ export function buildEventInvitationUrl(slugOrId: string, tab?: 'checkin' | 'reg
   return tab ? `${base}?tab=${tab}` : base;
 }
 
+export function buildEventCameraUrl(
+  slugOrId: string,
+  guestName?: string,
+  originOverride?: string
+): string {
+  const clean = encodeURIComponent(slugOrId.trim());
+  const origin =
+    originOverride?.replace(/\/+$/, '') ||
+    (typeof window !== 'undefined' && window.location.origin
+      ? window.location.origin
+      : 'https://www.eventsbyyou.xyz');
+  const base = `${origin}/e/${clean}/camera`;
+  const trimmedGuest = guestName?.trim();
+  return trimmedGuest ? `${base}?guest=${encodeURIComponent(trimmedGuest)}` : base;
+}
+
 export function buildEventOgImageUrl(slugOrId: string): string {
   const clean = encodeURIComponent(slugOrId.trim());
   const origin =

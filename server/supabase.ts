@@ -157,6 +157,16 @@ export function mapEventRow(row: Record<string, unknown>): EventItem {
       row.extra_data_config && typeof row.extra_data_config === 'object'
         ? (row.extra_data_config as EventItem['extraDataConfig'])
         : undefined,
+    messageConfig:
+      row.message_config && typeof row.message_config === 'object'
+        ? (row.message_config as EventItem['messageConfig'])
+        : row.extra_data_config &&
+            typeof row.extra_data_config === 'object' &&
+            (row.extra_data_config as Record<string, unknown>).__messageConfig &&
+            typeof (row.extra_data_config as Record<string, unknown>).__messageConfig === 'object'
+          ? ((row.extra_data_config as Record<string, unknown>)
+              .__messageConfig as EventItem['messageConfig'])
+          : undefined,
   };
 }
 
@@ -220,6 +230,7 @@ export function mapShotRow(row: Record<string, unknown>): DisposableShot {
     frameNumber: Number(row.frame_number ?? 1),
     dataUrl: String(row.data_url),
     capturedBy: String(row.captured_by ?? 'Guest'),
+    shooterKey: row.shooter_key != null ? String(row.shooter_key) : undefined,
     caption: row.caption != null ? String(row.caption) : undefined,
     filmStock: (row.film_stock as DisposableShot['filmStock']) || 'ilford-bw',
     dateStamp: String(row.date_stamp ?? ''),

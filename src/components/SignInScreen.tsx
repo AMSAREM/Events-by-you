@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { validateStrictEmail, validateStrictPhoneE164 } from '../data/initialData';
 import {
+  ApiError,
   api,
   saveStoredCreatorToken,
   saveStoredSession,
@@ -129,8 +130,11 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
             onAuthenticated(creatorRes.session, creatorRes.profile, false);
             return;
           }
-        } catch {
-          // Fall back to standard sign-in if the creator entered their account password instead of CREATOR_PASSWORD
+        } catch (creatorErr) {
+          // Only fall back to standard Supabase account sign-in if CREATOR_PASSWORD itself didn't match (401).
+          if (creatorErr instanceof ApiError && creatorErr.status !== 401) {
+            throw creatorErr;
+          }
         }
       }
 
@@ -494,9 +498,35 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                   </div>
 
                   {errorMsg && (
-                    <div className="p-3.5 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 flex items-start gap-2.5 text-xs font-medium text-[#0B0B0B]">
-                      <AlertCircle className="w-4 h-4 text-[#EF4444] shrink-0 mt-0.5" />
-                      <span>{errorMsg}</span>
+                    <div className="p-3.5 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 flex flex-col gap-2 text-xs font-medium text-[#0B0B0B]">
+                      <div className="flex items-start gap-2.5">
+                        <AlertCircle className="w-4 h-4 text-[#EF4444] shrink-0 mt-0.5" />
+                        <span>{errorMsg}</span>
+                      </div>
+                      {(errorMsg.toLowerCase().includes('no account') ||
+                        errorMsg.toLowerCase().includes('invalid login credentials')) && (
+                        <div className="flex flex-wrap items-center gap-3 pl-6 text-[11px]">
+                          {authMode === 'phone' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAuthMode('email');
+                                setErrorMsg(null);
+                              }}
+                              className="font-semibold text-[#0B0B0B] underline underline-offset-4 hover:opacity-75"
+                            >
+                              Try signing in with Email instead
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => onGoSignUp(email.trim(), phone.trim())}
+                            className="font-semibold text-[#0B0B0B] underline underline-offset-4 hover:opacity-75"
+                          >
+                            Create a free account
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
 

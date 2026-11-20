@@ -201,6 +201,18 @@ async function executeLocalFallback<T>(
   }
 }
 
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
 async function request<T>(
   url: string,
   options: RequestInit = {},
@@ -267,10 +279,11 @@ async function request<T>(
   }
 
   if (!resp.ok) {
-    if (parsed?.error) {
-      throw new Error(parsed.error);
+    const parsedErr = parsed as { error?: string; code?: string } | null;
+    if (parsedErr?.error) {
+      throw new ApiError(parsedErr.error, resp.status, parsedErr.code);
     }
-    throw new Error(`Request failed (${resp.status})`);
+    throw new ApiError(`Request failed (${resp.status})`, resp.status, parsedErr?.code);
   }
 
   if (!parsed || typeof parsed !== 'object') {
@@ -465,6 +478,25 @@ export const api = {
           body: JSON.stringify(payload),
         }
       ),
+
+    getCameraRoll: (slugOrId: string) =>
+      request<{
+        event: EventItem;
+        shots: DisposableShot[];
+        rollSettings: DisposableRollSettings;
+      }>(`/api/public/camera/${encodeURIComponent(slugOrId)}`),
+
+    addCameraShot: (slugOrId: string, shot: DisposableShot) =>
+      request<{ shot: DisposableShot }>(
+        `/api/public/camera/${encodeURIComponent(slugOrId)}/shots`,
+        { method: 'POST', body: JSON.stringify(shot) }
+      ),
+
+    toggleLikeCameraShot: (shotId: string) =>
+      request<{ shot: DisposableShot }>(
+        `/api/public/camera/shots/${encodeURIComponent(shotId)}/like`,
+        { method: 'PATCH' }
+      ),
   },
 
   studio: {
@@ -477,6 +509,13 @@ export const api = {
       request<{ profile: OrganizerProfile }>(
         '/api/studio/profile',
         { method: 'PATCH', body: JSON.stringify(profile) },
+        true
+      ),
+
+    deleteAccount: () =>
+      request<{ ok: boolean; deletedUserId?: string }>(
+        '/api/studio/account',
+        { method: 'DELETE', body: JSON.stringify({ confirmation: 'DELETE' }) },
         true
       ),
 
@@ -509,14 +548,24 @@ export const api = {
       ),
 
     registerAttendee: (eventId: string, attendee: Attendee) =>
-      request<{ attendee: Attendee; event: EventItem }>(
+      request<{
+        attendee: Attendee;
+        event: EventItem;
+        cameraUrl?: string;
+        dispatchedMessage?: string;
+      }>(
         `/api/studio/events/${encodeURIComponent(eventId)}/attendees`,
         { method: 'POST', body: JSON.stringify(attendee) },
         true
       ),
 
     toggleCheckIn: (attendeeId: string) =>
-      request<{ attendee: Attendee }>(
+      request<{
+        attendee: Attendee;
+        checkInMessageSent?: boolean;
+        cameraUrl?: string;
+        dispatchedMessage?: string;
+      }>(
         `/api/studio/attendees/${encodeURIComponent(attendeeId)}/checkin`,
         { method: 'PATCH' },
         true

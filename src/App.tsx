@@ -511,6 +511,39 @@ export default function App() {
     [loadPublicEvents, syncBrowserPath]
   );
 
+  const handleDeleteAccount = useCallback(async () => {
+    await api.studio.deleteAccount();
+    saveStoredSession(null);
+    saveStoredCreatorToken(null);
+    try {
+      localStorage.removeItem(LAST_ACTIVITY_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+    setCreatorUnlocked(false);
+    setIsSignedIn(false);
+    setSessionWarningSecondsLeft(null);
+    setSessionTimeoutNotice(null);
+    setEvents([]);
+    setAttendees([]);
+    setScheduleBlocks([]);
+    setAlerts([]);
+    setDisposableShots([]);
+    setRollSettings({});
+    setCreatorApps([]);
+    setCreatorAppLogs([]);
+    setProfile(EMPTY_PROFILE);
+    setPendingTarget(null);
+    setStudioSubScreen(null);
+    setWorkspaceEventId(null);
+    setSelectedEventId(null);
+    setActiveScreen('overview');
+    setRoute('home');
+    syncBrowserPath('/');
+    void loadPublicEvents();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [loadPublicEvents, syncBrowserPath]);
+
   const sessionWarningVisibleRef = useRef(false);
   useEffect(() => {
     sessionWarningVisibleRef.current = sessionWarningSecondsLeft !== null;
@@ -1675,11 +1708,12 @@ export default function App() {
 
   return (
     <div className="min-h-dvh w-full max-w-full bg-white text-[#0B0B0B] overflow-x-clip">
-      <div className="w-full max-w-[1600px] mx-auto px-3 sm:px-5 md:px-6 lg:px-8 xl:px-10 pt-3 sm:pt-5 lg:pt-6 pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:pb-8 flex flex-col md:flex-row md:gap-5 lg:gap-7 xl:gap-8 md:items-start min-w-0 overflow-x-clip">
+      <div className="w-full max-w-[1600px] mx-auto pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:pl-[max(1.25rem,env(safe-area-inset-left))] sm:pr-[max(1.25rem,env(safe-area-inset-right))] md:px-6 lg:px-8 xl:px-10 pt-[max(0.75rem,env(safe-area-inset-top))] sm:pt-5 lg:pt-6 pb-[calc(6.25rem+env(safe-area-inset-bottom))] md:pb-8 flex flex-col md:flex-row gap-3.5 sm:gap-4 md:gap-5 lg:gap-7 xl:gap-8 md:items-start min-w-0 overflow-x-clip">
         {/* Left Floating Dark Pill Capsule Navigation */}
         <NavigationRail
           activeScreen={activeScreen}
           userRole={effectiveRole}
+          onCreateEvent={effectiveRole !== 'gate_staff' ? openCreateWizard : undefined}
           onNavigate={(screen) => {
             if (screen === 'console' && effectiveRole !== 'creator') {
               setApiBannerError('Access denied: Apps Creator Console requires the creator role.');
@@ -1707,7 +1741,7 @@ export default function App() {
         />
 
         {/* Main Viewport */}
-        <main className="flex-1 min-w-0 space-y-4">
+        <main className="flex-1 w-full min-w-0 space-y-3.5 sm:space-y-4 overflow-x-clip">
           {apiBannerError && (
             <div className="rounded-2xl bg-[#0B0B0B] text-white px-4 py-3 flex items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-2 min-w-0">
@@ -1991,6 +2025,7 @@ export default function App() {
                   onOpenPlans={openBillingScreen}
                   onSignOut={handleSignOut}
                   onResetDemoData={handleSeedStarterData}
+                  onDeleteAccount={handleDeleteAccount}
                 />
               )}
             </>

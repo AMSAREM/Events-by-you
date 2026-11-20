@@ -176,7 +176,8 @@ export async function dispatchOptionalArkeselSms(
   phone: string,
   eventTitle: string,
   ticketCode: string,
-  explicitSenderId?: string
+  explicitSenderId?: string,
+  customMessage?: string
 ): Promise<'Arkesel Sent' | 'Pending'> {
   const { senderId, isDefaultUnverifiedWarning } =
     platformRuntime.getEffectiveArkeselSenderId(explicitSenderId);
@@ -207,9 +208,12 @@ export async function dispatchOptionalArkeselSms(
       appUrl && /^https:\/\//i.test(appUrl) && !appUrl.includes('localhost')
         ? `${appUrl}/api/webhooks/arkesel-dlr`
         : undefined;
+    const messageText =
+      customMessage?.trim() ||
+      `${eventTitle}: Pass confirmed! Code: ${ticketCode}. Show this QR token at check-in.`;
     const body: Record<string, unknown> = {
       sender: senderId,
-      message: `${eventTitle}: Pass confirmed! Code: ${ticketCode}. Show this QR token at check-in.`,
+      message: messageText,
       recipients: [cleanPhone],
     };
     if (callbackUrl) {

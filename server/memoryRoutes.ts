@@ -29,8 +29,10 @@ import {
 } from './helpers.ts';
 import {
   isResendConfigured,
+  sendCheckInWelcomeEmail,
   sendEventPassEmail,
 } from './resend.ts';
+import { resolveEventMessage } from '../src/lib/eventMessages.ts';
 import {
   clearPendingSignup,
   consumePendingSignup,
@@ -635,14 +637,26 @@ export function createMemoryRouter() {
     const finalCode = ticketCode?.trim() || `#EVT-2026-${Math.floor(1000 + Math.random() * 8999)}`;
 
     try {
-      const publicEvents = memoryStore.getPublicEvents();
-      const targetEvent = publicEvents.find((e) => e.id === eventId);
+      const targetEvent = memoryStore.getPublicEventBySlugOrId(eventId);
+      const requestOrigin = (process.env.APP_URL || '').trim().replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
+      const resolvedMsg = targetEvent
+        ? resolveEventMessage({
+            type: 'confirmation',
+            event: targetEvent,
+            attendeeName: name.trim(),
+            ticketCode: finalCode,
+            originOverride: requestOrigin,
+            includeGuestInCameraUrl: true,
+          })
+        : null;
+
       const [smsDelivery, emailDelivery] = await Promise.all([
         dispatchOptionalArkeselSms(
           normalizedPhone,
           targetEvent?.title ?? 'Events App',
           finalCode,
-          targetEvent?.senderId
+          targetEvent?.senderId,
+          resolvedMsg?.text
         ),
         isResendConfigured() && targetEvent
           ? sendEventPassEmail({
@@ -656,6 +670,8 @@ export function createMemoryRouter() {
               ticketCode: finalCode,
               tier: tier || 'General',
               organizerName: targetEvent.organizer,
+              customMessage: resolvedMsg?.text,
+              cameraUrl: resolvedMsg?.cameraUrl,
             })
           : Promise.resolve({ ok: false, skipped: true }),
       ]);
@@ -702,6 +718,35 @@ export function createMemoryRouter() {
     }
   });
 
+  // Public Disposable Camera Routes (for guests clicking SMS/email camera link)
+  router.get('/public/camera/:slugOrId', (req, res) => {
+    const roll = memoryStore.getPublicCameraRoll(req.params.slugOrId);
+    if (!roll) {
+      return res.status(404).json({ error: 'Event disposable camera not found.' });
+    }
+    return res.json(roll);
+  });
+
+  router.post('/public/camera/:slugOrId/shots', (req, res) => {
+    try {
+      const shot = memoryStore.addPublicShot(req.params.slugOrId, req.body as DisposableShot);
+      return res.status(201).json({ shot });
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to save film frame.' });
+    }
+  });
+
+  router.patch('/public/camera/shots/:id/like', (req, res) => {
+    try {
+      const shot = memoryStore.togglePublicLikeShot(req.params.id);
+      return res.json({ shot });
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to update like.' });
+    }
+  });
+
   // =========================================================================
   // STUDIO ROUTES (In-Memory Fallback)
   // =========================================================================
@@ -729,6 +774,26 @@ export function createMemoryRouter() {
       return res.json({ profile });
     } catch (err) {
       return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to update profile.' });
+    }
+  });
+
+  router.delete('/studio/account', requireMemoryAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
+    const confirmation = (req.body as { confirmation?: string } | undefined)?.confirmation;
+    if (confirmation !== undefined && confirmation.trim().toUpperCase() !== 'DELETE') {
+      return res.status(400).json({ error: 'Type DELETE to confirm permanent account deletion.' });
+    }
+    try {
+      const deletedUserId = req.user!.id;
+      const contacts = memoryStore.deleteAccount(deletedUserId);
+      try {
+        await clearPendingSignup(contacts);
+      } catch {
+        // Ignore cleanup errors for optional OTP persistence tables
+      }
+      return res.json({ ok: true, deletedUserId });
+    } catch (err) {
+      const status = (err as Error & { status?: number })?.status ?? 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to delete account.' });
     }
   });
 
@@ -824,32 +889,122 @@ export function createMemoryRouter() {
         req.params.eventId,
         payload
       );
-      if (isResendConfigured() && result.attendee.email?.includes('@')) {
-        await sendEventPassEmail({
-          to: result.attendee.email,
-          attendeeName: result.attendee.name,
-          eventTitle: result.event.title,
-          eventDate: result.event.date,
-          eventTime: result.event.time,
-          eventVenue: result.event.venue,
-          eventCity: result.event.city,
-          ticketCode: result.attendee.ticketCode,
-          tier: result.attendee.tier,
-          organizerName: result.event.organizer,
-          replyTo: req.memoryUser?.profile.replyToEmail,
-        });
-      }
-      return res.status(201).json(result);
+      const requestOrigin = (process.env.APP_URL || '').trim().replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
+      const msgType = result.attendee.checkedIn ? 'checkin' : 'confirmation';
+      const resolvedMsg = resolveEventMessage({
+        type: msgType,
+        event: result.event,
+        attendeeName: result.attendee.name,
+        ticketCode: result.attendee.ticketCode,
+        originOverride: requestOrigin,
+        includeGuestInCameraUrl: true,
+      });
+
+      await Promise.all([
+        result.attendee.phone
+          ? dispatchOptionalArkeselSms(
+              result.attendee.phone,
+              result.event.title,
+              result.attendee.ticketCode,
+              result.event.senderId,
+              resolvedMsg.text
+            )
+          : Promise.resolve('Pending' as const),
+        isResendConfigured() && result.attendee.email?.includes('@')
+          ? result.attendee.checkedIn
+            ? sendCheckInWelcomeEmail({
+                to: result.attendee.email,
+                attendeeName: result.attendee.name,
+                eventTitle: result.event.title,
+                eventDate: result.event.date,
+                eventVenue: result.event.venue,
+                eventCity: result.event.city,
+                ticketCode: result.attendee.ticketCode,
+                organizerName: result.event.organizer,
+                welcomeMessage: resolvedMsg.text,
+                cameraUrl: resolvedMsg.cameraUrl,
+                replyTo: req.memoryUser?.profile.replyToEmail,
+              })
+            : sendEventPassEmail({
+                to: result.attendee.email,
+                attendeeName: result.attendee.name,
+                eventTitle: result.event.title,
+                eventDate: result.event.date,
+                eventTime: result.event.time,
+                eventVenue: result.event.venue,
+                eventCity: result.event.city,
+                ticketCode: result.attendee.ticketCode,
+                tier: result.attendee.tier,
+                organizerName: result.event.organizer,
+                replyTo: req.memoryUser?.profile.replyToEmail,
+                customMessage: resolvedMsg.text,
+                cameraUrl: resolvedMsg.cameraUrl,
+              })
+          : Promise.resolve({ ok: false, skipped: true }),
+      ]);
+      return res.status(201).json({
+        ...result,
+        cameraUrl: resolvedMsg.cameraUrl,
+        dispatchedMessage: resolvedMsg.text,
+      });
     } catch (err) {
       const status = (err as Error & { status?: number }).status || 400;
       return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to register attendee.' });
     }
   });
 
-  router.patch('/studio/attendees/:id/checkin', requireMemoryAuth, requireRole('creator', 'organizer', 'gate_staff'), (req: AuthedRequest, res) => {
+  router.patch('/studio/attendees/:id/checkin', requireMemoryAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
     try {
       const attendee = memoryStore.toggleCheckIn(req.user!.id, req.params.id);
-      return res.json({ attendee });
+      let checkInMessageSent = false;
+      let cameraUrl: string | undefined;
+      let dispatchedMessage: string | undefined;
+
+      if (attendee.checkedIn) {
+        const evt = memoryStore.getAnyEventBySlugOrId(attendee.eventId);
+        if (evt) {
+          const requestOrigin = (process.env.APP_URL || '').trim().replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
+          const resolved = resolveEventMessage({
+            type: 'checkin',
+            event: evt,
+            attendeeName: attendee.name,
+            ticketCode: attendee.ticketCode,
+            originOverride: requestOrigin,
+            includeGuestInCameraUrl: true,
+          });
+          cameraUrl = resolved.cameraUrl;
+          dispatchedMessage = resolved.text;
+          await Promise.all([
+            attendee.phone
+              ? dispatchOptionalArkeselSms(
+                  attendee.phone,
+                  evt.title,
+                  attendee.ticketCode,
+                  evt.senderId,
+                  resolved.text
+                )
+              : Promise.resolve('Pending' as const),
+            isResendConfigured() && attendee.email?.includes('@')
+              ? sendCheckInWelcomeEmail({
+                  to: attendee.email,
+                  attendeeName: attendee.name,
+                  eventTitle: evt.title,
+                  eventDate: evt.date,
+                  eventVenue: evt.venue,
+                  eventCity: evt.city,
+                  ticketCode: attendee.ticketCode,
+                  organizerName: evt.organizer,
+                  welcomeMessage: resolved.text,
+                  cameraUrl: resolved.cameraUrl,
+                  replyTo: req.memoryUser?.profile.replyToEmail,
+                })
+              : Promise.resolve({ ok: false, skipped: true }),
+          ]);
+          checkInMessageSent = true;
+        }
+      }
+
+      return res.json({ attendee, checkInMessageSent, cameraUrl, dispatchedMessage });
     } catch (err) {
       return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to toggle check-in.' });
     }
@@ -905,7 +1060,8 @@ export function createMemoryRouter() {
       const shot = memoryStore.addShot(req.user!.id, req.body as DisposableShot);
       return res.status(201).json({ shot });
     } catch (err) {
-      return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to save film frame.' });
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to save film frame.' });
     }
   });
 

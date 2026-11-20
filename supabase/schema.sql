@@ -163,6 +163,8 @@ alter table public.events
   add column if not exists validation_config jsonb;
 alter table public.events
   add column if not exists extra_data_config jsonb;
+alter table public.events
+  add column if not exists message_config jsonb;
 
 create index if not exists idx_events_organizer on public.events(organizer_id);
 create index if not exists idx_events_status on public.events(status);
@@ -242,6 +244,7 @@ create table if not exists public.disposable_shots (
   frame_number integer not null,
   data_url text not null,
   captured_by text not null,
+  shooter_key text,
   caption text,
   film_stock text not null default 'ilford-bw' check (film_stock in ('ilford-bw', 'kodak-gold', 'fuji-c200', 'cinestill-800t')),
   date_stamp text not null,
@@ -252,7 +255,11 @@ create table if not exists public.disposable_shots (
   created_at timestamptz not null default now()
 );
 
+alter table public.disposable_shots
+  add column if not exists shooter_key text;
+
 create index if not exists idx_disposable_shots_event on public.disposable_shots(event_id);
+create index if not exists idx_disposable_shots_shooter on public.disposable_shots(event_id, shooter_key);
 
 -- Row Level Security (RLS)
 alter table public.profiles enable row level security;
@@ -549,4 +556,4 @@ create index if not exists idx_pending_signups_expires on public.pending_signups
 
 alter table public.pending_signups enable row level security;
 
-
+notify pgrst, 'reload schema';

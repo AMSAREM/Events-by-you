@@ -15,6 +15,7 @@ import {
   RotateCcw,
   Send,
   ShieldCheck,
+  Trash2,
   Unlock,
   Verified,
   Wallet,
@@ -36,6 +37,7 @@ interface SettingsScreenProps {
   onOpenPlans: () => void;
   onSignOut: () => void;
   onResetDemoData: () => void;
+  onDeleteAccount?: () => Promise<void> | void;
 }
 
 const DEFAULT_AVATAR_URL =
@@ -77,6 +79,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onOpenPlans,
   onSignOut,
   onResetDemoData,
+  onDeleteAccount,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -114,8 +117,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [selectedBundleId, setSelectedBundleId] = useState('500');
   const [webhookSuffix, setWebhookSuffix] = useState('4F98');
 
-  // Session & Toast controls
+  // Session, Account Deletion & Toast controls
   const [confirmReset, setConfirmReset] = useState(false);
+  const [deleteStepOpen, setDeleteStepOpen] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -263,6 +270,25 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     showToast('Workspace restored to default events, schedule, and attendees.');
   };
 
+  const handleConfirmDeleteAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onDeleteAccount) return;
+    if (deleteConfirmText.trim().toUpperCase() !== 'DELETE') {
+      setDeleteError('Type DELETE in all caps to confirm permanent deletion.');
+      return;
+    }
+    setDeletingAccount(true);
+    setDeleteError(null);
+    try {
+      await onDeleteAccount();
+    } catch (err) {
+      setDeleteError(
+        err instanceof Error ? err.message : 'Unable to delete account. Please try again.'
+      );
+      setDeletingAccount(false);
+    }
+  };
+
   const unresolved = alerts.filter((a) => !a.resolved);
   const isFree = profile.plan === 'Starter';
   const liveEventCount = events.filter((e) => e.status === 'live' || e.status === 'upcoming').length;
@@ -287,7 +313,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     <div className="space-y-6 pb-12">
       {/* Feedback Toast */}
       {toastMsg && (
-        <div className="fixed bottom-6 right-6 z-50 bg-[#0B0B0B] text-white px-5 py-3 rounded-full text-xs font-semibold flex items-center gap-2.5 shadow-xl">
+        <div className="fixed bottom-[calc(5.25rem+env(safe-area-inset-bottom))] md:bottom-6 right-4 md:right-6 z-50 max-w-[calc(100vw-2rem)] bg-[#0B0B0B] text-white px-5 py-3 rounded-full text-xs font-semibold flex items-center gap-2.5 shadow-xl">
           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>{toastMsg}</span>
         </div>
@@ -838,6 +864,107 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
               </div>
             </div>
           </section>
+
+          {/* Danger Zone: Permanent Organiser Account Deletion */}
+          {onDeleteAccount && (
+            <section className="bg-[#FEF2F2]/70 rounded-3xl p-5 sm:p-6 border border-[#EF4444]/25">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                <div>
+                  <span className="text-[11px] font-semibold text-[#DC2626] uppercase tracking-widest block">
+                    Danger Zone
+                  </span>
+                  <h2 className="font-display text-xl font-bold text-[#0B0B0B] tracking-tight">
+                    Delete Organiser Account
+                  </h2>
+                </div>
+                <span className="inline-flex items-center gap-1.5 text-[#DC2626] text-xs font-semibold">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  Irreversible
+                </span>
+              </div>
+
+              <p className="text-xs text-[#52525B] leading-relaxed mb-4">
+                Permanently remove <span className="font-semibold text-[#0B0B0B]">{profile.studio || profile.name}</span>
+                {profile.email ? ` (${profile.email})` : ''} and erase{' '}
+                <span className="font-semibold tabular-nums text-[#0B0B0B]">{events.length}</span> hosted{' '}
+                {events.length === 1 ? 'event' : 'events'}, attendee rosters, QR passes, 35mm film rolls, alerts, and remaining SMS balance.
+              </p>
+
+              {!deleteStepOpen ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteStepOpen(true);
+                    setDeleteConfirmText('');
+                    setDeleteError(null);
+                  }}
+                  className="min-h-[42px] px-4 py-2.5 rounded-full bg-white border border-[#EF4444]/40 text-[#DC2626] hover:bg-[#DC2626] hover:text-white hover:border-[#DC2626] text-xs font-semibold transition-colors inline-flex items-center gap-2 whitespace-nowrap"
+                >
+                  <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                  Delete Organiser Account
+                </button>
+              ) : (
+                <form
+                  onSubmit={handleConfirmDeleteAccount}
+                  className="p-4 rounded-2xl bg-white border border-[#EF4444]/30 space-y-3"
+                >
+                  <div>
+                    <label
+                      htmlFor="delete-account-confirm"
+                      className="text-xs font-semibold text-[#0B0B0B] block mb-1.5"
+                    >
+                      Type <span className="font-mono text-[#DC2626]">DELETE</span> to confirm permanent removal
+                    </label>
+                    <input
+                      id="delete-account-confirm"
+                      type="text"
+                      value={deleteConfirmText}
+                      onChange={(e) => {
+                        setDeleteConfirmText(e.target.value);
+                        if (deleteError) setDeleteError(null);
+                      }}
+                      placeholder="DELETE"
+                      autoComplete="off"
+                      disabled={deletingAccount}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#F5F5F7] border border-[#E5E5EA] text-sm font-mono text-[#0B0B0B] focus:outline-none focus:ring-2 focus:ring-[#EF4444]/25 focus:border-[#EF4444]"
+                    />
+                  </div>
+
+                  {deleteError && (
+                    <div className="flex items-start gap-2 rounded-xl bg-[#FEF2F2] border border-[#EF4444]/30 px-3 py-2 text-xs text-[#DC2626]">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <span>{deleteError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                    <button
+                      type="submit"
+                      disabled={
+                        deletingAccount || deleteConfirmText.trim().toUpperCase() !== 'DELETE'
+                      }
+                      className="min-h-[42px] px-4 py-2.5 rounded-full bg-[#DC2626] text-white text-xs font-semibold hover:bg-red-700 transition-colors disabled:opacity-45 disabled:cursor-not-allowed inline-flex items-center gap-2 whitespace-nowrap"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                      {deletingAccount ? 'Deleting Account...' : 'Permanently Delete Account'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deletingAccount}
+                      onClick={() => {
+                        setDeleteStepOpen(false);
+                        setDeleteConfirmText('');
+                        setDeleteError(null);
+                      }}
+                      className="min-h-[42px] px-4 py-2.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-xs font-semibold hover:bg-[#EEEEF0] transition-colors disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              )}
+            </section>
+          )}
         </div>
 
         {/* RIGHT COLUMN: SMS Wallet, Plan Capacity & Webhook Specs (5 Cols) */}

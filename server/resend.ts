@@ -613,9 +613,124 @@ export async function sendEventPassEmail(params: {
   tier: string;
   organizerName: string;
   replyTo?: string;
+  customMessage?: string;
+  cameraUrl?: string;
 }): Promise<SendResendEmailResult> {
   const subject = `Your pass for ${params.eventTitle} (${params.ticketCode})`;
   const preheaderText = `${params.tier} Pass ${params.ticketCode} for ${params.eventTitle} · ${params.eventDate}`;
+
+  const renderContent = (effectiveFrom: string) => {
+    const includeBrandUrl = shouldIncludeAppUrlLink(effectiveFrom);
+    const appHost = getHostnameFromUrl(DEFAULT_APP_URL) || 'eventsbyyou.xyz';
+    const poweredByHtml = includeBrandUrl
+      ? ` · Events App (<a href="${escapeHtml(DEFAULT_APP_URL)}" style="color:#0B0B0B;text-decoration:underline;">${escapeHtml(appHost)}</a>)`
+      : ' · Events App';
+
+    const cameraBlockHtml = params.cameraUrl
+      ? `
+      <div style="margin:20px 0 0 0;padding:18px 20px;background:#F5F5F7;border:1px solid #E5E5EA;border-radius:16px;">
+        <p style="margin:0 0 6px 0;font-size:13px;font-weight:700;color:#0B0B0B;">
+          35mm Event Disposable Camera (5 Photos Per Guest)
+        </p>
+        <p style="margin:0 0 14px 0;font-size:12px;line-height:1.5;color:#444748;">
+          Capture up to 5 candid shots on the shared event roll and turn pictures into a downloadable collage.
+        </p>
+        <a href="${escapeHtml(params.cameraUrl)}" style="display:inline-block;padding:10px 18px;background:#0B0B0B;color:#FFFFFF;text-decoration:none;border-radius:9999px;font-size:12px;font-weight:700;">
+          Open Disposable Camera
+        </a>
+      </div>`
+      : '';
+
+    const html = `
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>${escapeHtml(subject)}</title>
+  </head>
+  <body style="margin:0;padding:32px 16px;background:#F5F5F7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0B0B0B;">
+    <span style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">${escapeHtml(preheaderText)}</span>
+    <div style="max-width:540px;margin:0 auto;background:#FFFFFF;border-radius:24px;padding:32px;border:1px solid #E5E5EA;">
+      <div style="margin-bottom:20px;">
+        <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#0B0B0B;color:#FFFFFF;border-radius:9999px;font-weight:700;font-size:13px;vertical-align:middle;">E</span>
+        <span style="margin-left:8px;font-weight:700;font-size:15px;vertical-align:middle;color:#0B0B0B;">Events App · Digital Pass</span>
+      </div>
+      <h1 style="margin:0 0 8px 0;font-size:22px;line-height:1.25;font-weight:700;color:#0B0B0B;">
+        You&apos;re confirmed for ${escapeHtml(params.eventTitle)}
+      </h1>
+      <p style="margin:0 0 14px 0;font-size:14px;line-height:1.6;color:#444748;">
+        ${escapeHtml(params.customMessage?.trim() || `Hi ${params.attendeeName}, present the QR token code below at gate check-in.`)}
+      </p>
+      <div style="margin:20px 0;padding:22px;background:#0B0B0B;color:#FFFFFF;border-radius:18px;text-align:center;">
+        <p style="margin:0 0 6px 0;font-size:11px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:#A1A1AA;">
+          ${escapeHtml(params.tier)} Pass · Gate Token
+        </p>
+        <p style="margin:0;font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-size:24px;font-weight:700;letter-spacing:0.08em;color:#FFFFFF;">
+          ${escapeHtml(params.ticketCode)}
+        </p>
+      </div>
+      <div style="background:#F5F5F7;border-radius:16px;padding:16px 20px;font-size:13px;line-height:1.7;color:#1A1C1D;">
+        <div><strong>Date:</strong> ${escapeHtml(params.eventDate)} · ${escapeHtml(params.eventTime)}</div>
+        <div><strong>Venue:</strong> ${escapeHtml(params.eventVenue)}, ${escapeHtml(params.eventCity)}</div>
+        <div><strong>Hosted by:</strong> ${escapeHtml(params.organizerName)}</div>
+      </div>
+      ${cameraBlockHtml}
+      <p style="margin:20px 0 0 0;padding-top:16px;border-top:1px solid #E5E5EA;font-size:12px;line-height:1.5;color:#71717A;">
+        Need help? Reply directly to reach ${escapeHtml(params.organizerName)}${poweredByHtml}.
+      </p>
+    </div>
+  </body>
+</html>`.trim();
+
+    const text = [
+      `You're confirmed for ${params.eventTitle}!`,
+      params.customMessage?.trim() ? `\n${params.customMessage.trim()}` : '',
+      `Attendee: ${params.attendeeName}`,
+      `Pass Tier: ${params.tier}`,
+      `Gate Token Code: ${params.ticketCode}`,
+      `Date & Time: ${params.eventDate} · ${params.eventTime}`,
+      `Venue: ${params.eventVenue}, ${params.eventCity}`,
+      `Hosted by: ${params.organizerName}`,
+      params.cameraUrl ? `\nDisposable Camera (5 photos + collage): ${params.cameraUrl}` : '',
+      ``,
+      includeBrandUrl ? `Events App · ${DEFAULT_APP_URL}` : 'Events App',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    return { html, text };
+  };
+
+  const initial = renderContent(getResendConfig().fromEmail);
+  return dispatchResendEmail(
+    {
+      to: params.to,
+      subject,
+      html: initial.html,
+      text: initial.text,
+      replyTo: params.replyTo,
+      tags: [{ name: 'category', value: 'event_pass' }],
+    },
+    renderContent
+  );
+}
+
+export async function sendCheckInWelcomeEmail(params: {
+  to: string;
+  attendeeName: string;
+  eventTitle: string;
+  eventDate: string;
+  eventVenue: string;
+  eventCity: string;
+  ticketCode: string;
+  organizerName: string;
+  welcomeMessage: string;
+  cameraUrl: string;
+  replyTo?: string;
+}): Promise<SendResendEmailResult> {
+  const subject = `Checked In: Welcome to ${params.eventTitle}`;
+  const preheaderText = `You're checked in! Open the shared disposable camera (5 shots + collage) for ${params.eventTitle}.`;
 
   const renderContent = (effectiveFrom: string) => {
     const includeBrandUrl = shouldIncludeAppUrlLink(effectiveFrom);
@@ -637,43 +752,44 @@ export async function sendEventPassEmail(params: {
     <div style="max-width:540px;margin:0 auto;background:#FFFFFF;border-radius:24px;padding:32px;border:1px solid #E5E5EA;">
       <div style="margin-bottom:20px;">
         <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#0B0B0B;color:#FFFFFF;border-radius:9999px;font-weight:700;font-size:13px;vertical-align:middle;">E</span>
-        <span style="margin-left:8px;font-weight:700;font-size:15px;vertical-align:middle;color:#0B0B0B;">Events App · Digital Pass</span>
+        <span style="margin-left:8px;font-weight:700;font-size:15px;vertical-align:middle;color:#0B0B0B;">Events App · Gate Check-In</span>
       </div>
-      <h1 style="margin:0 0 8px 0;font-size:22px;line-height:1.25;font-weight:700;color:#0B0B0B;">
-        You&apos;re confirmed for ${escapeHtml(params.eventTitle)}
+      <h1 style="margin:0 0 10px 0;font-size:22px;line-height:1.25;font-weight:700;color:#0B0B0B;">
+        Welcome to ${escapeHtml(params.eventTitle)}, ${escapeHtml(params.attendeeName)}!
       </h1>
-      <p style="margin:0 0 20px 0;font-size:14px;line-height:1.6;color:#444748;">
-        Hi ${escapeHtml(params.attendeeName)}, present the QR token code below at gate check-in.
+      <p style="margin:0 0 20px 0;font-size:14px;line-height:1.65;color:#1A1C1D;background:#F5F5F7;padding:16px 18px;border-radius:16px;">
+        ${escapeHtml(params.welcomeMessage)}
       </p>
-      <div style="margin:20px 0;padding:22px;background:#0B0B0B;color:#FFFFFF;border-radius:18px;text-align:center;">
+      <div style="margin:20px 0;padding:24px;background:#0B0B0B;color:#FFFFFF;border-radius:20px;text-align:center;">
         <p style="margin:0 0 6px 0;font-size:11px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:#A1A1AA;">
-          ${escapeHtml(params.tier)} Pass · Gate Token
+          Shared Disposable Camera · 5 Photos Per Guest
         </p>
-        <p style="margin:0;font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-size:24px;font-weight:700;letter-spacing:0.08em;color:#FFFFFF;">
-          ${escapeHtml(params.ticketCode)}
+        <p style="margin:0 0 18px 0;font-size:13px;line-height:1.5;color:#E4E4E7;">
+          Snap up to 5 analog moments and turn them into a photo collage from ${escapeHtml(params.eventTitle)}.
         </p>
+        <a href="${escapeHtml(params.cameraUrl)}" style="display:inline-block;padding:12px 24px;background:#FFFFFF;color:#0B0B0B;text-decoration:none;border-radius:9999px;font-size:13px;font-weight:700;">
+          Open Disposable Camera
+        </a>
       </div>
-      <div style="background:#F5F5F7;border-radius:16px;padding:16px 20px;font-size:13px;line-height:1.7;color:#1A1C1D;">
-        <div><strong>Date:</strong> ${escapeHtml(params.eventDate)} · ${escapeHtml(params.eventTime)}</div>
-        <div><strong>Venue:</strong> ${escapeHtml(params.eventVenue)}, ${escapeHtml(params.eventCity)}</div>
-        <div><strong>Hosted by:</strong> ${escapeHtml(params.organizerName)}</div>
+      <div style="font-size:12px;line-height:1.7;color:#71717A;">
+        <div><strong>Pass Code:</strong> ${escapeHtml(params.ticketCode)}</div>
+        <div><strong>Venue:</strong> ${escapeHtml(params.eventVenue)}, ${escapeHtml(params.eventCity)} · ${escapeHtml(params.eventDate)}</div>
       </div>
       <p style="margin:20px 0 0 0;padding-top:16px;border-top:1px solid #E5E5EA;font-size:12px;line-height:1.5;color:#71717A;">
-        Need help? Reply directly to reach ${escapeHtml(params.organizerName)}${poweredByHtml}.
+        Hosted by ${escapeHtml(params.organizerName)}${poweredByHtml}.
       </p>
     </div>
   </body>
 </html>`.trim();
 
     const text = [
-      `You're confirmed for ${params.eventTitle}!`,
-      `Attendee: ${params.attendeeName}`,
-      `Pass Tier: ${params.tier}`,
-      `Gate Token Code: ${params.ticketCode}`,
-      `Date & Time: ${params.eventDate} · ${params.eventTime}`,
-      `Venue: ${params.eventVenue}, ${params.eventCity}`,
-      `Hosted by: ${params.organizerName}`,
+      `Welcome to ${params.eventTitle}, ${params.attendeeName}!`,
       ``,
+      params.welcomeMessage,
+      ``,
+      `Open Disposable Camera (5 shots + collage): ${params.cameraUrl}`,
+      `Pass Code: ${params.ticketCode}`,
+      `Venue: ${params.eventVenue}, ${params.eventCity} · ${params.eventDate}`,
       includeBrandUrl ? `Events App · ${DEFAULT_APP_URL}` : 'Events App',
     ].join('\n');
 
@@ -688,7 +804,7 @@ export async function sendEventPassEmail(params: {
       html: initial.html,
       text: initial.text,
       replyTo: params.replyTo,
-      tags: [{ name: 'category', value: 'event_pass' }],
+      tags: [{ name: 'category', value: 'event_checkin' }],
     },
     renderContent
   );

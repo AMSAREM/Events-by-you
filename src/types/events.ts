@@ -30,6 +30,7 @@ export interface DisposableShot {
   frameNumber: number;
   dataUrl: string;
   capturedBy: string;
+  shooterKey?: string;
   caption?: string;
   filmStock: FilmStock;
   dateStamp: string;
@@ -109,6 +110,14 @@ export interface AttendeeGiftEntry {
   message?: string;
 }
 
+export interface EventMessageConfig {
+  confirmationMessage?: string;
+  reminderMessage?: string;
+  checkInMessage?: string;
+  thankYouMessage?: string;
+  includeCameraLink?: boolean;
+}
+
 export interface EventItem {
   id: string;
   slug: string;
@@ -137,6 +146,7 @@ export interface EventItem {
   qrPassPublished?: boolean;
   validationConfig?: EventValidationConfig;
   extraDataConfig?: EventExtraDataConfig;
+  messageConfig?: EventMessageConfig;
 }
 
 export type AttendeeTier = 'VIP' | 'General' | 'Speaker' | 'Press';

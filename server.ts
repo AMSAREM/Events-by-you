@@ -62,8 +62,10 @@ import { buildEventOgSvg, injectEventMetaTags } from './server/ogImage.ts';
 import {
   isResendConfigured,
   sendAuthOtpEmail,
+  sendCheckInWelcomeEmail,
   sendEventPassEmail,
 } from './server/resend.ts';
+import { MAX_SHOTS_PER_USER, resolveEventMessage } from './src/lib/eventMessages.ts';
 import {
   buildSyntheticPhoneEmail,
   clearPendingSignup,
@@ -140,6 +142,43 @@ function isMissingTableError(err: { code?: string; message?: string } | null | u
     err.code === 'PGRST205' ||
     Boolean(err.message && err.message.toLowerCase().includes('creator_app'))
   );
+}
+
+function isMissingColumnError(err: { code?: string; message?: string } | null | undefined): boolean {
+  if (!err) return false;
+  const msg = (err.message || '').toLowerCase();
+  return (
+    err.code === 'PGRST204' ||
+    err.code === '42703' ||
+    msg.includes('column') ||
+    msg.includes('schema cache')
+  );
+}
+
+function stripOptionalEventColumns<T extends Record<string, unknown>>(
+  row: T
+): Omit<T, 'qr_pass_published' | 'design_theme' | 'validation_config' | 'extra_data_config' | 'message_config'> {
+  const {
+    qr_pass_published: _q,
+    design_theme: _d,
+    validation_config: _v,
+    extra_data_config: _e,
+    message_config: _m,
+    ...legacy
+  } = row;
+  return legacy;
+}
+
+function withEmbeddedMessageConfig(
+  extraDataConfig: EventItem['extraDataConfig'] | undefined,
+  messageConfig: EventItem['messageConfig'] | undefined
+): Record<string, unknown> | null {
+  if (!extraDataConfig && !messageConfig) return null;
+  const base = extraDataConfig && typeof extraDataConfig === 'object' ? { ...extraDataConfig } : {};
+  if (messageConfig && typeof messageConfig === 'object') {
+    (base as Record<string, unknown>).__messageConfig = messageConfig;
+  }
+  return base as Record<string, unknown>;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -568,25 +607,29 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
       if ((signInRes.error || !signInRes.data.session) && !signInRes.error?.message?.toLowerCase().includes('email not confirmed')) {
         const svc = createServiceSupabaseClient();
         if (svc) {
-          const { data: listData } = await svc.auth.admin.listUsers({ perPage: 200 });
-          const existingUser = listData?.users?.find(
-            (u) => (u.email || '').toLowerCase() === creator.email
-          );
+          const existingUser = await findSupabaseUserByEmail(svc, creator.email);
           if (existingUser) {
-            await svc.auth.admin.updateUserById(existingUser.id, {
+            const { error: updateErr } = await svc.auth.admin.updateUserById(existingUser.id, {
               password: creator.password,
               email_confirm: true,
             });
+            if (updateErr) {
+              throw new Error(updateErr.message);
+            }
           } else {
-            await svc.auth.admin.createUser({
+            const { error: createErr } = await svc.auth.admin.createUser({
               email: creator.email,
               password: creator.password,
               email_confirm: true,
               user_metadata: {
                 name: 'Apps Creator',
                 studio: 'Apps Creator Console',
+                app_role: 'creator',
               },
             });
+            if (createErr) {
+              throw new Error(createErr.message);
+            }
           }
           signInRes = await publicClient.auth.signInWithPassword({
             email: creator.email,
@@ -646,7 +689,11 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
       }
 
       const userClient = createUserSupabaseClient(signInRes.data.session.access_token);
-      const profile = await ensureProfileRow(userClient, signInRes.data.user);
+      const svcFallback = createServiceSupabaseClient();
+      const profile = await ensureProfileRow(userClient, signInRes.data.user).catch((err) => {
+        if (svcFallback) return ensureProfileRow(svcFallback, signInRes.data.user!);
+        throw err;
+      });
       return res.json({
         requiresOtp: false,
         creatorToken,
@@ -1669,6 +1716,152 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
     return res.json({ event: evt });
   });
 
+  app.get('/api/public/camera/:slugOrId', requireSupabaseConfiguredMiddleware, async (req, res) => {
+    try {
+      const evt = await resolveEventForPublicOrOg(req.params.slugOrId);
+      if (!evt) {
+        return res.status(404).json({ error: 'Event disposable camera not found.' });
+      }
+      const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
+      const [shotsRes, rollRes] = await Promise.all([
+        supabase
+          .from('disposable_shots')
+          .select('*')
+          .eq('event_id', evt.id)
+          .order('frame_number', { ascending: false }),
+        supabase
+          .from('disposable_roll_settings')
+          .select('*')
+          .eq('event_id', evt.id)
+          .maybeSingle(),
+      ]);
+      const shots = (shotsRes.data ?? []).map((r) => mapShotRow(r as Record<string, unknown>));
+      const rollSettings = rollRes.data
+        ? mapRollSettingsRow(rollRes.data as Record<string, unknown>)
+        : { exposuresLimit: 24 as const, darkroomMode: false };
+      return res.json({ event: evt, shots, rollSettings });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load disposable camera.';
+      return res.status(500).json({ error: message });
+    }
+  });
+
+  app.post('/api/public/camera/:slugOrId/shots', requireSupabaseConfiguredMiddleware, async (req, res) => {
+    const shot = req.body as DisposableShot;
+    try {
+      const evt = await resolveEventForPublicOrOg(req.params.slugOrId);
+      if (!evt) {
+        return res.status(404).json({ error: 'Event disposable camera not found.' });
+      }
+      const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
+      const [existingShotsRes, rollRes] = await Promise.all([
+        supabase
+          .from('disposable_shots')
+          .select('*')
+          .eq('event_id', evt.id),
+        supabase
+          .from('disposable_roll_settings')
+          .select('*')
+          .eq('event_id', evt.id)
+          .maybeSingle(),
+      ]);
+      const existingShots = (existingShotsRes.data ?? []).map((r) =>
+        mapShotRow(r as Record<string, unknown>)
+      );
+      const rollCfg = rollRes.data
+        ? mapRollSettingsRow(rollRes.data as Record<string, unknown>)
+        : { exposuresLimit: 24 as const, darkroomMode: false };
+
+      if (existingShots.length >= rollCfg.exposuresLimit) {
+        return res.status(403).json({
+          error: `Film roll full (${rollCfg.exposuresLimit}/${rollCfg.exposuresLimit} exposures).`,
+        });
+      }
+
+      const effectiveKey = (shot.shooterKey || '').trim();
+      const normalizedAuthor = (shot.capturedBy || 'Guest').trim().toLowerCase();
+      const userShotCount = existingShots.filter((s) =>
+        effectiveKey && s.shooterKey
+          ? s.shooterKey === effectiveKey
+          : s.capturedBy.trim().toLowerCase() === normalizedAuthor
+      ).length;
+
+      if (userShotCount >= MAX_SHOTS_PER_USER) {
+        return res.status(403).json({
+          error: `Camera limit reached: each user is allowed up to ${MAX_SHOTS_PER_USER} pictures per event.`,
+        });
+      }
+
+      const nextFrame = existingShots.reduce((max, s) => Math.max(max, s.frameNumber), 0) + 1;
+      const insertRow: Record<string, unknown> = {
+        id: shot.id || `shot-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+        event_id: evt.id,
+        frame_number: nextFrame,
+        data_url: shot.dataUrl,
+        captured_by: shot.capturedBy || 'Guest Photographer',
+        shooter_key: effectiveKey || null,
+        caption: shot.caption ?? null,
+        film_stock: shot.filmStock || 'ilford-bw',
+        date_stamp: shot.dateStamp || '',
+        captured_at: shot.capturedAt || new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+        developed: !rollCfg.darkroomMode,
+        likes: 0,
+        liked: false,
+      };
+
+      let { data, error } = await supabase
+        .from('disposable_shots')
+        .insert(insertRow)
+        .select('*')
+        .single();
+      if (error && isMissingColumnError(error)) {
+        const { shooter_key: _sk, ...legacyShot } = insertRow;
+        const retry = await supabase
+          .from('disposable_shots')
+          .insert(legacyShot)
+          .select('*')
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
+      if (error) return res.status(400).json({ error: error.message });
+      return res.status(201).json({ shot: mapShotRow(data as Record<string, unknown>) });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save film frame.';
+      return res.status(500).json({ error: message });
+    }
+  });
+
+  app.patch('/api/public/camera/shots/:id/like', requireSupabaseConfiguredMiddleware, async (req, res) => {
+    try {
+      const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
+      const { data: existing, error: fetchErr } = await supabase
+        .from('disposable_shots')
+        .select('*')
+        .eq('id', req.params.id)
+        .single();
+      if (fetchErr || !existing) return res.status(404).json({ error: 'Shot not found.' });
+
+      const rec = existing as Record<string, unknown>;
+      const nextLiked = !Boolean(rec.liked);
+      const nextLikes = nextLiked
+        ? Number(rec.likes ?? 0) + 1
+        : Math.max(0, Number(rec.likes ?? 0) - 1);
+
+      const { data: updated, error: updErr } = await supabase
+        .from('disposable_shots')
+        .update({ liked: nextLiked, likes: nextLikes })
+        .eq('id', req.params.id)
+        .select('*')
+        .single();
+      if (updErr) return res.status(400).json({ error: updErr.message });
+      return res.json({ shot: mapShotRow(updated as Record<string, unknown>) });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update like.';
+      return res.status(500).json({ error: message });
+    }
+  });
+
   app.post(
     '/api/public/events/:eventId/register',
     requireSupabaseConfiguredMiddleware,
@@ -1798,12 +1991,22 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
           }
         }
 
+        const resolvedMsg = resolveEventMessage({
+          type: 'confirmation',
+          event,
+          attendeeName: name.trim(),
+          ticketCode: finalCode,
+          originOverride: resolveBaseUrl(req),
+          includeGuestInCameraUrl: true,
+        });
+
         const [smsDelivery, emailDelivery] = await Promise.all([
           dispatchOptionalArkeselSms(
             normalizedPhone,
             event.title,
             finalCode,
-            event.senderId
+            event.senderId,
+            resolvedMsg.text
           ),
           isResendConfigured()
             ? sendEventPassEmail({
@@ -1818,6 +2021,8 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
                 tier: tier || 'General',
                 organizerName: event.organizer,
                 replyTo,
+                customMessage: resolvedMsg.text,
+                cameraUrl: resolvedMsg.cameraUrl,
               })
             : Promise.resolve({ ok: false, skipped: true }),
         ]);
@@ -1939,9 +2144,18 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         idSuffix = `${user.id.slice(0, 6)}-${crypto.randomBytes(3).toString('hex')}`;
       }
 
+      let seedRows: Array<Record<string, unknown>> = buildSeededEvents(idSuffix);
       let { error: evtErr } = await client
         .from('events')
-        .upsert(buildSeededEvents(idSuffix), { onConflict: 'id' });
+        .upsert(seedRows, { onConflict: 'id' });
+
+      if (evtErr && isMissingColumnError(evtErr)) {
+        seedRows = seedRows.map((row) => stripOptionalEventColumns(row));
+        const legacyRes = await client
+          .from('events')
+          .upsert(seedRows, { onConflict: 'id' });
+        evtErr = legacyRes.error;
+      }
 
       if (
         evtErr &&
@@ -1950,9 +2164,16 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
           evtErr.message.toLowerCase().includes('row-level security'))
       ) {
         idSuffix = `${user.id.slice(0, 6)}-${crypto.randomBytes(3).toString('hex')}`;
-        const retryRes = await client
+        let retryRows: Array<Record<string, unknown>> = buildSeededEvents(idSuffix);
+        let retryRes = await client
           .from('events')
-          .upsert(buildSeededEvents(idSuffix), { onConflict: 'id' });
+          .upsert(retryRows, { onConflict: 'id' });
+        if (retryRes.error && isMissingColumnError(retryRes.error)) {
+          retryRows = retryRows.map((row) => stripOptionalEventColumns(row));
+          retryRes = await client
+            .from('events')
+            .upsert(retryRows, { onConflict: 'id' });
+        }
         evtErr = retryRes.error;
       }
 
@@ -2117,6 +2338,55 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
     }
   });
 
+  app.delete('/api/studio/account', requireSupabaseAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
+    const confirmation = (req.body as { confirmation?: string } | undefined)?.confirmation;
+    if (confirmation !== undefined && confirmation.trim().toUpperCase() !== 'DELETE') {
+      return res.status(400).json({ error: 'Type DELETE to confirm permanent account deletion.' });
+    }
+    const svc = createServiceSupabaseClient();
+    if (!svc) {
+      return res.status(503).json({
+        error: 'Server-side account deletion requires SUPABASE_SERVICE_ROLE_KEY to be configured.',
+      });
+    }
+    const user = req.user!;
+    try {
+      seedInFlightByUser.delete(user.id);
+      const { data: profRow } = await svc
+        .from('profiles')
+        .select('email, phone')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      const rawEmail =
+        (typeof profRow?.email === 'string' && profRow.email.trim()) ||
+        user.email ||
+        '';
+      const cleanEmail = rawEmail && !isSyntheticPhoneEmail(rawEmail) ? rawEmail.trim().toLowerCase() : undefined;
+      const cleanPhone =
+        req.userPhone ||
+        (typeof profRow?.phone === 'string' && profRow.phone.trim() ? normalizePhoneE164(profRow.phone) : '') ||
+        (user.phone ? normalizePhoneE164(user.phone) : '') ||
+        undefined;
+
+      try {
+        await clearPendingSignup({ email: cleanEmail, phone: cleanPhone });
+      } catch {
+        // Do not block account deletion if optional auth_otp_challenges / pending_signups tables are absent
+      }
+
+      const { error: deleteErr } = await svc.auth.admin.deleteUser(user.id);
+      if (deleteErr) {
+        return res.status(400).json({ error: deleteErr.message || 'Failed to delete organiser account.' });
+      }
+
+      return res.json({ ok: true, deletedUserId: user.id });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete organiser account.';
+      return res.status(500).json({ error: message });
+    }
+  });
+
   app.post('/api/studio/sms/test', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const { phone, senderId } = req.body as { phone?: string; senderId?: string };
     const phoneCheck = validateStrictPhoneE164(phone || '');
@@ -2205,7 +2475,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
 
       const uniqueEventId = `evt-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
 
-      const eventRow = {
+      const eventRow: Record<string, unknown> = {
         id: uniqueEventId,
         organizer_id: req.user!.id,
         slug: uniqueSlug,
@@ -2233,7 +2503,8 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         sender_id: event.senderId ?? null,
         qr_pass_published: event.status === 'draft' ? false : Boolean(event.qrPassPublished),
         validation_config: event.validationConfig ?? null,
-        extra_data_config: event.extraDataConfig ?? null,
+        extra_data_config: withEmbeddedMessageConfig(event.extraDataConfig, event.messageConfig),
+        message_config: event.messageConfig ?? null,
       };
 
       let { data: createdEvt, error: evtErr } = await client
@@ -2241,16 +2512,17 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         .insert(eventRow)
         .select('*')
         .single();
-      if (evtErr && evtErr.message?.includes('column')) {
-        const {
-          design_theme: _d,
-          validation_config: _v,
-          extra_data_config: _e,
-          ...legacyRow
-        } = eventRow;
-        const retry = await client.from('events').insert(legacyRow).select('*').single();
-        createdEvt = retry.data;
-        evtErr = retry.error;
+      if (evtErr && isMissingColumnError(evtErr)) {
+        const { message_config: _mc, ...withoutMsgCol } = eventRow;
+        const retryWithExtra = await client.from('events').insert(withoutMsgCol).select('*').single();
+        createdEvt = retryWithExtra.data;
+        evtErr = retryWithExtra.error;
+        if (evtErr && isMissingColumnError(evtErr)) {
+          const legacyRow = stripOptionalEventColumns(eventRow);
+          const retry = await client.from('events').insert(legacyRow).select('*').single();
+          createdEvt = retry.data;
+          evtErr = retry.error;
+        }
       }
       if (evtErr) return res.status(400).json({ error: evtErr.message });
 
@@ -2309,7 +2581,8 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         venue_format: updated.venueFormat ?? 'in-person',
         sender_id: updated.senderId ?? null,
         validation_config: updated.validationConfig ?? null,
-        extra_data_config: updated.extraDataConfig ?? null,
+        extra_data_config: withEmbeddedMessageConfig(updated.extraDataConfig, updated.messageConfig),
+        message_config: updated.messageConfig ?? null,
       };
       if (updated.status === 'draft') {
         updatePayload.qr_pass_published = false;
@@ -2324,22 +2597,29 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         .eq('organizer_id', req.user!.id)
         .select('*')
         .single();
-      if (error && error.message?.includes('column')) {
-        const {
-          design_theme: _d,
-          validation_config: _v,
-          extra_data_config: _e,
-          ...legacyUpdate
-        } = updatePayload;
-        const retry = await req
+      if (error && isMissingColumnError(error)) {
+        const { message_config: _mc, ...withoutMsgCol } = updatePayload;
+        const retryWithExtra = await req
           .supabase!.from('events')
-          .update(legacyUpdate)
+          .update(withoutMsgCol)
           .eq('id', req.params.id)
           .eq('organizer_id', req.user!.id)
           .select('*')
           .single();
-        data = retry.data;
-        error = retry.error;
+        data = retryWithExtra.data;
+        error = retryWithExtra.error;
+        if (error && isMissingColumnError(error)) {
+          const legacyUpdate = stripOptionalEventColumns(updatePayload);
+          const retry = await req
+            .supabase!.from('events')
+            .update(legacyUpdate)
+            .eq('id', req.params.id)
+            .eq('organizer_id', req.user!.id)
+            .select('*')
+            .single();
+          data = retry.data;
+          error = retry.error;
+        }
       }
       if (error) return res.status(400).json({ error: error.message });
       return res.json({ event: mapEventRow(data as Record<string, unknown>) });
@@ -2380,7 +2660,15 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         .eq('organizer_id', req.user!.id)
         .select('*')
         .single();
-      if (updErr) return res.status(400).json({ error: updErr.message });
+      if (updErr) {
+        if (isMissingColumnError(updErr)) {
+          return res.status(400).json({
+            error:
+              "Supabase column public.events.qr_pass_published is missing or stale in PostgREST's schema cache. Run the latest supabase/schema.sql in your Supabase SQL Editor.",
+          });
+        }
+        return res.status(400).json({ error: updErr.message });
+      }
       return res.json({ event: mapEventRow(updated as Record<string, unknown>) });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update check-in QR pass status.';
@@ -2442,27 +2730,54 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         }
       }
 
+      const studioMsgType = attendee.checkedIn ? 'checkin' : 'confirmation';
+      const studioResolvedMsg = resolveEventMessage({
+        type: studioMsgType,
+        event: evtMapped,
+        attendeeName: attendee.name,
+        ticketCode: attendee.ticketCode,
+        originOverride: resolveBaseUrl(req),
+        includeGuestInCameraUrl: true,
+      });
+
       const [smsDelivery, emailDelivery] = await Promise.all([
         dispatchOptionalArkeselSms(
           normalizedPhone,
           evtMapped.title,
           attendee.ticketCode,
-          evtMapped.senderId
+          evtMapped.senderId,
+          studioResolvedMsg.text
         ),
         isResendConfigured() && attendee.email?.includes('@')
-          ? sendEventPassEmail({
-              to: attendee.email.trim(),
-              attendeeName: attendee.name,
-              eventTitle: evtMapped.title,
-              eventDate: evtMapped.date,
-              eventTime: evtMapped.time,
-              eventVenue: evtMapped.venue,
-              eventCity: evtMapped.city,
-              ticketCode: attendee.ticketCode,
-              tier: attendee.tier || 'General',
-              organizerName: evtMapped.organizer,
-              replyTo,
-            })
+          ? attendee.checkedIn
+            ? sendCheckInWelcomeEmail({
+                to: attendee.email.trim(),
+                attendeeName: attendee.name,
+                eventTitle: evtMapped.title,
+                eventDate: evtMapped.date,
+                eventVenue: evtMapped.venue,
+                eventCity: evtMapped.city,
+                ticketCode: attendee.ticketCode,
+                organizerName: evtMapped.organizer,
+                welcomeMessage: studioResolvedMsg.text,
+                cameraUrl: studioResolvedMsg.cameraUrl,
+                replyTo,
+              })
+            : sendEventPassEmail({
+                to: attendee.email.trim(),
+                attendeeName: attendee.name,
+                eventTitle: evtMapped.title,
+                eventDate: evtMapped.date,
+                eventTime: evtMapped.time,
+                eventVenue: evtMapped.venue,
+                eventCity: evtMapped.city,
+                ticketCode: attendee.ticketCode,
+                tier: attendee.tier || 'General',
+                organizerName: evtMapped.organizer,
+                replyTo,
+                customMessage: studioResolvedMsg.text,
+                cameraUrl: studioResolvedMsg.cameraUrl,
+              })
           : Promise.resolve({ ok: false, skipped: true }),
       ]);
 
@@ -2538,6 +2853,8 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
       return res.status(201).json({
         attendee: mapAttendeeRow(inserted as Record<string, unknown>),
         event: mapEventRow(updatedEvt as Record<string, unknown>),
+        cameraUrl: studioResolvedMsg.cameraUrl,
+        dispatchedMessage: studioResolvedMsg.text,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to register attendee.';
@@ -2573,7 +2890,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
       const eventId = String(rec.event_id);
       const { data: evtRow } = await client
         .from('events')
-        .select('checked_in')
+        .select('*')
         .eq('id', eventId)
         .single();
 
@@ -2583,7 +2900,64 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         await client.from('events').update({ checked_in: nextTotal }).eq('id', eventId);
       }
 
-      return res.json({ attendee: mapAttendeeRow(updatedAtt as Record<string, unknown>) });
+      const mappedAttendee = mapAttendeeRow(updatedAtt as Record<string, unknown>);
+      let checkInMessageSent = false;
+      let cameraUrl: string | undefined;
+      let dispatchedMessage: string | undefined;
+
+      if (nextCheckedIn && evtRow) {
+        const evtMapped = mapEventRow(evtRow as Record<string, unknown>);
+        const resolved = resolveEventMessage({
+          type: 'checkin',
+          event: evtMapped,
+          attendeeName: mappedAttendee.name,
+          ticketCode: mappedAttendee.ticketCode,
+          originOverride: resolveBaseUrl(req),
+          includeGuestInCameraUrl: true,
+        });
+        cameraUrl = resolved.cameraUrl;
+        dispatchedMessage = resolved.text;
+
+        let replyTo: string | undefined;
+        const { data: orgProf } = await client
+          .from('profiles')
+          .select('reply_to_email')
+          .eq('id', String((evtRow as Record<string, unknown>).organizer_id || req.user!.id))
+          .maybeSingle();
+        if (orgProf && typeof (orgProf as Record<string, unknown>).reply_to_email === 'string') {
+          replyTo = String((orgProf as Record<string, unknown>).reply_to_email);
+        }
+
+        await Promise.all([
+          mappedAttendee.phone
+            ? dispatchOptionalArkeselSms(
+                normalizePhoneE164(mappedAttendee.phone),
+                evtMapped.title,
+                mappedAttendee.ticketCode,
+                evtMapped.senderId,
+                resolved.text
+              )
+            : Promise.resolve('Pending' as const),
+          isResendConfigured() && mappedAttendee.email?.includes('@')
+            ? sendCheckInWelcomeEmail({
+                to: mappedAttendee.email.trim(),
+                attendeeName: mappedAttendee.name,
+                eventTitle: evtMapped.title,
+                eventDate: evtMapped.date,
+                eventVenue: evtMapped.venue,
+                eventCity: evtMapped.city,
+                ticketCode: mappedAttendee.ticketCode,
+                organizerName: evtMapped.organizer,
+                welcomeMessage: resolved.text,
+                cameraUrl: resolved.cameraUrl,
+                replyTo,
+              })
+            : Promise.resolve({ ok: false, skipped: true }),
+        ]);
+        checkInMessageSent = true;
+      }
+
+      return res.json({ attendee: mappedAttendee, checkInMessageSent, cameraUrl, dispatchedMessage });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to toggle check-in.';
       return res.status(500).json({ error: message });
@@ -2705,24 +3079,69 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
   app.post('/api/studio/camera/shots', requireSupabaseAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
     const shot = req.body as DisposableShot;
     try {
-      const { data, error } = await req
-        .supabase!.from('disposable_shots')
-        .insert({
-          id: shot.id,
-          event_id: shot.eventId,
-          frame_number: shot.frameNumber,
-          data_url: shot.dataUrl,
-          captured_by: shot.capturedBy,
-          caption: shot.caption ?? null,
-          film_stock: shot.filmStock,
-          date_stamp: shot.dateStamp,
-          captured_at: shot.capturedAt,
-          developed: Boolean(shot.developed),
-          likes: shot.likes ?? 0,
-          liked: Boolean(shot.liked),
-        })
+      const client = req.supabase!;
+      const [existingShotsRes, rollRes] = await Promise.all([
+        client.from('disposable_shots').select('*').eq('event_id', shot.eventId),
+        client.from('disposable_roll_settings').select('*').eq('event_id', shot.eventId).maybeSingle(),
+      ]);
+      const existingShots = (existingShotsRes.data ?? []).map((r) =>
+        mapShotRow(r as Record<string, unknown>)
+      );
+      const rollCfg = rollRes.data
+        ? mapRollSettingsRow(rollRes.data as Record<string, unknown>)
+        : { exposuresLimit: 24 as const, darkroomMode: false };
+
+      if (existingShots.length >= rollCfg.exposuresLimit) {
+        return res.status(403).json({
+          error: `Film roll full (${rollCfg.exposuresLimit}/${rollCfg.exposuresLimit} exposures).`,
+        });
+      }
+
+      const effectiveKey = (shot.shooterKey || '').trim();
+      const normalizedAuthor = (shot.capturedBy || 'Guest').trim().toLowerCase();
+      const userShotCount = existingShots.filter((s) =>
+        effectiveKey && s.shooterKey
+          ? s.shooterKey === effectiveKey
+          : s.capturedBy.trim().toLowerCase() === normalizedAuthor
+      ).length;
+
+      if (userShotCount >= MAX_SHOTS_PER_USER) {
+        return res.status(403).json({
+          error: `Camera limit reached: each user is allowed up to ${MAX_SHOTS_PER_USER} pictures per event.`,
+        });
+      }
+
+      const shotPayload: Record<string, unknown> = {
+        id: shot.id,
+        event_id: shot.eventId,
+        frame_number: shot.frameNumber,
+        data_url: shot.dataUrl,
+        captured_by: shot.capturedBy,
+        shooter_key: effectiveKey || null,
+        caption: shot.caption ?? null,
+        film_stock: shot.filmStock,
+        date_stamp: shot.dateStamp,
+        captured_at: shot.capturedAt,
+        developed: Boolean(shot.developed),
+        likes: shot.likes ?? 0,
+        liked: Boolean(shot.liked),
+      };
+
+      let { data, error } = await client
+        .from('disposable_shots')
+        .insert(shotPayload)
         .select('*')
         .single();
+      if (error && isMissingColumnError(error)) {
+        const { shooter_key: _sk, ...legacyShot } = shotPayload;
+        const retry = await client
+          .from('disposable_shots')
+          .insert(legacyShot)
+          .select('*')
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
       if (error) return res.status(400).json({ error: error.message });
       return res.status(201).json({ shot: mapShotRow(data as Record<string, unknown>) });
     } catch (err) {
@@ -3331,7 +3750,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
       appType: 'spa',
     });
 
-    app.get(['/e/:slug', '/e/:slug/checkin', '/'], async (req, res, next) => {
+    app.get(['/e/:slug', '/e/:slug/checkin', '/e/:slug/camera', '/camera', '/'], async (req, res, next) => {
       const slugOrId =
         req.params.slug ||
         (typeof req.query.event === 'string' ? req.query.event.trim() : '');
@@ -3400,7 +3819,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
       }
 
       res.setHeader('Cache-Control', 'no-cache, must-revalidate');
-      const slugMatch = req.path.match(/^\/e\/([^/]+)(?:\/checkin)?$/i);
+      const slugMatch = req.path.match(/^\/e\/([^/]+)(?:\/(?:checkin|camera))?$/i);
       const slugOrId =
         (slugMatch ? decodeURIComponent(slugMatch[1]) : '') ||
         (typeof req.query.event === 'string' ? req.query.event.trim() : '');

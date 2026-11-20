@@ -251,7 +251,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
         </section>
 
         {/* PROMINENT GATE CHECK-IN REGISTRATION & QR CODE SCANNER COMMAND STRIP */}
-        <section className="bg-[#0B0B0B] text-white rounded-3xl p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+        <section className="bg-[#0B0B0B] text-white rounded-3xl p-4 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4 sm:gap-5">
           <div className="flex items-start gap-4 min-w-0">
             <div className="w-12 h-12 rounded-2xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0">
               <QrCode className="w-6 h-6" />
@@ -295,7 +295,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
 
         {/* Upcoming Highlight Card */}
         {featuredEvent && (
-          <section className="bg-[#F5F5F7] rounded-3xl p-6">
+          <section className="bg-[#F5F5F7] rounded-3xl p-4 sm:p-6">
             <div className="flex items-center justify-between gap-4 mb-4">
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-semibold tracking-tight text-[#0B0B0B]">
@@ -428,11 +428,11 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0 pt-3 sm:pt-0 border-t sm:border-t-0 border-[#E5E5EA]">
-                <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center justify-between sm:justify-end gap-3 sm:gap-4 shrink-0 pt-3 sm:pt-0 border-t sm:border-t-0 border-[#E5E5EA]">
+                <div className="flex items-center gap-2.5 sm:gap-3">
                   <CircularGauge
                     value={featuredPct}
-                    size={54}
+                    size={50}
                     alertThreshold={profile.capacityAlertThreshold}
                   />
                   <div className="text-left">
@@ -443,11 +443,11 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={() => onOpenQrScanner(featuredEvent.id)}
-                    className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                    className="px-3.5 sm:px-4 py-2 rounded-full bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
                   >
                     <QrCode className="w-3.5 h-3.5" />
                     QR Check-In
@@ -455,7 +455,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => onManageEvent(featuredEvent)}
-                    className="px-5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0"
+                    className="px-4 sm:px-5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0"
                   >
                     Manage
                   </button>
@@ -600,7 +600,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0">
+                    <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2 sm:gap-2.5 shrink-0">
                       <div className="text-left sm:text-right mr-1">
                         <p className="text-xs font-semibold text-[#0B0B0B] tabular-nums">
                           ${evt.revenue.toLocaleString()}
@@ -609,22 +609,24 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                           ${evt.ticketPrice} pass
                         </p>
                       </div>
-                      {isEventCreator && onEditEventModal && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {isEventCreator && onEditEventModal && (
+                          <button
+                            type="button"
+                            onClick={() => onEditEventModal(evt)}
+                            className="px-3 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
+                          >
+                            Edit Flyer
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={() => onEditEventModal(evt)}
-                          className="px-3 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
+                          onClick={() => onManageEvent(evt)}
+                          className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0"
                         >
-                          Edit Flyer
+                          Manage
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => onManageEvent(evt)}
-                        className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0"
-                      >
-                        Manage
-                      </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -652,32 +654,32 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
         </div>
 
         {/* Rapid Stats 2-Up Grid */}
-        <div className="grid grid-cols-2 gap-3.5">
-          <div className="p-5 rounded-3xl bg-[#F5F5F7] flex flex-col justify-between gap-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-[#71717A]">Tickets Sold</span>
-              <CircularGauge value={overallOccupancy} size={42} strokeWidth={4} />
+        <div className="grid grid-cols-2 gap-2.5 sm:gap-3.5">
+          <div className="p-3.5 sm:p-5 rounded-3xl bg-[#F5F5F7] flex flex-col justify-between gap-3 sm:gap-4 min-w-0">
+            <div className="flex items-center justify-between gap-1.5">
+              <span className="text-[11px] sm:text-xs font-medium text-[#71717A] truncate">Tickets Sold</span>
+              <CircularGauge value={overallOccupancy} size={38} strokeWidth={4} />
             </div>
-            <div>
-              <p className="font-display text-[30px] leading-none font-bold tracking-tight text-[#0B0B0B] tabular-nums">
+            <div className="min-w-0">
+              <p className="font-display text-[24px] sm:text-[30px] leading-none font-bold tracking-tight text-[#0B0B0B] tabular-nums">
                 {totalRegistered.toLocaleString()}
               </p>
-              <p className="text-[11px] text-[#71717A] mt-1.5 tabular-nums">
+              <p className="text-[11px] text-[#71717A] mt-1.5 tabular-nums truncate">
                 of {totalCapacity.toLocaleString()} total capacity
               </p>
             </div>
           </div>
 
-          <div className="p-5 rounded-3xl bg-[#F5F5F7] flex flex-col justify-between gap-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-[#71717A]">Check-In</span>
-              <CircularGauge value={checkInRate} size={42} strokeWidth={4} alertThreshold={101} />
+          <div className="p-3.5 sm:p-5 rounded-3xl bg-[#F5F5F7] flex flex-col justify-between gap-3 sm:gap-4 min-w-0">
+            <div className="flex items-center justify-between gap-1.5">
+              <span className="text-[11px] sm:text-xs font-medium text-[#71717A] truncate">Check-In</span>
+              <CircularGauge value={checkInRate} size={38} strokeWidth={4} alertThreshold={101} />
             </div>
-            <div>
-              <p className="font-display text-[30px] leading-none font-bold tracking-tight text-[#0B0B0B] tabular-nums">
+            <div className="min-w-0">
+              <p className="font-display text-[24px] sm:text-[30px] leading-none font-bold tracking-tight text-[#0B0B0B] tabular-nums">
                 {checkInRate}%
               </p>
-              <p className="text-[11px] text-[#71717A] mt-1.5 tabular-nums">
+              <p className="text-[11px] text-[#71717A] mt-1.5 tabular-nums truncate">
                 {checkedInCount} of {attendees.length} guests arrived
               </p>
             </div>
