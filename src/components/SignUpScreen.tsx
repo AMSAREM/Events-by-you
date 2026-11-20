@@ -41,7 +41,12 @@ interface SignUpScreenProps {
     otpType: 'signup' | 'email' | 'sms';
     countryGateway?: string;
   }) => void;
-  onAuthenticated: (session: StoredAuthSession, profile: OrganizerProfile) => void;
+  onAuthenticated: (
+    session: StoredAuthSession,
+    profile: OrganizerProfile,
+    openCreatorConsole?: boolean,
+    isNewUser?: boolean
+  ) => void;
 }
 
 const KOJO_THUMBNAIL =
@@ -176,7 +181,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
       });
       if (res.session && res.profile) {
         saveStoredSession(res.session);
-        onAuthenticated(res.session, res.profile);
+        onAuthenticated(res.session, res.profile, false, true);
       } else {
         onRequireOtp({
           phone: res.phone || phoneCheck.normalized,
@@ -235,7 +240,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
               onClick={onNavigateDemoEvent}
               className="text-xs font-semibold text-[#444748] hover:text-[#0B0B0B] transition-colors"
             >
-              Live Demo Event
+              Published Events
             </button>
           </nav>
 
@@ -331,7 +336,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                             setFullName(e.target.value);
                             if (formError) setFormError(null);
                           }}
-                          placeholder="Josh Mensah"
+                          placeholder="Your full name"
                           className="w-full bg-[#F5F5F7] rounded-full px-4 py-3 pr-10 text-sm text-[#0B0B0B] placeholder:text-[#71717A] outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-all"
                         />
                         <BadgeCheck className="w-4 h-4 text-[#71717A] absolute right-3.5 top-3.5 pointer-events-none" />

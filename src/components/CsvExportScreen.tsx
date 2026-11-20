@@ -40,9 +40,6 @@ interface ExportColumn {
     | 'phone'
     | 'email'
     | 'validation_group'
-    | 'gift_pledge'
-    | 'gift_item'
-    | 'gift_wishes'
     | 'custom_responses'
     | 'registered_at'
     | 'is_checked_in'
@@ -67,27 +64,6 @@ const INITIAL_COLUMNS: ExportColumn[] = [
     code: 'validation_group',
     hint: 'Family / Friends / VIP',
     enabled: true,
-  },
-  {
-    key: 'gift_pledge',
-    label: 'Gift Table Pledge',
-    code: 'gift_pledge',
-    hint: 'MoMo / Cash Amount',
-    enabled: true,
-  },
-  {
-    key: 'gift_item',
-    label: 'Gift Registry Item',
-    code: 'gift_item',
-    hint: 'Selected Registry Item',
-    enabled: false,
-  },
-  {
-    key: 'gift_wishes',
-    label: 'Well-Wishes Note',
-    code: 'gift_wishes',
-    hint: 'Couple / Host Blessing',
-    enabled: false,
   },
   {
     key: 'custom_responses',
@@ -141,7 +117,8 @@ const INITIAL_COLUMNS: ExportColumn[] = [
 ];
 
 function formatPhone(raw: string, format: PhoneFormatType, maskPii: boolean): string {
-  const digitsOnly = raw.replace(/\D/g, '') || '233244918820';
+  const digitsOnly = raw.replace(/\D/g, '');
+  if (!digitsOnly) return '';
   if (maskPii) {
     const prefix = digitsOnly.slice(0, 3);
     const suffix = digitsOnly.slice(-4);
@@ -274,14 +251,6 @@ export const CsvExportScreen: React.FC<CsvExportScreenProps> = ({
         return formatEmail(att.email, maskPii);
       case 'validation_group':
         return att.validationGroup ?? '';
-      case 'gift_pledge':
-        return att.giftEntry?.amount
-          ? `${att.giftEntry.currency || 'GHS'} ${att.giftEntry.amount} (${att.giftEntry.giftType})`
-          : att.giftEntry?.giftType || '';
-      case 'gift_item':
-        return att.giftEntry?.registryItem ?? '';
-      case 'gift_wishes':
-        return att.giftEntry?.message ?? '';
       case 'custom_responses':
         return att.customResponses
           ? Object.entries(att.customResponses)
@@ -361,15 +330,15 @@ export const CsvExportScreen: React.FC<CsvExportScreenProps> = ({
       showToast('Applied Minimal Contact preset (4 columns)');
     } else if (preset === 'Full Audit') {
       setColumns((prev) => prev.map((c) => ({ ...c, enabled: true })));
-      showToast('Applied Full Audit preset (all 15 attributes)');
+      showToast('Applied Full Audit preset (all 12 attributes)');
     } else {
       setColumns((prev) =>
         prev.map((c) => ({
           ...c,
-          enabled: !['sms_status', 'ticket_nonce', 'gift_item', 'gift_wishes'].includes(c.key),
+          enabled: !['sms_status', 'ticket_nonce'].includes(c.key),
         }))
       );
-      showToast('Applied Gate Operations preset (11 core attributes)');
+      showToast('Applied Gate Operations preset (10 core attributes)');
     }
   };
 
@@ -817,16 +786,9 @@ export const CsvExportScreen: React.FC<CsvExportScreenProps> = ({
                         </td>
                         <td className="py-2.5 px-3">
                           <span className="font-semibold text-[#0B0B0B] block">{att.name}</span>
-                          {(att.validationGroup || att.giftEntry) && (
+                          {att.validationGroup && (
                             <span className="text-[10px] text-[#71717A] block">
-                              {[
-                                att.validationGroup,
-                                att.giftEntry?.amount
-                                  ? `${att.giftEntry.currency || 'GHS'} ${att.giftEntry.amount}`
-                                  : att.giftEntry?.registryItem,
-                              ]
-                                .filter(Boolean)
-                                .join(' · ')}
+                              {att.validationGroup}
                             </span>
                           )}
                         </td>

@@ -32,7 +32,7 @@ import { DeterministicQrSvg, buildEventInvitationUrl } from '../lib/qr';
 import { EventFlyerCard } from './EventFlyerCard';
 
 interface LandingScreenProps {
-  featuredEvent: EventItem;
+  featuredEvent?: EventItem | null;
   allEvents?: EventItem[];
   recentAttendees: Attendee[];
   isSignedIn: boolean;
@@ -40,7 +40,10 @@ interface LandingScreenProps {
   onNavigateSignIn: (prefillEmail?: string) => void;
   onNavigateSignUp: (prefillEmail?: string) => void;
   onCreateEvent?: () => void;
-  onNavigateDemoEvent: (eventId?: string, focusSection?: 'top' | 'register' | 'checkin') => void;
+  onNavigateDemoEvent: (
+    eventId?: string,
+    focusSection?: 'top' | 'register' | 'checkin' | 'gifts'
+  ) => void;
   onNavigateStudio: () => void;
   onSignOut?: () => void;
   onOpenQrScanner?: (eventId?: string) => void;
@@ -50,41 +53,11 @@ interface LandingScreenProps {
   onOpenLegal?: (doc: 'terms' | 'privacy') => void;
 }
 
-const SHOWCASE_CARDS = [
-  {
-    city: 'Accra · 250 Guests',
-    title: 'Mensah & Boateng Royal Wedding',
-    desc: 'Sent 250 personalized family table & gate QR passes via MTN Ghana SMS with zero uninvited gate congestion.',
-    metaLeft: 'Wedding & Gift Table · 100% SMS',
-    metaRight: 'Nov 2026',
-    img: '/src/assets/images/flyer_wedding_royal_1795075790983.jpg',
-    alt: 'Mensah and Boateng royal wedding reception in Accra Ghana.',
-  },
-  {
-    city: 'Accra · 1,200 Members',
-    title: 'Grace Revival Night & Choir Convention',
-    desc: 'Offline-first church gate check-in scanned 1,100+ congregation passes smoothly even during sanctuary bandwidth dips.',
-    metaLeft: 'Church & Memorial · Offline PWA',
-    metaRight: 'Jan 2026',
-    img: '/src/assets/images/flyer_church_revival_1795075792994.jpg',
-    alt: 'A large church convention and musical stage hall.',
-  },
-  {
-    city: 'Lagos · 680 Tickets',
-    title: 'Acoustic Live & Corporate Tech Gala',
-    desc: 'Handled VIP concert tables, executive corporate badges, and post-event thank-you SMS blasts in a single workspace.',
-    metaLeft: 'Musical · Corporate · Tech',
-    metaRight: 'Feb 2026',
-    img: '/src/assets/images/flyer_musical_live_1795075793134.jpg',
-    alt: 'Stylish monochrome musical concert and corporate event showcase.',
-  },
-];
-
 const HERO_BACKDROP_IMG = '/src/assets/images/flyer_corporate_gala_1795075792816.jpg';
 
 export const LandingScreen: React.FC<LandingScreenProps> = ({
-  featuredEvent,
-  allEvents = [featuredEvent],
+  featuredEvent = null,
+  allEvents = featuredEvent ? [featuredEvent] : [],
   recentAttendees,
   isSignedIn,
   hasSetEvent = false,
@@ -168,13 +141,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
     }
   };
 
-  const primaryAttendees = recentAttendees
-    .filter((a) => a.eventId === featuredEvent.id)
-    .slice(0, 2);
+  const primaryAttendees = featuredEvent
+    ? recentAttendees.filter((a) => a.eventId === featuredEvent.id).slice(0, 2)
+    : [];
 
-  const occupancyPct = Math.round(
-    (featuredEvent.registered / Math.max(1, featuredEvent.capacity)) * 100
-  );
+  const occupancyPct = featuredEvent
+    ? Math.round((featuredEvent.registered / Math.max(1, featuredEvent.capacity)) * 100)
+    : 0;
 
   return (
     <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col overflow-x-clip">
@@ -236,7 +209,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               onClick={() => scrollToSection('community-showcase')}
               className="text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0 py-0.5"
             >
-              Case Studies
+              Live Events
             </button>
           </nav>
 
@@ -326,7 +299,15 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   <div className="mt-7 sm:mt-8 flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-3.5">
                     <button
                       type="button"
-                      onClick={() => onNavigateDemoEvent(topMatchedEvent.id, 'checkin')}
+                      onClick={() =>
+                        topMatchedEvent
+                          ? onNavigateDemoEvent(topMatchedEvent.id, 'checkin')
+                          : onCreateEvent
+                            ? onCreateEvent()
+                            : isSignedIn
+                              ? onNavigateStudio()
+                              : onNavigateSignUp()
+                      }
                       className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white text-[#0B0B0B] text-xs font-bold px-5 sm:px-6 py-3.5 rounded-full shadow-lg hover:bg-neutral-200 transition-all hover:-translate-y-0.5 whitespace-nowrap shrink-0"
                     >
                       <QrCode className="w-4 h-4" />
@@ -334,7 +315,15 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => onNavigateDemoEvent(topMatchedEvent.id, 'register')}
+                      onClick={() =>
+                        topMatchedEvent
+                          ? onNavigateDemoEvent(topMatchedEvent.id, 'register')
+                          : onCreateEvent
+                            ? onCreateEvent()
+                            : isSignedIn
+                              ? onNavigateStudio()
+                              : onNavigateSignUp()
+                      }
                       className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/15 text-white hover:bg-white/25 border-white/20 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border backdrop-blur-md transition-all whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       <UserPlus className="w-4 h-4" />
@@ -343,7 +332,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <button
                       type="button"
                       onClick={() =>
-                        onOpenQrScanner ? onOpenQrScanner(topMatchedEvent.id) : onNavigateStudio()
+                        onOpenQrScanner
+                          ? onOpenQrScanner(topMatchedEvent?.id)
+                          : onNavigateStudio()
                       }
                       className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/10 text-white hover:bg-white/20 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border border-white/15 backdrop-blur-md transition-all whitespace-nowrap shrink-0"
                     >
@@ -353,7 +344,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     {onOpenDisposableCamera && (
                       <button
                         type="button"
-                        onClick={() => onOpenDisposableCamera(topMatchedEvent.id)}
+                        onClick={() => onOpenDisposableCamera(topMatchedEvent?.id)}
                         className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/10 text-white hover:bg-white/20 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border border-white/15 backdrop-blur-md transition-all whitespace-nowrap shrink-0"
                       >
                         <Camera className="w-4 h-4" />
@@ -403,7 +394,15 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <form
                       onSubmit={(e) => {
                         e.preventDefault();
-                        onNavigateDemoEvent(topMatchedEvent.id);
+                        if (topMatchedEvent) {
+                          onNavigateDemoEvent(topMatchedEvent.id);
+                        } else if (onCreateEvent) {
+                          onCreateEvent();
+                        } else if (isSignedIn) {
+                          onNavigateStudio();
+                        } else {
+                          onNavigateSignUp();
+                        }
                       }}
                       className="mt-5 flex flex-col gap-3.5"
                     >
@@ -478,7 +477,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                       </div>
 
                       {/* Live Top Match Card */}
-                      {topMatchedEvent && (
+                      {topMatchedEvent ? (
                         <div className="p-3.5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-center justify-between gap-3">
                           <div className="min-w-0">
                             <p className="text-[10px] font-semibold uppercase tracking-wider text-[#71717A] mb-0.5">
@@ -506,6 +505,15 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             </button>
                           )}
                         </div>
+                      ) : (
+                        <div className="p-3.5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA]">
+                          <p className="text-xs font-bold text-[#0B0B0B]">
+                            No published events yet
+                          </p>
+                          <p className="text-[11px] text-[#71717A] mt-0.5">
+                            Create your first event to publish a live invitation URL, QR gate scanner, and standalone gift table.
+                          </p>
+                        </div>
                       )}
 
                       <div className="pt-1">
@@ -513,7 +521,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                           type="submit"
                           className="w-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-bold py-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
                         >
-                          <span>Find Event &amp; Register</span>
+                          <span>{topMatchedEvent ? 'Find Event & Register' : 'Create Your First Event'}</span>
                           <Search className="w-4 h-4" />
                         </button>
                       </div>
@@ -563,7 +571,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                 <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 pt-1">
                   <button
                     type="button"
-                    onClick={() => onNavigateDemoEvent(topMatchedEvent.id, 'checkin')}
+                    onClick={() =>
+                      topMatchedEvent
+                        ? onNavigateDemoEvent(topMatchedEvent.id, 'checkin')
+                        : onCreateEvent
+                          ? onCreateEvent()
+                          : onNavigateStudio()
+                    }
                     className="w-full sm:w-auto justify-center px-5 py-2.5 rounded-full bg-white text-[#0B0B0B] text-xs font-bold hover:bg-zinc-200 transition-colors inline-flex items-center gap-2 whitespace-nowrap"
                   >
                     <QrCode className="w-4 h-4" />
@@ -573,7 +587,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   <button
                     type="button"
                     onClick={() =>
-                      onOpenQrScanner ? onOpenQrScanner(topMatchedEvent.id) : onNavigateStudio()
+                      onOpenQrScanner ? onOpenQrScanner(topMatchedEvent?.id) : onNavigateStudio()
                     }
                     className="w-full sm:w-auto justify-center px-4 py-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition-colors whitespace-nowrap"
                   >
@@ -588,22 +602,28 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <UserPlus className="w-5 h-5 sm:w-6 sm:h-6" />
                   </div>
                   <span className="text-[11px] font-mono text-[#0B0B0B] bg-[#F5F5F7] px-3 py-1 rounded-full whitespace-nowrap">
-                    Validation · Gift Table · RSVP
+                    Validation · Custom Forms · RSVP
                   </span>
                 </div>
                 <div>
                   <h2 className="font-display text-lg sm:text-xl lg:text-2xl font-bold tracking-tight">
-                    Guest Validation, Gift Table &amp; RSVP
+                    Guest Validation, Custom Forms &amp; RSVP
                   </h2>
                   <p className="text-xs sm:text-sm text-[#71717A] mt-1.5 leading-relaxed">
                     Every invitation includes an event-specific validation form (Family, Friends,
-                    VIP), Wedding Gift Table MoMo &amp; registry forms, and custom attendee fields.
+                    VIP) and custom attendee fields — while standalone Gift Table pages live cleanly on their own dedicated link.
                   </p>
                 </div>
                 <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 pt-1">
                   <button
                     type="button"
-                    onClick={() => onNavigateDemoEvent(topMatchedEvent.id, 'register')}
+                    onClick={() =>
+                      topMatchedEvent
+                        ? onNavigateDemoEvent(topMatchedEvent.id, 'register')
+                        : onCreateEvent
+                          ? onCreateEvent()
+                          : onNavigateStudio()
+                    }
                     className="w-full sm:w-auto justify-center px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-bold hover:bg-neutral-800 transition-colors inline-flex items-center gap-2 whitespace-nowrap"
                   >
                     <UserPlus className="w-4 h-4" />
@@ -612,10 +632,16 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => onNavigateDemoEvent(topMatchedEvent.id, 'top')}
+                    onClick={() =>
+                      topMatchedEvent
+                        ? onNavigateDemoEvent(topMatchedEvent.id, 'gifts')
+                        : onCreateEvent
+                          ? onCreateEvent()
+                          : onNavigateStudio()
+                    }
                     className="w-full sm:w-auto justify-center px-4 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-[#0B0B0B] text-xs font-semibold transition-colors whitespace-nowrap"
                   >
-                    View Invite Flyer
+                    Open Standalone Gift Table
                   </button>
                 </div>
               </div>
@@ -643,16 +669,34 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {publishedEvents.map((evt) => (
-                  <EventFlyerCard
-                    key={evt.id}
-                    event={evt}
-                    onOpenInvite={(target) => onNavigateDemoEvent(target.id, 'top')}
-                    onOpenCheckIn={(target) => onNavigateDemoEvent(target.id, 'checkin')}
-                  />
-                ))}
-              </div>
+              {publishedEvents.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {publishedEvents.map((evt) => (
+                    <EventFlyerCard
+                      key={evt.id}
+                      event={evt}
+                      onOpenInvite={(target) => onNavigateDemoEvent(target.id, 'top')}
+                      onOpenCheckIn={(target) => onNavigateDemoEvent(target.id, 'checkin')}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-white rounded-3xl p-8 sm:p-10 border border-[#E5E5EA] text-center space-y-3">
+                  <p className="text-sm font-bold text-[#0B0B0B]">No published event flyers yet</p>
+                  <p className="text-xs text-[#71717A] max-w-md mx-auto leading-relaxed">
+                    Once you create and publish an event in Creator Studio, your live flyer card, registration page, and gate QR pass appear here automatically.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignUp()
+                    }
+                    className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
+                  >
+                    Publish Your First Event
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Interactive 3-Step Hero Product Walkthrough Slider */}
@@ -783,7 +827,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                               Event Title
                             </span>
                             <div className="p-3 bg-[#F5F5F7] rounded-xl border border-[#E5E5EA] text-sm font-semibold text-[#0B0B0B]">
-                              {featuredEvent.title}
+                              {featuredEvent?.title ?? 'Your Event Title'}
                             </div>
                           </div>
 
@@ -793,7 +837,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                                 Auto Generated URL
                               </span>
                               <div className="p-2.5 bg-[#F5F5F7] rounded-xl border border-[#E5E5EA] font-mono text-xs text-[#0B0B0B] flex items-center justify-between gap-2">
-                                <span className="truncate">events.africa/e/{featuredEvent.slug}</span>
+                                <span className="truncate">
+                                  /e/{featuredEvent?.slug ?? 'your-event-slug'}
+                                </span>
                                 <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                               </div>
                             </div>
@@ -803,7 +849,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                               </span>
                               <div className="p-2.5 bg-[#F5F5F7] rounded-xl border border-[#E5E5EA] text-xs text-[#0B0B0B] flex items-center justify-between gap-2">
                                 <span className="truncate tabular-nums">
-                                  {featuredEvent.city} · {featuredEvent.capacity} max
+                                  {featuredEvent?.city ?? 'Your City'} · {featuredEvent?.capacity ?? 200} max
                                 </span>
                                 <MapPin className="w-4 h-4 text-[#71717A] shrink-0" />
                               </div>
@@ -814,18 +860,18 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             <div className="flex items-center gap-3 min-w-0">
                               <img
                                 src={
-                                  featuredEvent.flyerUrl ||
-                                  getCategoryPreset(featuredEvent.category).flyerUrl
+                                  featuredEvent?.flyerUrl ||
+                                  getCategoryPreset(featuredEvent?.category ?? 'Events').flyerUrl
                                 }
-                                alt={`${featuredEvent.title} hero flyer`}
+                                alt={`${featuredEvent?.title ?? 'Event'} hero flyer`}
                                 className="w-12 h-10 rounded-lg object-cover border border-[#E5E5EA] shrink-0"
                               />
                               <div className="min-w-0">
                                 <span className="text-xs font-semibold text-[#0B0B0B] block truncate">
-                                  Hero Flyer Active · {featuredEvent.title}
+                                  {featuredEvent ? `Hero Flyer Active · ${featuredEvent.title}` : 'Upload Custom Hero Flyer'}
                                 </span>
                                 <span className="text-[11px] text-[#71717A] block truncate">
-                                  {featuredEvent.venue} · Ready for instant edge deploy
+                                  {featuredEvent?.venue ?? 'Venue configured in Event Wizard'} · Instant edge deploy
                                 </span>
                               </div>
                             </div>
@@ -858,51 +904,60 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                       <div>
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-[11px] uppercase tracking-wider text-zinc-400 font-mono">
-                            Public Preview · /e/{featuredEvent.slug}
+                            Public Preview · /e/{featuredEvent?.slug ?? 'your-event'}
                           </span>
                           <span className="text-[11px] text-emerald-400 bg-white/10 px-2.5 py-0.5 rounded-full font-medium">
-                            Published ({occupancyPct}%)
+                            {featuredEvent ? `Published (${occupancyPct}%)` : 'Ready to Publish'}
                           </span>
                         </div>
                         <div className="mt-4">
                           <span className="text-[11px] text-zinc-400 tabular-nums">
-                            {featuredEvent.date} · In-Person
+                            {featuredEvent?.date ?? 'Upcoming Date'} · {featuredEvent?.venueFormat ?? 'In-Person'}
                           </span>
-                          <h3 className="text-xl font-bold text-white mt-1">{featuredEvent.title}</h3>
+                          <h3 className="text-xl font-bold text-white mt-1">
+                            {featuredEvent?.title ?? 'Your Live Event Page'}
+                          </h3>
                           <p className="text-xs text-zinc-400 mt-1.5 line-clamp-2">
-                            {featuredEvent.subtitle}
+                            {featuredEvent?.subtitle ??
+                              'Create an event in Creator Studio to preview live capacity, SMS passes, and QR registration.'}
                           </p>
                         </div>
 
                         <div className="mt-6 bg-white/10 p-4 rounded-2xl border border-white/10 space-y-2.5">
                           <div className="flex items-center justify-between text-[11px] text-white/80">
                             <span>Fast Attendee Registration</span>
-                            <span className="text-emerald-400 font-mono">Free RSVP</span>
+                            <span className="text-emerald-400 font-mono">Instant QR Pass</span>
                           </div>
                           <div className="space-y-2 font-mono text-xs">
                             <div className="p-2.5 bg-[#0B0B0B]/60 rounded-xl border border-white/10 text-white/90 flex items-center justify-between">
-                              <span>{primaryAttendees[0]?.name ?? 'Kofi Asante'}</span>
+                              <span>{primaryAttendees[0]?.name ?? 'Guest Full Name'}</span>
                               <span className="text-white/40 text-[10px]">Name</span>
                             </div>
                             <div className="p-2.5 bg-[#0B0B0B]/60 rounded-xl border border-white/10 text-emerald-400 flex items-center justify-between">
                               <span className="tabular-nums">
-                                {primaryAttendees[0]?.phone ?? '+233 24 559 8104'}
+                                {primaryAttendees[0]?.phone ?? '+233 XX XXX XXXX'}
                               </span>
-                              <span className="text-emerald-400/70 text-[10px]">Normalized</span>
+                              <span className="text-emerald-400/70 text-[10px]">E.164</span>
                             </div>
                           </div>
                           <button
                             type="button"
-                            onClick={() => onNavigateDemoEvent(featuredEvent.id)}
+                            onClick={() =>
+                              featuredEvent
+                                ? onNavigateDemoEvent(featuredEvent.id)
+                                : onCreateEvent
+                                  ? onCreateEvent()
+                                  : onNavigateStudio()
+                            }
                             className="w-full py-2.5 bg-white text-[#0B0B0B] text-xs font-bold rounded-full hover:bg-neutral-200 transition-colors"
                           >
-                            Reserve Ticket (Instant SMS)
+                            {featuredEvent ? 'Open Registration Page' : 'Create Event & Publish'}
                           </button>
                         </div>
                       </div>
 
                       <div className="mt-5 pt-3 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-400">
-                        <span>60-second attendee checkout</span>
+                        <span>60-second attendee registration</span>
                         <span className="text-white font-mono">No passwords required</span>
                       </div>
                     </div>
@@ -929,7 +984,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             </div>
                           </div>
                           <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-700 text-[11px] font-semibold tabular-nums">
-                            {featuredEvent.smsDispatched} / {featuredEvent.registered} Delivered (99.4%)
+                            {featuredEvent?.smsDispatched ?? 0} / {featuredEvent?.registered ?? 0} Dispatched
                           </span>
                         </div>
 
@@ -937,19 +992,22 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                           <div className="p-3.5 bg-[#F5F5F7] rounded-2xl border border-[#E5E5EA]">
                             <div className="flex flex-wrap items-center justify-between gap-2 mb-2 text-[11px] text-[#71717A]">
                               <span>
-                                Sender ID: <strong className="text-[#0B0B0B]">TECHGHANA</strong>
+                                Sender ID:{' '}
+                                <strong className="text-[#0B0B0B]">
+                                  {featuredEvent?.senderId || 'EVENTSAPP'}
+                                </strong>
                               </span>
                               <span className="font-mono text-emerald-700 font-semibold tabular-nums">
-                                GSM-7: 114 / 160 Chars (1 Credit)
+                                Dynamic Organiser Template
                               </span>
                             </div>
                             <p className="font-mono text-xs text-[#0B0B0B] leading-relaxed bg-white p-3 rounded-xl border border-[#E5E5EA]">
-                              Hi {primaryAttendees[0]?.name.split(' ')[0] ?? 'Kofi'}, your pass for{' '}
-                              {featuredEvent.title} is confirmed. Show QR token{' '}
+                              Hi {primaryAttendees[0]?.name.split(' ')[0] ?? 'Guest'}, your pass for{' '}
+                              {featuredEvent?.title ?? 'your event'} is confirmed. Show QR token{' '}
                               <span className="text-emerald-700 font-bold">
-                                {primaryAttendees[0]?.ticketCode ?? 'ACS-25-8891-VIP'}
+                                {primaryAttendees[0]?.ticketCode ?? '#PASS-CODE'}
                               </span>{' '}
-                              at {featuredEvent.venue}.
+                              at {featuredEvent?.venue ?? 'the event venue'}.
                             </p>
                           </div>
 
@@ -958,10 +1016,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                               <span className="text-[11px] text-[#71717A] block">MTN Direct SS7</span>
                               <div className="text-right sm:text-center">
                                 <span className="text-xs font-bold text-[#0B0B0B] sm:mt-0.5 block tabular-nums">
-                                  1.8s Latency
+                                  Arkesel Route
                                 </span>
                                 <span className="text-[10px] text-emerald-600 font-semibold tabular-nums">
-                                  100% Success
+                                  Instant Dispatch
                                 </span>
                               </div>
                             </div>
@@ -969,10 +1027,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                               <span className="text-[11px] text-[#71717A] block">Telecel SMPP</span>
                               <div className="text-right sm:text-center">
                                 <span className="text-xs font-bold text-[#0B0B0B] sm:mt-0.5 block tabular-nums">
-                                  2.2s Latency
+                                  Custom Sender ID
                                 </span>
                                 <span className="text-[10px] text-emerald-600 font-semibold tabular-nums">
-                                  99.8% Success
+                                  Check-In Link
                                 </span>
                               </div>
                             </div>
@@ -980,10 +1038,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                               <span className="text-[11px] text-[#71717A] block">AT Gateway</span>
                               <div className="text-right sm:text-center">
                                 <span className="text-xs font-bold text-[#0B0B0B] sm:mt-0.5 block tabular-nums">
-                                  2.5s Latency
+                                  Camera Access
                                 </span>
                                 <span className="text-[10px] text-emerald-600 font-semibold tabular-nums">
-                                  99.2% Success
+                                  5-Shot Unlock
                                 </span>
                               </div>
                             </div>
@@ -995,7 +1053,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         <span className="inline-flex items-start sm:items-center gap-2 text-[#0B0B0B]">
                           <Mail className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />
                           <span>
-                            Simultaneous transactional email sent via Resend V2 API (1.1s latency).
+                            Simultaneous transactional email sent via verified Resend delivery.
                           </span>
                         </span>
                         <span className="self-start sm:self-auto text-emerald-700 font-bold shrink-0">
@@ -1020,26 +1078,30 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                           <div className="flex items-center justify-between pb-2 border-b border-[#EEEEF0] mb-2">
                             <span className="inline-flex items-center gap-1.5 text-xs font-bold">
                               <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                              TECHGHANA
+                              {featuredEvent?.senderId || 'EVENTSAPP'}
                             </span>
                             <span className="text-[11px] font-mono text-[#71717A]">Just now</span>
                           </div>
                           <p className="text-xs text-[#1A1C1D] leading-relaxed">
-                            Hi {primaryAttendees[0]?.name.split(' ')[0] ?? 'Kofi'}, your pass for{' '}
-                            {featuredEvent.title} is confirmed. Show your QR token at check-in:{' '}
+                            Hi {primaryAttendees[0]?.name.split(' ')[0] ?? 'Guest'}, your pass for{' '}
+                            {featuredEvent?.title ?? 'your event'} is confirmed. Show your QR token at check-in:{' '}
                             <strong className="font-mono bg-[#F5F5F7] px-1.5 py-0.5 rounded">
-                              {primaryAttendees[0]?.ticketCode ?? 'ACS-25-8891-VIP'}
+                              {primaryAttendees[0]?.ticketCode ?? '#PASS-CODE'}
                             </strong>
                             .
                           </p>
                           <div className="mt-3 p-2.5 bg-[#F5F5F7] rounded-xl flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
-                            <span className="text-[#71717A]">Pass Link:</span>
+                            <span className="text-[#71717A]">Camera Link:</span>
                             <button
                               type="button"
-                              onClick={() => onNavigateDemoEvent(featuredEvent.id)}
+                              onClick={() =>
+                                featuredEvent
+                                  ? onNavigateDemoEvent(featuredEvent.id)
+                                  : onNavigateStudio()
+                              }
                               className="text-emerald-700 font-bold underline truncate"
                             >
-                              events.africa/t/8891
+                              /e/{featuredEvent?.slug ?? 'event'}/camera
                             </button>
                           </div>
                         </div>
@@ -1048,7 +1110,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                       <div className="mt-5 pt-3 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-400">
                         <span className="inline-flex items-center gap-1.5">
                           <CheckCircle2 className="w-3.5 h-3.5 text-white shrink-0" />
-                          No Internet Needed by Attendee
+                          No Internet Needed for SMS Pass
                         </span>
                         <span className="text-white font-semibold">Works on Feature Phones</span>
                       </div>
@@ -1076,7 +1138,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             </div>
                           </div>
                           <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-700 text-[11px] font-semibold">
-                            Gate 1 Active
+                            Gate Scanner
                           </span>
                         </div>
 
@@ -1085,13 +1147,14 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             <span className="text-[11px] text-[#71717A] block">Admitted</span>
                             <div className="text-right sm:text-left">
                               <span className="font-display text-xl sm:text-2xl lg:text-[26px] font-bold text-[#0B0B0B] sm:mt-0.5 block tabular-nums">
-                                {featuredEvent.checkedIn}/{featuredEvent.registered}
+                                {featuredEvent?.checkedIn ?? 0}/{featuredEvent?.registered ?? 0}
                               </span>
                               <span className="text-[11px] text-emerald-600 font-semibold tabular-nums">
-                                {Math.round(
-                                  (featuredEvent.checkedIn / Math.max(1, featuredEvent.registered)) *
-                                    100
-                                )}
+                                {featuredEvent && featuredEvent.registered > 0
+                                  ? Math.round(
+                                      (featuredEvent.checkedIn / featuredEvent.registered) * 100
+                                    )
+                                  : 0}
                                 % Turnout
                               </span>
                             </div>
@@ -1119,40 +1182,46 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         </div>
 
                         <div className="space-y-2">
-                          {primaryAttendees.map((att, idx) => (
-                            <div
-                              key={att.id}
-                              className="p-3 bg-[#F3F3F5] rounded-2xl flex items-center justify-between gap-2"
-                            >
-                              <div className="flex items-center gap-2.5 min-w-0">
-                                <div
-                                  className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 ${
-                                    idx === 0
-                                      ? 'bg-[#0B0B0B] text-white'
-                                      : 'bg-[#E2E2E4] text-[#0B0B0B]'
-                                  }`}
-                                >
-                                  {att.name
-                                    .split(' ')
-                                    .map((n) => n[0])
-                                    .join('')
-                                    .slice(0, 2)}
+                          {primaryAttendees.length > 0 ? (
+                            primaryAttendees.map((att, idx) => (
+                              <div
+                                key={att.id}
+                                className="p-3 bg-[#F3F3F5] rounded-2xl flex items-center justify-between gap-2"
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <div
+                                    className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 ${
+                                      idx === 0
+                                        ? 'bg-[#0B0B0B] text-white'
+                                        : 'bg-[#E2E2E4] text-[#0B0B0B]'
+                                    }`}
+                                  >
+                                    {att.name
+                                      .split(' ')
+                                      .map((n) => n[0])
+                                      .join('')
+                                      .slice(0, 2)}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <span className="text-xs font-semibold text-[#0B0B0B] block truncate">
+                                      {att.name} ({att.tier})
+                                    </span>
+                                    <span className="font-mono text-[11px] text-[#71717A] block truncate">
+                                      Pass: {att.ticketCode}
+                                    </span>
+                                  </div>
                                 </div>
-                                <div className="min-w-0">
-                                  <span className="text-xs font-semibold text-[#0B0B0B] block truncate">
-                                    {att.name} ({att.tier})
-                                  </span>
-                                  <span className="font-mono text-[11px] text-[#71717A] block truncate">
-                                    Pass: {att.ticketCode}
-                                  </span>
-                                </div>
+                                <span className="px-2.5 py-0.5 rounded-full bg-white text-emerald-600 text-[11px] font-semibold inline-flex items-center gap-1 shrink-0">
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  Valid Entry
+                                </span>
                               </div>
-                              <span className="px-2.5 py-0.5 rounded-full bg-white text-emerald-600 text-[11px] font-semibold inline-flex items-center gap-1 shrink-0">
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                Valid Entry
-                              </span>
+                            ))
+                          ) : (
+                            <div className="p-4 bg-[#F3F3F5] rounded-2xl text-xs text-[#71717A]">
+                              Checked-in guests appear here in real time as volunteers scan gate QR passes.
                             </div>
-                          ))}
+                          )}
                         </div>
                       </div>
 
@@ -1185,7 +1254,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         <div className="mt-5 bg-white p-5 rounded-2xl text-[#0B0B0B] flex flex-col items-center relative">
                           <div className="w-32 h-32 bg-[#EEEEF0] flex items-center justify-center rounded-xl p-2 relative">
                             <DeterministicQrSvg
-                              value={buildEventInvitationUrl(featuredEvent.slug || featuredEvent.id, 'checkin')}
+                              value={buildEventInvitationUrl(
+                                featuredEvent?.slug || featuredEvent?.id || 'eventsapp',
+                                'checkin'
+                              )}
                               size={112}
                               className="rounded-lg"
                             />
@@ -1194,10 +1266,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             </div>
                           </div>
                           <span className="mt-3 font-mono text-[13px] font-bold tracking-widest text-[#0B0B0B]">
-                            {primaryAttendees[0]?.ticketCode ?? 'ACS-25-8891-VIP'}
+                            {primaryAttendees[0]?.ticketCode ?? '#PASS-CODE'}
                           </span>
                           <span className="text-[11px] text-emerald-700 font-semibold mt-0.5">
-                            Access Granted: All Keynotes &amp; Lounge
+                            Instant Check-In &amp; Disposable Camera Unlock
                           </span>
                         </div>
                       </div>
@@ -1210,7 +1282,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         <button
                           type="button"
                           onClick={() =>
-                            onOpenQrScanner ? onOpenQrScanner(featuredEvent.id) : onNavigateStudio()
+                            onOpenQrScanner ? onOpenQrScanner(featuredEvent?.id) : onNavigateStudio()
                           }
                           className="text-white font-semibold hover:underline"
                         >
@@ -1700,53 +1772,76 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               onClick={onNavigateStudio}
               className="text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1 hover:underline shrink-0"
             >
-              <span>Explore past event case studies</span>
+              <span>Open Creator Studio</span>
               <ArrowUpRight className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
-            {SHOWCASE_CARDS.map((card, idx) => (
-              <div
-                key={card.title}
-                className="bg-[#F3F3F5] rounded-2xl overflow-hidden flex flex-col shadow-sm group min-w-0"
-              >
-                <div className="relative w-full h-48 sm:h-52 overflow-hidden bg-[#0B0B0B]">
-                  {!failedImages[idx] ? (
-                    <img
-                      src={card.img}
-                      alt={card.alt}
-                      referrerPolicy="no-referrer"
-                      onError={() => setFailedImages((prev) => ({ ...prev, [idx]: true }))}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    />
-                  ) : (
-                    <div className="w-full h-full bg-gradient-to-br from-[#1C1B1B] to-[#0B0B0B] flex items-center justify-center p-6 text-center">
-                      <span className="font-display text-lg font-bold text-white/90">
-                        {card.title}
-                      </span>
-                    </div>
-                  )}
-                  <span className="absolute top-3 right-3 px-3 py-1 rounded-full bg-[#0B0B0B]/80 backdrop-blur-md text-white text-[11px] font-medium tabular-nums">
-                    {card.city}
-                  </span>
-                </div>
-
-                <div className="p-5 sm:p-6 flex flex-col justify-between flex-1">
-                  <div>
-                    <h4 className="text-base font-semibold text-[#0B0B0B]">{card.title}</h4>
-                    <p className="mt-2 text-[13px] text-[#71717A] leading-relaxed">{card.desc}</p>
-                  </div>
-                  <div className="mt-4 pt-3 border-t border-[#E5E5EA] flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#71717A]">
-                    <span>{card.metaLeft}</span>
-                    <span className="text-[#0B0B0B] font-semibold tabular-nums">
-                      {card.metaRight}
+          {publishedEvents.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
+              {publishedEvents.slice(0, 3).map((evt, idx) => (
+                <div
+                  key={evt.id}
+                  onClick={() => onNavigateDemoEvent(evt.id, 'top')}
+                  className="bg-[#F3F3F5] rounded-2xl overflow-hidden flex flex-col shadow-sm group min-w-0 cursor-pointer hover:shadow-md transition-shadow"
+                >
+                  <div className="relative w-full h-48 sm:h-52 overflow-hidden bg-[#0B0B0B]">
+                    {!failedImages[idx] ? (
+                      <img
+                        src={evt.flyerUrl || getCategoryPreset(evt.category).flyerUrl}
+                        alt={evt.title}
+                        referrerPolicy="no-referrer"
+                        onError={() => setFailedImages((prev) => ({ ...prev, [idx]: true }))}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-gradient-to-br from-[#1C1B1B] to-[#0B0B0B] flex items-center justify-center p-6 text-center">
+                        <span className="font-display text-lg font-bold text-white/90">
+                          {evt.title}
+                        </span>
+                      </div>
+                    )}
+                    <span className="absolute top-3 right-3 px-3 py-1 rounded-full bg-[#0B0B0B]/80 backdrop-blur-md text-white text-[11px] font-medium tabular-nums">
+                      {evt.city} · {evt.registered}/{evt.capacity}
                     </span>
                   </div>
+
+                  <div className="p-5 sm:p-6 flex flex-col justify-between flex-1">
+                    <div>
+                      <h4 className="text-base font-semibold text-[#0B0B0B]">{evt.title}</h4>
+                      <p className="mt-2 text-[13px] text-[#71717A] leading-relaxed line-clamp-2">
+                        {evt.subtitle}
+                      </p>
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-[#E5E5EA] flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#71717A]">
+                      <span>{evt.category} · {evt.venue}</span>
+                      <span className="text-[#0B0B0B] font-semibold tabular-nums">
+                        {evt.date}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="bg-white rounded-3xl p-8 sm:p-10 border border-[#E5E5EA] text-center space-y-3">
+              <p className="text-sm font-bold text-[#0B0B0B]">
+                Live events hosted by organisers will showcase here
+              </p>
+              <p className="text-xs text-[#71717A] max-w-md mx-auto">
+                Publish your wedding, church program, concert, corporate gala, or summit in Creator Studio to go live immediately.
+              </p>
+              <button
+                type="button"
+                onClick={() =>
+                  onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignUp()
+                }
+                className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 transition-colors"
+              >
+                Create Event Now
+              </button>
+            </div>
+          )}
         </section>
 
         {/* SECTION 6: INTERACTIVE QUICK-START CTA BANNER */}
@@ -1870,7 +1965,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </span>
               <button
                 type="button"
-                onClick={() => onNavigateDemoEvent(featuredEvent.id)}
+                onClick={() =>
+                  featuredEvent ? onNavigateDemoEvent(featuredEvent.id) : onNavigateStudio()
+                }
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
                 Weddings &amp; Memorials
@@ -1911,10 +2008,12 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => onNavigateDemoEvent(featuredEvent.id)}
+                onClick={() =>
+                  featuredEvent ? onNavigateDemoEvent(featuredEvent.id) : onNavigateStudio()
+                }
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
-                Live Attendee Demo
+                Live Event Pages
               </button>
               <button
                 type="button"

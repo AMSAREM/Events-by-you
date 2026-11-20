@@ -6,13 +6,13 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock,
+  Compass,
   Copy,
   Info,
   Laptop,
   Lock,
   LogOut,
   MessageSquare,
-  RotateCcw,
   Send,
   ShieldCheck,
   Trash2,
@@ -36,7 +36,7 @@ interface SettingsScreenProps {
   onResolveAlert: (id: string) => void;
   onOpenPlans: () => void;
   onSignOut: () => void;
-  onResetDemoData: () => void;
+  onOpenGuide?: () => void;
   onDeleteAccount?: () => Promise<void> | void;
 }
 
@@ -78,7 +78,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onResolveAlert,
   onOpenPlans,
   onSignOut,
-  onResetDemoData,
+  onOpenGuide,
   onDeleteAccount,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -89,7 +89,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [email, setEmail] = useState(profile.email);
   const [phone, setPhone] = useState(profile.phone ?? '');
   const [replyToEmail, setReplyToEmail] = useState(
-    profile.replyToEmail ?? 'support@techleaders.africa'
+    profile.replyToEmail ?? profile.email ?? ''
   );
   const [timezone, setTimezone] = useState(profile.timezone ?? 'Africa/Accra');
   const [threshold, setThreshold] = useState(profile.capacityAlertThreshold);
@@ -100,10 +100,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(
     profile.twoFactorEnabled ?? true
   );
-  const [senderId, setSenderId] = useState(profile.senderId ?? 'TECHLEADERS');
+  const [senderId, setSenderId] = useState(profile.senderId ?? 'EVENTSAPP');
 
   // Test SMS Dispatcher
-  const [testPhone, setTestPhone] = useState('24 890 1124');
+  const [testPhone, setTestPhone] = useState(profile.phone ?? '');
   const [testDispatching, setTestDispatching] = useState(false);
   const [testReceipt, setTestReceipt] = useState<string | null>(null);
 
@@ -111,14 +111,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [updatingPassword, setUpdatingPassword] = useState(false);
-  const [lastPasswordLabel, setLastPasswordLabel] = useState('Manage your Supabase creator password');
+  const [lastPasswordLabel, setLastPasswordLabel] = useState('Manage your creator account password');
 
   // Wallet & Webhook
   const [selectedBundleId, setSelectedBundleId] = useState('500');
   const [webhookSuffix, setWebhookSuffix] = useState('4F98');
 
-  // Session, Account Deletion & Toast controls
-  const [confirmReset, setConfirmReset] = useState(false);
+  // Account Deletion & Toast controls
   const [deleteStepOpen, setDeleteStepOpen] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deletingAccount, setDeletingAccount] = useState(false);
@@ -131,12 +130,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     setStudio(profile.studio);
     setEmail(profile.email);
     setPhone(profile.phone ?? '');
-    setReplyToEmail(profile.replyToEmail ?? 'support@techleaders.africa');
+    setReplyToEmail(profile.replyToEmail ?? profile.email ?? '');
     setTimezone(profile.timezone ?? 'Africa/Accra');
     setThreshold(profile.capacityAlertThreshold);
     setAvatarUrl(profile.avatarUrl === '' ? null : profile.avatarUrl ?? DEFAULT_AVATAR_URL);
     setTwoFactorEnabled(profile.twoFactorEnabled ?? true);
-    setSenderId(profile.senderId ?? 'TECHLEADERS');
+    setSenderId(profile.senderId ?? 'EVENTSAPP');
   }, [profile]);
 
   const showToast = (msg: string) => {
@@ -170,6 +169,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       setPhone(phoneCheck.normalized);
     }
 
+    const cleanSender =
+      senderId
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .slice(0, 11) || 'EVENTSAPP';
+    setSenderId(cleanSender);
+
     const firstName = name.trim().split(' ')[0] || profile.firstName;
     onUpdateProfile({
       ...profile,
@@ -179,14 +186,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       studio: studio.trim() || profile.studio,
       email: normalizedEmail,
       phone: normalizedPhone,
-      replyToEmail: replyToEmail.trim() || 'support@techleaders.africa',
+      replyToEmail: replyToEmail.trim() || normalizedEmail || '',
       timezone,
       capacityAlertThreshold: threshold,
       avatarUrl: avatarUrl ?? '',
       twoFactorEnabled,
-      senderId,
+      senderId: cleanSender,
     });
-    showToast('Organiser profile & configurations saved.');
+    showToast('Organiser profile & Sender ID configurations saved.');
   };
 
   const handleDiscard = () => {
@@ -195,13 +202,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     setStudio(profile.studio);
     setEmail(profile.email);
     setPhone(profile.phone ?? '');
-    setReplyToEmail(profile.replyToEmail ?? 'support@techleaders.africa');
+    setReplyToEmail(profile.replyToEmail ?? profile.email ?? '');
     setTimezone(profile.timezone ?? 'Africa/Accra');
     setThreshold(profile.capacityAlertThreshold);
     setAvatarUrl(profile.avatarUrl === '' ? null : profile.avatarUrl ?? DEFAULT_AVATAR_URL);
     setAvatarError(false);
     setTwoFactorEnabled(profile.twoFactorEnabled ?? true);
-    setSenderId(profile.senderId ?? 'TECHLEADERS');
+    setSenderId(profile.senderId ?? 'EVENTSAPP');
     showToast('Unsaved changes discarded.');
   };
 
@@ -219,22 +226,49 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     reader.readAsDataURL(file);
   };
 
-  const handleSendTestSms = () => {
-    if (profile.smsCredits <= 0) {
-      showToast('No SMS credits remaining. Top up your wallet first.');
+  const handleSendTestSms = async () => {
+    const cleanSender =
+      senderId
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .slice(0, 11) || 'EVENTSAPP';
+    const rawPhone = testPhone.trim();
+    if (!rawPhone) {
+      showToast('Enter a phone number to dispatch a carrier test SMS.');
       return;
     }
+    const normalizedTestPhone = rawPhone.startsWith('+')
+      ? rawPhone
+      : `+233${rawPhone.replace(/^0+/, '').replace(/\s+/g, '')}`;
+
     setTestDispatching(true);
-    setTimeout(() => {
-      const receiptId = `ARK-${Math.floor(10000 + Math.random() * 89999)}-OK`;
-      setTestDispatching(false);
-      setTestReceipt(`Sent successfully via MTN Ghana routing. Delivery receipt: ${receiptId}.`);
-      onUpdateProfile({
-        ...profile,
-        smsCredits: Math.max(0, profile.smsCredits - 1),
+    setTestReceipt(null);
+    try {
+      const res = await api.studio.testSms({
+        phone: normalizedTestPhone,
+        senderId: cleanSender,
       });
-      showToast(`1 test credit dispatched to +233 ${testPhone.trim()}`);
-    }, 650);
+      const modeTag = res.sandbox ? 'Sandbox' : 'Live Arkesel v2';
+      const msgPart = res.messageId ? ` · ID: ${res.messageId}` : '';
+      const warnPart = res.warning ? ` (${res.warning})` : '';
+      setTestReceipt(
+        `${modeTag} dispatched to ${res.phone} via Sender ID "${res.senderId}"${msgPart}.${warnPart}`
+      );
+      if (typeof res.smsCredits === 'number' && res.smsCredits !== profile.smsCredits) {
+        onUpdateProfile({
+          ...profile,
+          smsCredits: res.smsCredits,
+        });
+      }
+      showToast(`Test SMS processed via ${res.senderId}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Test SMS dispatch failed.';
+      setTestReceipt(`Error: ${msg}`);
+      showToast(msg);
+    } finally {
+      setTestDispatching(false);
+    }
   };
 
   const handleBuyBundle = () => {
@@ -264,11 +298,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     showToast('Arkesel signing secret rotated.');
   };
 
-  const handleConfirmReset = () => {
-    onResetDemoData();
-    setConfirmReset(false);
-    showToast('Workspace restored to default events, schedule, and attendees.');
-  };
+  const unresolved = alerts.filter((a) => !a.resolved);
+  const isFree = profile.plan === 'Starter';
+  const liveEventCount = events.filter((e) => e.status === 'live' || e.status === 'upcoming').length;
+  const primaryEvent = events[0];
+  const primaryRegistered = primaryEvent?.registered ?? 0;
+  const primaryCap = primaryEvent?.capacity ?? (isFree ? 50 : 100);
+  const attendeeCapPct = Math.min(100, Math.round((primaryRegistered / Math.max(1, primaryCap)) * 100));
 
   const handleConfirmDeleteAccount = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -288,14 +324,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       setDeletingAccount(false);
     }
   };
-
-  const unresolved = alerts.filter((a) => !a.resolved);
-  const isFree = profile.plan === 'Starter';
-  const liveEventCount = events.filter((e) => e.status === 'live' || e.status === 'upcoming').length;
-  const primaryEvent = events[0];
-  const primaryRegistered = primaryEvent?.registered ?? 42;
-  const primaryCap = isFree ? 50 : primaryEvent?.capacity ?? 500;
-  const attendeeCapPct = Math.min(100, Math.round((primaryRegistered / Math.max(1, primaryCap)) * 100));
 
   const smsBaseAllotment = isFree ? 20 : 2000;
   const smsPct = Math.min(100, Math.round((profile.smsCredits / Math.max(1, smsBaseAllotment)) * 100));
@@ -375,7 +403,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                   RBAC: {profile.appRole ?? 'organizer'}
                 </span>
                 <span className="text-xs font-mono font-semibold px-3 py-1 bg-[#EEEEF0] rounded-full text-[#0B0B0B]">
-                  ID: ORG-GH-7841
+                  STATUS: ACTIVE
                 </span>
               </div>
             </div>
@@ -392,7 +420,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                     className="w-full h-full object-cover"
                   />
                 ) : (
-                  <span className="text-base font-bold text-[#0B0B0B]">{initials || 'JM'}</span>
+                  <span className="text-base font-bold text-[#0B0B0B]">{initials || 'OR'}</span>
                 )}
               </div>
               <div className="flex-1 min-w-0 space-y-0.5">
@@ -597,61 +625,70 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
               </div>
             </div>
 
-            {/* Sender ID Registry Cards */}
-            <div className="space-y-3 mb-6">
-              <button
-                type="button"
-                onClick={() => {
-                  setSenderId('TECHLEADERS');
-                  showToast('Primary Sender ID set to TECHLEADERS');
-                }}
-                className={`w-full text-left flex items-center justify-between p-4 rounded-2xl bg-white border transition-colors ${
-                  senderId === 'TECHLEADERS' ? 'border-[#0B0B0B]' : 'border-[#E5E5EA]/70'
-                }`}
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-10 h-10 rounded-full bg-[#F5F5F7] flex items-center justify-center text-[#0B0B0B] shrink-0">
-                    <MessageSquare className="w-4.5 h-4.5" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-base font-semibold tracking-wider text-[#0B0B0B] font-mono">
-                        TECHLEADERS
-                      </span>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#E8E8EA] text-[#0B0B0B] uppercase font-semibold">
-                        Primary
-                      </span>
-                    </div>
-                    <p className="text-xs text-[#71717A] mt-0.5">
-                      11 Alphanumeric characters • Registered with Ghana NCA &amp; Arkesel
-                    </p>
-                  </div>
+            {/* Custom Organizer Arkesel Sender ID Input + Quick Presets */}
+            <div className="space-y-4 mb-6">
+              <div className="p-4 rounded-2xl bg-white border border-[#E5E5EA] space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <label
+                    htmlFor="org-custom-sender-id"
+                    className="text-xs font-semibold text-[#0B0B0B] uppercase tracking-wider"
+                  >
+                    Custom Arkesel SMS Sender ID
+                  </label>
+                  <span className="text-[11px] font-mono text-[#71717A] tabular-nums">
+                    {senderId.length}/11 chars (A–Z, 0–9)
+                  </span>
                 </div>
-                <Verified className="w-5 h-5 text-[#0B0B0B] shrink-0" />
-              </button>
-
-              <div className="flex items-center justify-between p-4 rounded-2xl bg-white/80 border border-[#E5E5EA]/50 opacity-85 gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-10 h-10 rounded-full bg-[#F5F5F7] flex items-center justify-center text-[#71717A] shrink-0">
-                    <Clock className="w-4.5 h-4.5" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-base font-semibold tracking-wider text-[#0B0B0B] font-mono">
-                        AFRICATECH
-                      </span>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[#71717A] uppercase font-semibold">
-                        Pending NCA Audit
-                      </span>
-                    </div>
-                    <p className="text-xs text-[#71717A] mt-0.5">
-                      Submitted on 28 Feb 2026 • Expected review: 24-48 hrs
-                    </p>
-                  </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    id="org-custom-sender-id"
+                    type="text"
+                    maxLength={11}
+                    value={senderId}
+                    onChange={(e) =>
+                      setSenderId(
+                        e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11)
+                      )
+                    }
+                    placeholder="e.g. GRACECHAPEL"
+                    className="flex-1 h-11 px-4 rounded-xl bg-[#F5F5F7] text-[#0B0B0B] font-mono text-sm font-bold tracking-wider uppercase focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleSave()}
+                    className="px-5 h-11 rounded-xl bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors whitespace-nowrap"
+                  >
+                    Save Sender ID
+                  </button>
                 </div>
-                <span className="text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0">
-                  Under Review
-                </span>
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <span className="text-[11px] text-[#71717A] mr-1">Quick presets:</span>
+                  {Array.from(
+                    new Set([
+                      (studio || 'STUDIO')
+                        .toUpperCase()
+                        .replace(/[^A-Z0-9]/g, '')
+                        .slice(0, 11) || 'STUDIO',
+                      'EVENTSAPP',
+                    ])
+                  ).map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        setSenderId(preset);
+                        showToast(`Sender ID set to ${preset}. Click Save to persist.`);
+                      }}
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-mono font-semibold border transition-colors ${
+                        senderId === preset
+                          ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                          : 'bg-[#F5F5F7] text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -823,7 +860,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 </div>
               </div>
 
-              {/* Session & Demo Data Controls */}
+              {/* Session & Quick Guide Controls */}
               <div className="p-4 rounded-2xl bg-white border border-[#E5E5EA]/70 flex flex-wrap items-center justify-between gap-3">
                 <button
                   type="button"
@@ -834,31 +871,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                   Sign Out to Home
                 </button>
 
-                {confirmReset ? (
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleConfirmReset}
-                      className="px-4 py-2 rounded-full bg-[#EF4444] text-white text-xs font-semibold hover:bg-red-600 transition-colors"
-                    >
-                      Confirm Restore Defaults
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmReset(false)}
-                      className="px-3.5 py-2 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B]"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
+                {onOpenGuide && (
                   <button
                     type="button"
-                    onClick={() => setConfirmReset(true)}
-                    className="px-4 py-2 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#71717A] hover:text-[#0B0B0B] hover:border-[#0B0B0B] text-xs font-semibold transition-colors inline-flex items-center gap-1.5"
+                    onClick={onOpenGuide}
+                    className="px-4 py-2 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#0B0B0B] hover:border-[#0B0B0B] text-xs font-semibold transition-colors inline-flex items-center gap-1.5"
                   >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    Restore Demo Data
+                    <Compass className="w-3.5 h-3.5" />
+                    Open App Walkthrough
                   </button>
                 )}
               </div>

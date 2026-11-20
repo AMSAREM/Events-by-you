@@ -28,6 +28,7 @@ import {
   ScheduleBlock,
 } from '../types/events';
 import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
+import { buildCameraLinkForOrigin, getDefaultMessageConfig } from '../lib/eventMessages';
 import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
 import { EventFlyerCard } from './EventFlyerCard';
 import { MonochromePoster } from './MonochromeArtwork';
@@ -68,77 +69,61 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const initialPreset = getCategoryPreset('Events');
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [category, setCategory] = useState<string>('Events');
-  const [title, setTitle] = useState('Accra Annual Gathering & Showcase 2026');
-  const [slug, setSlug] = useState('accra-annual-gathering-2026');
+  const [title, setTitle] = useState('');
+  const [slug, setSlug] = useState('');
   const [slugTouched, setSlugTouched] = useState(false);
-  const [overview, setOverview] = useState(
-    'Join 500+ guests across weddings, church conventions, musical nights, corporate galas, memorials, and tech summits with seamless SMS gate passes.'
-  );
-  const [tags, setTags] = useState<string[]>(['Events', 'Accra 2026', 'SMS Pass']);
+  const [overview, setOverview] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
   const [newTagInput, setNewTagInput] = useState('');
   const [addingTag, setAddingTag] = useState(false);
 
   const [venueFormat, setVenueFormat] = useState<'in-person' | 'virtual' | 'hybrid'>('in-person');
-  const [dateLabel, setDateLabel] = useState('Nov 14, 2026');
-  const [timeLabel, setTimeLabel] = useState('09:00 AM - 05:30 PM GMT');
-  const [venue, setVenue] = useState('Mövenpick Ambassador Hotel');
-  const [city, setCity] = useState('Accra, Ghana');
+  const [dateLabel, setDateLabel] = useState('');
+  const [timeLabel, setTimeLabel] = useState('09:00 AM - 05:00 PM');
+  const [venue, setVenue] = useState('');
+  const [city, setCity] = useState('');
 
   const [flyerUrl, setFlyerUrl] = useState<string>(initialPreset.flyerUrl);
   const [designTheme, setDesignTheme] = useState<DesignTheme>(initialPreset.designTheme);
   const [flyerFailed, setFlyerFailed] = useState(false);
   const [artwork, setArtwork] = useState<ArtworkVariant>('architecture');
 
-  // Event-specific Validation & Wedding Gift / Custom Data config
+  // Event-specific Validation & Standalone Gift Table / Custom Data config
   const [validationEnabled, setValidationEnabled] = useState(true);
   const [validationLabel, setValidationLabel] = useState(initialPreset.validationConfig.label);
   const [validationOptionsText, setValidationOptionsText] = useState(
     initialPreset.validationConfig.options.join(', ')
   );
   const [requireInviteCode, setRequireInviteCode] = useState(false);
-  const [inviteCode, setInviteCode] = useState('GUEST2026');
+  const [inviteCode, setInviteCode] = useState('');
 
   const [enableGiftTable, setEnableGiftTable] = useState(false);
-  const [giftTitle, setGiftTitle] = useState('Couple Gift Table & Cash Envelope Registry');
-  const [momoNumber, setMomoNumber] = useState('+233 24 559 8104');
+  const [giftTitle, setGiftTitle] = useState('Event Gift Table & Registry');
+  const [momoNumber, setMomoNumber] = useState('');
   const [customFields, setCustomFields] = useState<CustomFormField[]>(
     initialPreset.extraDataConfig.customFields
   );
   const [newCustomLabel, setNewCustomLabel] = useState('');
 
-  // Step 2: Schedule blocks
+  // Step 2: Schedule blocks (organiser-defined run of show)
   const [draftBlocks, setDraftBlocks] = useState<
     { id: string; time: string; title: string; lead: string; stage: string }[]
-  >([
-    {
-      id: 'wiz-blk-1',
-      time: '09:00 - 10:00',
-      title: 'Opening Keynote & Guest Arrival',
-      lead: profile.name,
-      stage: 'Main Auditorium',
-    },
-    {
-      id: 'wiz-blk-2',
-      time: '10:30 - 11:45',
-      title: 'Featured Showcase & Program Session',
-      lead: 'Program Leads',
-      stage: 'Hall B',
-    },
-  ]);
-  const [newBlockTime, setNewBlockTime] = useState('13:00 - 14:15');
+  >([]);
+  const [newBlockTime, setNewBlockTime] = useState('10:00 - 11:00');
   const [newBlockTitle, setNewBlockTitle] = useState('');
   const [newBlockLead, setNewBlockLead] = useState('');
   const [newBlockStage, setNewBlockStage] = useState('Workshop Lab');
 
   // Step 3: Telecom & Capacity
+  const defaultMsgCfg = getDefaultMessageConfig();
   const [senderId, setSenderId] = useState(profile.senderId || 'EVENTSAPP');
   const [replyEmail, setReplyEmail] = useState(profile.email);
   const [instantDispatch, setInstantDispatch] = useState(true);
   const [capacity, setCapacity] = useState(profile.plan === 'Starter' ? 50 : 500);
   const [ticketPrice, setTicketPrice] = useState(0);
-  const [smsTemplate, setSmsTemplate] = useState(
-    'Hi {name}, your pass for {event} is confirmed! Present QR token {ticket_code} at {venue}.'
-  );
+  const [smsTemplate, setSmsTemplate] = useState(defaultMsgCfg.confirmationMessage);
+  const [checkInTemplate, setCheckInTemplate] = useState(defaultMsgCfg.checkInMessage);
+  const [includeCameraLink, setIncludeCameraLink] = useState(true);
   const [enforceUniquePhone, setEnforceUniquePhone] = useState(true);
   const [autoCloseCap, setAutoCloseCap] = useState(true);
   const [publishQrPass, setPublishQrPass] = useState(true);
@@ -217,108 +202,6 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
 
   const applyCategoryPreset = (nextCat: string) => {
     setCategory(nextCat);
-    const presets: Record<
-      string,
-      {
-        title: string;
-        slug: string;
-        overview: string;
-        tags: string[];
-        venue: string;
-        artwork: ArtworkVariant;
-        block1: string;
-        block2: string;
-      }
-    > = {
-      Events: {
-        title: 'Accra Cultural & Heritage Gathering 2026',
-        slug: 'accra-cultural-gathering-2026',
-        overview:
-          'Curated celebration bringing families, community leaders, and special guests together with instant QR passes and seamless gate check-in.',
-        tags: ['Events', 'Celebration', 'Accra 2026'],
-        venue: 'Accra International Conference Centre',
-        artwork: 'forum',
-        block1: 'Doors Open & Guest Arrival Check-In',
-        block2: 'Main Program & Evening Hospitality',
-      },
-      Program: {
-        title: 'Personal Celebration & Community Program 2026',
-        slug: 'personal-program-2026',
-        overview:
-          'Private or community program with tailored guest invitations, instant SMS QR passes, and smooth arrival check-in for family and friends.',
-        tags: ['Program', 'Private Guestlist', 'SMS Pass'],
-        venue: 'East Legon Gardens',
-        artwork: 'typography',
-        block1: 'Guest Arrival, Welcome & Refreshments',
-        block2: 'Main Program, Toasts & Group Photos',
-      },
-      Wedding: {
-        title: 'Mensah & Boateng Royal Wedding Reception',
-        slug: 'mensah-boateng-royal-wedding',
-        overview:
-          'Holy matrimony, garden cocktail hour, and dinner reception with reserved family tables and instant SMS seating invitations.',
-        tags: ['Wedding', 'Ceremony & Reception', 'Family RSVP'],
-        venue: 'Labadi Beach Hotel Gardens',
-        artwork: 'spatial',
-        block1: 'Bridal Processional, Vows & Ring Exchange',
-        block2: 'Grand Reception Dinner & First Dance',
-      },
-      Funeral: {
-        title: 'Celebration of Life: Nana Osei Tutu Memorial',
-        slug: 'nana-osei-tutu-memorial-2026',
-        overview:
-          'Dignified funeral service, family tribute reading, and Sunday Thanksgiving reception with coordinated guest seating and gate passes.',
-        tags: ['Funeral', 'Memorial Service', 'Thanksgiving'],
-        venue: 'Ridge Park Forecourt',
-        artwork: 'typography',
-        block1: 'Filing Past, Family Tributes & Biography Reading',
-        block2: 'Burial Procession & Refreshment Reception',
-      },
-      Church: {
-        title: 'Grace Revival Night & Choir Convention',
-        slug: 'grace-revival-convention-2026',
-        overview:
-          'Evening of worship, mass choir ministration, and prophetic word with rapid SMS pass verification at sanctuary entrances.',
-        tags: ['Church', 'Worship & Choir', 'Convention'],
-        venue: 'Lighthouse Cathedral Auditorium',
-        artwork: 'forum',
-        block1: 'Opening Praise & Mass Choir Ministration',
-        block2: 'Sermon & Prayer Altar Call',
-      },
-      Musical: {
-        title: 'Accra Acoustic & Afrobeats Live Concert',
-        slug: 'accra-acoustic-afrobeats-live',
-        overview:
-          'Live orchestral highlife, acoustic soul, and headliner performances under the stars with VIP table and general admission QR passes.',
-        tags: ['Musical', 'Live Concert', 'VIP Tables'],
-        venue: 'Untamed Empire Arena',
-        artwork: 'sound',
-        block1: 'Acoustic Highlife & Opening Guest Sets',
-        block2: 'Headliner Live Band Performance',
-      },
-      Corporate: {
-        title: 'West Africa Executive & Banking Gala 2026',
-        slug: 'west-africa-executive-gala-2026',
-        overview:
-          'Annual corporate gala, stakeholder forum, and executive awards dinner with badge printing and VIP table check-in.',
-        tags: ['Corporate', 'Executive Gala', 'Awards'],
-        venue: 'Kempinski Gold Coast City',
-        artwork: 'hardware',
-        block1: 'Executive Keynote & Annual Results Briefing',
-        block2: 'Corporate Excellence Awards & Dinner',
-      },
-      Tech: {
-        title: 'Accra AI & Cloud Summit 2026',
-        slug: 'accra-ai-cloud-2026',
-        overview:
-          'Join 500+ engineering leaders, cloud architects, and builders across Africa for production talks, demos, and developer workshops.',
-        tags: ['Tech', 'Developers & AI', 'Summit'],
-        venue: 'Mövenpick Ambassador Hotel',
-        artwork: 'architecture',
-        block1: 'Opening Keynote: Resilient Cloud Infrastructure',
-        block2: 'Panel: Arkesel SMS & Mobile Payout Rails',
-      },
-    };
     const catPreset = getCategoryPreset(nextCat);
     setFlyerUrl(catPreset.flyerUrl);
     setFlyerFailed(false);
@@ -327,24 +210,23 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     setValidationLabel(catPreset.validationConfig.label);
     setValidationOptionsText(catPreset.validationConfig.options.join(', '));
     setRequireInviteCode(Boolean(catPreset.validationConfig.requireInviteCode));
-    setInviteCode(catPreset.validationConfig.inviteCode || 'GUEST2026');
+    setInviteCode('');
     setEnableGiftTable(Boolean(catPreset.extraDataConfig.enableGiftTable));
     if (catPreset.extraDataConfig.giftTitle) setGiftTitle(catPreset.extraDataConfig.giftTitle);
-    if (catPreset.extraDataConfig.momoNumber) setMomoNumber(catPreset.extraDataConfig.momoNumber);
     setCustomFields(catPreset.extraDataConfig.customFields);
 
-    const p = presets[nextCat];
-    if (p) {
-      setTitle(p.title);
-      if (!slugTouched) setSlug(p.slug);
-      setOverview(p.overview);
-      setTags(p.tags);
-      setVenue(p.venue);
-      setArtwork(p.artwork);
-      setDraftBlocks([
-        { id: 'wiz-blk-1', time: '09:00 - 11:00', title: p.block1, lead: profile.name, stage: 'Main Hall' },
-        { id: 'wiz-blk-2', time: '12:00 - 14:30', title: p.block2, lead: 'Program Hosts', stage: 'Main Stage' },
-      ]);
+    const artworkByCategory: Record<string, ArtworkVariant> = {
+      Events: 'forum',
+      Program: 'typography',
+      Wedding: 'spatial',
+      Funeral: 'typography',
+      Church: 'forum',
+      Musical: 'sound',
+      Corporate: 'hardware',
+      Tech: 'architecture',
+    };
+    if (artworkByCategory[nextCat]) {
+      setArtwork(artworkByCategory[nextCat]);
     }
   };
 
@@ -398,8 +280,18 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
           customFields,
         },
         venueFormat,
-        senderId,
+        senderId:
+          senderId
+            .trim()
+            .toUpperCase()
+            .replace(/[^A-Z0-9]/g, '')
+            .slice(0, 11) || 'EVENTSAPP',
         qrPassPublished: publishStatus === 'draft' ? false : publishQrPass,
+        messageConfig: {
+          confirmationMessage: smsTemplate.trim() || defaultMsgCfg.confirmationMessage,
+          checkInMessage: checkInTemplate.trim() || defaultMsgCfg.checkInMessage,
+          includeCameraLink,
+        },
       };
 
       const createdBlocks: ScheduleBlock[] = draftBlocks.map((blk, i) => ({
@@ -1036,10 +928,10 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                       <Gift className="w-4 h-4 text-[#0B0B0B]" />
                       <div>
                         <p className="text-xs font-bold text-[#0B0B0B]">
-                          Wedding Gift Table &amp; Cash Envelope Registry
+                          Standalone Gift Table &amp; Cash Envelope Registry
                         </p>
                         <p className="text-[11px] text-[#71717A]">
-                          Collect cash/MoMo pledges, registry items, and guest well-wishes during RSVP.
+                          Enables standalone Gift Table page (/e/:slug/gifts) &amp; studio Gift Ledger — separate from RSVP, walk-ins &amp; gate check-in.
                         </p>
                       </div>
                     </div>
@@ -1231,18 +1123,48 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5">
-                    Arkesel SMS Sender ID
-                  </label>
-                  <select
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label
+                      htmlFor="wiz-sender-id"
+                      className="text-xs font-semibold text-[#0B0B0B]"
+                    >
+                      Arkesel SMS Sender ID
+                    </label>
+                    <span className="text-[10px] font-mono text-[#71717A] tabular-nums">
+                      {senderId.length}/11 alphanumeric
+                    </span>
+                  </div>
+                  <input
+                    id="wiz-sender-id"
+                    type="text"
+                    maxLength={11}
                     value={senderId}
-                    onChange={(e) => setSenderId(e.target.value)}
-                    className="w-full h-11 px-4 rounded-2xl bg-white text-xs sm:text-sm text-[#0B0B0B] shadow-sm focus:outline-none"
-                  >
-                    <option value="TECHLEADERS">TECHLEADERS (Primary • NCA Verified)</option>
-                    <option value="EVENTSAPP">Default System (EVENTSAPP)</option>
-                    <option value="DEVCON">DEVCON (Community Approved)</option>
-                  </select>
+                    onChange={(e) =>
+                      setSenderId(
+                        e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11)
+                      )
+                    }
+                    placeholder="e.g. TECHLEADERS"
+                    className="w-full h-11 px-4 rounded-2xl bg-white text-xs sm:text-sm font-mono font-bold tracking-wider text-[#0B0B0B] uppercase shadow-sm focus:outline-none"
+                  />
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    {Array.from(
+                      new Set([profile.senderId || 'EVENTSAPP', 'TECHLEADERS', 'EVENTSAPP'])
+                    ).map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setSenderId(preset)}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold border transition-colors ${
+                          senderId === preset
+                            ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                            : 'bg-white text-[#71717A] border-[#E5E5EA] hover:text-[#0B0B0B]'
+                        }`}
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5">
@@ -1305,13 +1227,33 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 </label>
               </div>
 
+              <div className="p-4 rounded-2xl bg-white flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold text-[#0B0B0B]">
+                    Include Disposable Camera &amp; Collage Link in Guest SMS
+                  </p>
+                  <p className="text-[11px] text-[#71717A] mt-0.5">
+                    Automatically attaches <span className="font-mono">{buildCameraLinkForOrigin(slug || 'event')}</span> (5 pictures/user + Collage Maker) when <code className="font-mono">{'{cameraLink}'}</code> is enabled.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={includeCameraLink}
+                    onChange={(e) => setIncludeCameraLink(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-[#E5E5EA] rounded-full peer peer-checked:bg-[#0B0B0B] after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+                </label>
+              </div>
+
               <div>
-                <div className="flex items-center justify-between mb-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
                   <label className="text-xs font-semibold text-[#0B0B0B]">
                     Confirmation SMS Template
                   </label>
                   <span className="text-[11px] font-mono text-[#71717A] tabular-nums">
-                    {smsSegments} SMS credit/pass · {smsTemplate.length} / 160 chars
+                    {smsSegments} SMS credit/pass · {smsTemplate.length} chars
                   </span>
                 </div>
                 <textarea
@@ -1320,6 +1262,35 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                   onChange={(e) => setSmsTemplate(e.target.value)}
                   className="w-full p-4 rounded-2xl bg-white text-xs font-mono text-[#0B0B0B] shadow-sm focus:outline-none resize-none"
                 />
+              </div>
+
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                  <label className="text-xs font-semibold text-[#0B0B0B]">
+                    Check-In Welcome SMS Template (Sent at Gate Check-In)
+                  </label>
+                  <div className="flex flex-wrap gap-1">
+                    {['{name}', '{event}', '{code}', '{cameraLink}'].map((tag) => (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => setCheckInTemplate((prev) => `${prev} ${tag}`.trim())}
+                        className="px-2 py-0.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[10px] font-mono text-[#0B0B0B]"
+                      >
+                        + {tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <textarea
+                  rows={3}
+                  value={checkInTemplate}
+                  onChange={(e) => setCheckInTemplate(e.target.value)}
+                  className="w-full p-4 rounded-2xl bg-white text-xs font-mono text-[#0B0B0B] shadow-sm focus:outline-none resize-none"
+                />
+                <p className="text-[11px] text-[#71717A] mt-1.5">
+                  Preview Camera URL: <span className="font-mono text-[#0B0B0B]">{buildCameraLinkForOrigin(slug || 'event')}</span>
+                </p>
               </div>
             </section>
           )}

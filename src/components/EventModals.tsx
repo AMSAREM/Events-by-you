@@ -43,7 +43,7 @@ const ARTWORK_OPTIONS: { id: ArtworkVariant; label: string }[] = [
 ];
 
 export const CreateEventModal: React.FC<CreateEventModalProps> = ({
-  organizerName = 'Josh Mensah',
+  organizerName = 'Organiser',
   onClose,
   onCreate,
 }) => {
@@ -824,7 +824,7 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
           </div>
         </div>
 
-        {/* Poster Theme, Validation Form Circles & Wedding Gift Table Editor */}
+        {/* Poster Theme, Validation Form Circles & Standalone Gift Table Editor */}
         <div className="mt-4 p-4 rounded-2xl bg-[#F5F5F7] space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5">
@@ -873,13 +873,13 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
             <div>
               <label className="text-[11px] font-semibold text-[#0B0B0B] mb-1 flex items-center gap-1">
                 <Gift className="w-3 h-3" />
-                Wedding Gift Table MoMo Receiving Number
+                Standalone Gift Table MoMo Receiving Number
               </label>
               <input
                 type="text"
                 value={momoDraft}
                 onChange={(e) => setMomoDraft(e.target.value)}
-                placeholder="+233 24 559 8104"
+                placeholder="+233 XX XXX XXXX"
                 className="w-full h-9 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs font-mono text-[#0B0B0B]"
               />
             </div>

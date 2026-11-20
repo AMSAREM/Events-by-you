@@ -7,7 +7,7 @@ import {
   SystemAlert,
   TimeRange,
 } from '../types/events';
-import { VELOCITY_SERIES } from '../data/initialData';
+import { computeVelocitySeries } from '../data/initialData';
 import { CircularGauge, SplineChart } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
 
@@ -192,7 +192,7 @@ export const AnalyticsScreen: React.FC<AnalyticsScreenProps> = ({
             </div>
           </div>
 
-          <SplineChart data={VELOCITY_SERIES[timeRange]} height={210} showSecondary />
+          <SplineChart data={computeVelocitySeries(filteredEvents, attendees, timeRange)} height={210} showSecondary />
         </div>
 
         {/* Venue Capacity Utilization Breakdown */}

@@ -16,6 +16,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
   SystemAlert,
@@ -304,6 +305,10 @@ export const api = {
       serviceRoleConfigured?: boolean;
       resendConfigured?: boolean;
       arkeselConfigured?: boolean;
+      arkeselSenderIdConfigured?: boolean;
+      arkeselActiveSenderId?: string;
+      smsMode?: 'live' | 'sandbox';
+      otpStorage?: string;
       inMemoryFallback?: boolean;
       creatorEmail?: string;
       creatorPasswordConfigured?: boolean;
@@ -356,6 +361,9 @@ export const api = {
         otpType?: 'signup' | 'email' | 'sms';
         channels?: Array<'sms' | 'email'>;
         provider?: string;
+        smsSenderId?: string;
+        smsMessageId?: string;
+        smsWarning?: string;
         session?: StoredAuthSession;
         profile?: OrganizerProfile;
       }>('/api/auth/signup', {
@@ -387,6 +395,9 @@ export const api = {
         phone?: string;
         channels?: Array<'sms' | 'email'>;
         provider?: string;
+        smsSenderId?: string;
+        smsMessageId?: string;
+        smsWarning?: string;
       }>(
         '/api/auth/send-otp',
         {
@@ -407,6 +418,9 @@ export const api = {
         email?: string;
         channels?: Array<'sms' | 'email'>;
         provider?: string;
+        smsSenderId?: string;
+        smsMessageId?: string;
+        smsWarning?: string;
       }>('/api/auth/resend-otp', {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -424,6 +438,9 @@ export const api = {
         email?: string;
         channels?: Array<'sms' | 'email'>;
         provider?: string;
+        smsSenderId?: string;
+        smsMessageId?: string;
+        smsWarning?: string;
       }>(
         '/api/auth/reset-password',
         {
@@ -479,12 +496,22 @@ export const api = {
         }
       ),
 
-    getCameraRoll: (slugOrId: string) =>
+    getCameraRoll: (slugOrId: string, passCode?: string) =>
       request<{
         event: EventItem;
         shots: DisposableShot[];
         rollSettings: DisposableRollSettings;
-      }>(`/api/public/camera/${encodeURIComponent(slugOrId)}`),
+        verifiedPass?: {
+          attendeeName: string;
+          ticketCode: string;
+          checkedIn: boolean;
+          tier: string;
+        } | null;
+      }>(
+        `/api/public/camera/${encodeURIComponent(slugOrId)}${
+          passCode?.trim() ? `?pass=${encodeURIComponent(passCode.trim())}` : ''
+        }`
+      ),
 
     addCameraShot: (slugOrId: string, shot: DisposableShot) =>
       request<{ shot: DisposableShot }>(
@@ -496,6 +523,15 @@ export const api = {
       request<{ shot: DisposableShot }>(
         `/api/public/camera/shots/${encodeURIComponent(shotId)}/like`,
         { method: 'PATCH' }
+      ),
+
+    submitGiftTableEntry: (
+      slugOrId: string,
+      payload: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
+    ) =>
+      request<{ gift: GiftTableEntry; event: EventItem }>(
+        `/api/public/events/${encodeURIComponent(slugOrId)}/gifts`,
+        { method: 'POST', body: JSON.stringify(payload) }
       ),
   },
 
@@ -516,6 +552,21 @@ export const api = {
       request<{ ok: boolean; deletedUserId?: string }>(
         '/api/studio/account',
         { method: 'DELETE', body: JSON.stringify({ confirmation: 'DELETE' }) },
+        true
+      ),
+
+    testSms: (payload: { phone: string; senderId?: string }) =>
+      request<{
+        ok: boolean;
+        phone: string;
+        senderId: string;
+        messageId?: string;
+        sandbox?: boolean;
+        warning?: string;
+        smsCredits: number;
+      }>(
+        '/api/studio/sms/test',
+        { method: 'POST', body: JSON.stringify(payload) },
         true
       ),
 
@@ -568,6 +619,16 @@ export const api = {
       }>(
         `/api/studio/attendees/${encodeURIComponent(attendeeId)}/checkin`,
         { method: 'PATCH' },
+        true
+      ),
+
+    recordGiftTableEntry: (
+      eventId: string,
+      payload: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
+    ) =>
+      request<{ gift: GiftTableEntry; event: EventItem }>(
+        `/api/studio/events/${encodeURIComponent(eventId)}/gifts`,
+        { method: 'POST', body: JSON.stringify(payload) },
         true
       ),
 
@@ -729,6 +790,15 @@ export const api = {
         { method: 'POST', body: JSON.stringify(attendeeId ? { attendeeId } : {}) },
         true
       ),
+
+    syncSmsDlr: () =>
+      request<{
+        ok: boolean;
+        balance: { ok: boolean; balanceCredits?: number; error?: string };
+        dlr: { ok: boolean; checked: number; updated: number; error?: string };
+        emailDiagnostics?: BuilderConsoleOverview['emailDiagnostics'];
+        recentDispatches?: BuilderConsoleOverview['smsTelemetry']['recentDispatches'];
+      }>('/api/builder/sms/sync-dlr', { method: 'POST' }, true),
 
     topUpTenantCredits: (userId: string, amount: number) =>
       request<{ tenant?: BuilderTenantSummary; ok?: boolean; smsCredits?: number }>(

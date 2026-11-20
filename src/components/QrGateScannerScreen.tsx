@@ -5,8 +5,9 @@ import {
   CameraOff,
   Check,
   CheckCircle2,
+  Copy,
   Download,
-  Gift,
+  ExternalLink,
   QrCode,
   RotateCcw,
   Search,
@@ -25,6 +26,7 @@ import {
   SystemAlert,
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
+import { buildCameraLinkForOrigin } from '../lib/eventMessages';
 import { DeterministicQrSvg, downloadQrSvg } from '../lib/qr';
 import { CircularGauge } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
@@ -36,7 +38,13 @@ interface QrGateScannerScreenProps {
   profile: OrganizerProfile;
   initialEventId?: string;
   initialCode?: string;
-  onToggleCheckIn: (attendeeId: string) => void;
+  onToggleCheckIn: (
+    attendeeId: string
+  ) => Promise<{
+    checkInMessageSent?: boolean;
+    cameraUrl?: string;
+    dispatchedMessage?: string;
+  } | void> | void;
   onRegisterAttendee: (eventId: string, attendee: Attendee) => void;
   onToggleQrPassPublished?: (eventId: string, published: boolean) => Promise<void> | void;
   onManageEvent: (event: EventItem) => void;
@@ -50,6 +58,7 @@ type ScanOutcome =
       attendee: Attendee;
       eventTitle: string;
       message: string;
+      cameraUrl?: string;
       timestamp: string;
     }
   | {
@@ -262,23 +271,43 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       return;
     }
 
-    // Valid unchecked pass -> Check them in immediately!
-    onToggleCheckIn(matchAny.id);
+    // Valid unchecked pass -> Check them in immediately & dispatch check-in SMS + camera link!
+    const fallbackEvt = events.find((e) => e.id === matchAny.eventId) ?? selectedEvent;
+    const fallbackCameraUrl = fallbackEvt
+      ? buildCameraLinkForOrigin(
+          fallbackEvt.slug || fallbackEvt.id,
+          undefined,
+          matchAny.name,
+          matchAny.ticketCode
+        )
+      : undefined;
+
     const updatedAttendee: Attendee = {
       ...matchAny,
       checkedIn: true,
       checkedInAt: nowTime.slice(0, 5),
     };
-    const outcome: ScanOutcome = {
+    const initialOutcome: ScanOutcome = {
       status: 'verified',
       attendee: updatedAttendee,
       eventTitle: evtTitle,
-      message: `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in cleanly.`,
+      message: `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. Check-in welcome SMS + Disposable Camera link sent.`,
+      cameraUrl: fallbackCameraUrl,
       timestamp: nowTime,
     };
-    setLastOutcome(outcome);
-    setScanHistory((prev) => [outcome, ...prev].slice(0, 8));
+    setLastOutcome(initialOutcome);
+    setScanHistory((prev) => [initialOutcome, ...prev].slice(0, 8));
     setCodeInput('');
+
+    void Promise.resolve(onToggleCheckIn(matchAny.id)).then((res) => {
+      if (res && res.cameraUrl) {
+        const enriched: ScanOutcome = {
+          ...initialOutcome,
+          cameraUrl: res.cameraUrl,
+        };
+        setLastOutcome(enriched);
+      }
+    });
   };
 
   useEffect(() => {
@@ -398,11 +427,18 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
     setWalkInOrg('');
 
     if (walkInAutoCheckIn) {
+      const walkInCameraUrl = buildCameraLinkForOrigin(
+        selectedEvent.slug || selectedEvent.id,
+        undefined,
+        created.name,
+        created.ticketCode
+      );
       const outcome: ScanOutcome = {
         status: 'verified',
         attendee: created,
         eventTitle: selectedEvent.title,
-        message: `Walk-In Registered & Checked In — QR Pass ${code} sent via Arkesel SMS.`,
+        message: `Walk-In Registered & Checked In — QR Pass ${code} & Disposable Camera link sent via Arkesel SMS.`,
+        cameraUrl: walkInCameraUrl,
         timestamp: nowTime,
       };
       setLastOutcome(outcome);
@@ -693,25 +729,43 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                             Circle: {lastOutcome.attendee.validationGroup}
                           </span>
                         )}
-                        {lastOutcome.attendee.giftEntry && (
-                          <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-[10px] font-semibold text-amber-200 inline-flex items-center gap-1">
-                            <Gift className="w-3 h-3" />
-                            {lastOutcome.attendee.giftEntry.amount
-                              ? `${lastOutcome.attendee.giftEntry.currency || 'GHS'} ${lastOutcome.attendee.giftEntry.amount}`
-                              : lastOutcome.attendee.giftEntry.registryItem || 'Gift Pledged'}
-                          </span>
-                        )}
                       </div>
                     </div>
                   )}
                 </div>
               </div>
 
+              {lastOutcome.status === 'verified' && lastOutcome.cameraUrl && (
+                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (navigator.clipboard?.writeText) {
+                        navigator.clipboard.writeText(lastOutcome.cameraUrl!).catch(() => {});
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-[11px] font-semibold text-white inline-flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <Copy className="w-3 h-3" />
+                    Copy Camera Link
+                  </button>
+                  <a
+                    href={lastOutcome.cameraUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-1.5 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    Camera
+                  </a>
+                </div>
+              )}
+
               {lastOutcome.status === 'duplicate' && (
                 <button
                   type="button"
                   onClick={() => {
-                    onToggleCheckIn(lastOutcome.attendee.id);
+                    void onToggleCheckIn(lastOutcome.attendee.id);
                     setLastOutcome(null);
                   }}
                   className="px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-[11px] font-semibold text-white inline-flex items-center gap-1 whitespace-nowrap shrink-0"
@@ -1014,14 +1068,6 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                           {att.validationGroup}
                         </span>
                       )}
-                      {att.giftEntry && (
-                        <span className="px-2 py-0.5 rounded-full bg-amber-50 text-[10px] font-semibold text-amber-800 border border-amber-200 inline-flex items-center gap-1">
-                          <Gift className="w-3 h-3" />
-                          {att.giftEntry.amount
-                            ? `${att.giftEntry.currency || 'GHS'} ${att.giftEntry.amount}`
-                            : att.giftEntry.registryItem || 'Gift Pledge'}
-                        </span>
-                      )}
                     </div>
                     <p className="text-xs text-[#71717A] mt-0.5 truncate">
                       {att.organization} · {att.phone}
@@ -1148,21 +1194,11 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               <span className="mt-3 font-mono text-sm font-bold tracking-widest text-[#0B0B0B] tabular-nums">
                 {previewPass.ticketCode}
               </span>
-              {(previewPass.validationGroup || previewPass.giftEntry) && (
+              {previewPass.validationGroup && (
                 <div className="mt-2 flex flex-wrap justify-center gap-1.5">
-                  {previewPass.validationGroup && (
-                    <span className="px-2.5 py-0.5 rounded-full bg-white text-[11px] font-semibold text-[#0B0B0B] border border-[#E5E5EA]">
-                      {previewPass.validationGroup}
-                    </span>
-                  )}
-                  {previewPass.giftEntry && (
-                    <span className="px-2.5 py-0.5 rounded-full bg-amber-50 text-[11px] font-semibold text-amber-800 border border-amber-200 inline-flex items-center gap-1">
-                      <Gift className="w-3 h-3" />
-                      {previewPass.giftEntry.amount
-                        ? `${previewPass.giftEntry.currency || 'GHS'} ${previewPass.giftEntry.amount}`
-                        : previewPass.giftEntry.registryItem || 'Gift Registered'}
-                    </span>
-                  )}
+                  <span className="px-2.5 py-0.5 rounded-full bg-white text-[11px] font-semibold text-[#0B0B0B] border border-[#E5E5EA]">
+                    {previewPass.validationGroup}
+                  </span>
                 </div>
               )}
             </div>

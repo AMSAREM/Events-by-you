@@ -151,7 +151,7 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
               onClick={onNavigateDemoEvent}
               className="px-4 py-1.5 rounded-full text-xs font-medium text-[#444748] hover:text-[#0B0B0B] hover:bg-[#EEEEF0] transition-colors"
             >
-              Live Demo Event
+              Published Events
             </button>
           </nav>
 

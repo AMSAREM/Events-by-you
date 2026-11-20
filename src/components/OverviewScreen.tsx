@@ -5,6 +5,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Compass,
   ImagePlus,
   Pencil,
   Plus,
@@ -19,7 +20,7 @@ import {
   SystemAlert,
   TimeRange,
 } from '../types/events';
-import { VELOCITY_SERIES, getCategoryPreset } from '../data/initialData';
+import { computeVelocitySeries, getCategoryPreset } from '../data/initialData';
 import { compressFlyerImageFile } from '../lib/flyerUpload';
 import { CircularGauge, MonochromePoster, SplineChart } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
@@ -40,6 +41,7 @@ interface OverviewScreenProps {
   onNavigateEvents: () => void;
   onNavigateSettings: () => void;
   onOpenPlans: () => void;
+  onOpenGuide?: () => void;
   onResolveAlert: (id: string) => void;
 }
 
@@ -59,6 +61,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
   onNavigateEvents,
   onNavigateSettings,
   onOpenPlans,
+  onOpenGuide,
   onResolveAlert,
 }) => {
   const isEventCreator = profile.appRole !== 'gate_staff';
@@ -177,13 +180,43 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
 
       {/* CENTER COLUMN: Greeting, Prominent QR & Check-In Bar, Upcoming Highlight, Event Catalog */}
       <div className="space-y-5 lg:space-y-6 min-w-0">
-        {/* Personalized Greeting Banner */}
-        <section className="bg-[#F5F5F7] rounded-3xl p-4 sm:p-6 lg:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-5 sm:gap-6">
-          <div className="max-w-xl min-w-0">
+        {/* Personalized Greeting Banner with Upcoming Event Flyer Backdrop */}
+        <section className="relative overflow-hidden bg-[#F5F5F7] rounded-3xl p-4 sm:p-6 lg:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-5 sm:gap-6 border border-[#E5E5EA]/70">
+          {featuredEvent && featuredFlyerSrc && !failedFlyerIds[featuredEvent.id] && (
+            <>
+              <img
+                src={featuredFlyerSrc}
+                alt=""
+                aria-hidden="true"
+                onError={() =>
+                  setFailedFlyerIds((prev) => ({ ...prev, [featuredEvent.id]: true }))
+                }
+                className="absolute inset-0 w-full h-full object-cover opacity-25 scale-105 pointer-events-none select-none"
+              />
+              <div
+                aria-hidden="true"
+                className="absolute inset-0 bg-gradient-to-r from-[#F5F5F7]/95 via-[#F5F5F7]/85 to-[#F5F5F7]/65 backdrop-blur-[1px] pointer-events-none"
+              />
+            </>
+          )}
+
+          <div className="relative z-10 max-w-xl min-w-0">
+            {featuredEvent && (
+              <button
+                type="button"
+                onClick={() => onManageEvent(featuredEvent)}
+                className="mb-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/85 backdrop-blur-sm border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] transition-colors max-w-full"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-[#0B0B0B] shrink-0" />
+                <span className="truncate">
+                  Upcoming Banner · {featuredEvent.title} · {featuredEvent.date}
+                </span>
+              </button>
+            )}
             <h1 className="font-display text-[24px] sm:text-[32px] lg:text-[36px] leading-[1.15] font-bold tracking-[-0.03em] text-[#0B0B0B] text-balance">
               {greeting}, {profile.firstName}.
             </h1>
-            <p className="text-sm text-[#71717A] mt-2 leading-relaxed">
+            <p className="text-sm text-[#52525B] mt-2 leading-relaxed">
               <span className="tabular-nums font-medium text-[#0B0B0B]">
                 {events.filter((e) => e.status === 'live' || e.status === 'upcoming').length}
               </span>{' '}
@@ -213,7 +246,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
               <button
                 type="button"
                 onClick={() => onOpenQrScanner(featuredEvent?.id)}
-                className="px-5 py-2.5 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-2 whitespace-nowrap shrink-0"
+                className="px-5 py-2.5 rounded-full bg-white/95 border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-2 whitespace-nowrap shrink-0"
               >
                 <UserPlus className="w-4 h-4" />
                 Check-In Registration
@@ -222,7 +255,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                 <button
                   type="button"
                   onClick={onOpenCreateModal}
-                  className="px-4 py-2.5 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                  className="px-4 py-2.5 rounded-full bg-white/95 border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold hover:border-[#0B0B0B] transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   New Event
@@ -231,15 +264,25 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
               <button
                 type="button"
                 onClick={onNavigateEvents}
-                className="px-4 py-2.5 rounded-full bg-transparent text-[#71717A] hover:text-[#0B0B0B] text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+                className="px-4 py-2.5 rounded-full bg-white/80 text-[#52525B] hover:text-[#0B0B0B] text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
               >
                 All Productions
               </button>
+              {onOpenGuide && (
+                <button
+                  type="button"
+                  onClick={onOpenGuide}
+                  className="px-4 py-2.5 rounded-full bg-white/95 border border-[#E5E5EA] text-[#0B0B0B] hover:border-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Compass className="w-3.5 h-3.5" />
+                  Quick Guide
+                </button>
+              )}
             </div>
           </div>
 
           {/* Architectural Geometric Motif */}
-          <div className="hidden sm:flex items-center justify-center shrink-0" aria-hidden="true">
+          <div className="relative z-10 hidden sm:flex items-center justify-center shrink-0" aria-hidden="true">
             <svg viewBox="0 0 120 120" className="w-28 h-28">
               <circle cx="60" cy="60" r="52" fill="none" stroke="#E5E5EA" strokeWidth="1.5" />
               <circle cx="60" cy="60" r="36" fill="none" stroke="#0B0B0B" strokeWidth="1.5" />
@@ -708,7 +751,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
             </div>
           </div>
 
-          <SplineChart data={VELOCITY_SERIES[timeRange]} />
+          <SplineChart data={computeVelocitySeries(events, attendees, timeRange)} />
         </div>
 
         {/* Plan / Account Upgrade Module */}

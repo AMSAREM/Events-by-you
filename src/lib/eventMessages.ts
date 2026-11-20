@@ -23,7 +23,8 @@ export function getDefaultMessageConfig(event?: Partial<EventItem>): Required<Ev
 export function buildCameraLinkForOrigin(
   slugOrId: string,
   originOverride?: string,
-  guestName?: string
+  guestName?: string,
+  ticketCode?: string
 ): string {
   const clean = encodeURIComponent(slugOrId.trim() || 'event');
   const origin =
@@ -32,8 +33,13 @@ export function buildCameraLinkForOrigin(
       ? window.location.origin
       : 'https://www.eventsbyyou.xyz');
   const base = `${origin}/e/${clean}/camera`;
+  const search = new URLSearchParams();
+  const trimmedCode = ticketCode?.trim();
   const trimmedGuest = guestName?.trim();
-  return trimmedGuest ? `${base}?guest=${encodeURIComponent(trimmedGuest)}` : base;
+  if (trimmedCode) search.set('pass', trimmedCode);
+  if (trimmedGuest) search.set('guest', trimmedGuest);
+  const qs = search.toString();
+  return qs ? `${base}?${qs}` : base;
 }
 
 export function resolveEventMessage(params: {
@@ -56,10 +62,12 @@ export function resolveEventMessage(params: {
           ? defaults.thankYouMessage
           : defaults.confirmationMessage);
 
+  const shouldPersonalize = Boolean(params.includeGuestInCameraUrl || params.type === 'checkin');
   const cameraUrl = buildCameraLinkForOrigin(
     params.event.slug || params.event.id,
     params.originOverride,
-    params.includeGuestInCameraUrl ? params.attendeeName : undefined
+    shouldPersonalize ? params.attendeeName : undefined,
+    shouldPersonalize ? params.ticketCode : undefined
   );
 
   const attendeeName = params.attendeeName?.trim() || 'Guest';
@@ -77,9 +85,9 @@ export function resolveEventMessage(params: {
     .replace(/\{ticket_?code\}|\{code\}/gi, ticketCode)
     .replace(/\{camera_?link\}|\{camera\}/gi, cameraUrl);
 
-  const includeLink = params.event.messageConfig?.includeCameraLink !== false;
+  const includeLink = params.type === 'checkin' || params.event.messageConfig?.includeCameraLink !== false;
   if (includeLink && !hasCameraPlaceholder && !rendered.includes(cameraUrl)) {
-    rendered = `${rendered.trim()} Disposable Camera (5 shots): ${cameraUrl}`;
+    rendered = `${rendered.trim()} Disposable Camera (5 shots & collage): ${cameraUrl}`;
   }
 
   return { text: rendered.trim(), cameraUrl };

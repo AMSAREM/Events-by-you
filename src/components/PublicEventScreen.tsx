@@ -30,7 +30,13 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { Attendee, AttendeeGiftEntry, DesignTheme, EventItem } from '../types/events';
+import {
+  Attendee,
+  DesignTheme,
+  EventItem,
+  GiftTableEntry,
+  ScheduleBlock,
+} from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
 import {
   buildEventInvitationUrl,
@@ -42,8 +48,9 @@ import {
 interface PublicEventScreenProps {
   events: EventItem[];
   attendees: Attendee[];
+  scheduleBlocks?: ScheduleBlock[];
   initialEventId?: string;
-  initialFocus?: 'top' | 'register' | 'checkin';
+  initialFocus?: 'top' | 'register' | 'checkin' | 'gifts';
   isLoadingEvents?: boolean;
   isSignedIn?: boolean;
   hasSetEvent?: boolean;
@@ -52,35 +59,15 @@ interface PublicEventScreenProps {
   onOpenStudio: () => void;
   onNavigateSignUp?: () => void;
   onCreateEvent?: () => void;
-  onFocusModeChange?: (mode: 'top' | 'checkin', event: EventItem) => void;
+  onFocusModeChange?: (mode: 'top' | 'checkin' | 'gifts', event: EventItem) => void;
   onRegisterAttendee: (eventId: string, attendee: Attendee) => Promise<Attendee | void> | void;
-  onOpenDisposableCamera?: (eventId: string, guestName?: string) => void;
+  onSubmitGiftTableEntry?: (
+    eventId: string,
+    gift: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
+  ) => Promise<{ gift: GiftTableEntry; event: EventItem }> | void;
+  onOpenDisposableCamera?: (eventId: string, guestName?: string, passCode?: string) => void;
   onOpenLegal?: (doc: 'terms' | 'privacy') => void;
 }
-
-const SPEAKERS = [
-  {
-    name: 'Dr. Kwame Mensah',
-    initials: 'KM',
-    role: 'Keynote Speaker & Ceremony Host',
-    topic: 'Opening Welcome, Lineage & Shared Gathering',
-    time: '10:00 AM',
-  },
-  {
-    name: 'Elena Boateng',
-    initials: 'EB',
-    role: 'Program Director · Logistics Lead',
-    topic: 'Hospitality, Guest Seating & Reception Coordination',
-    time: '01:30 PM',
-  },
-  {
-    name: 'Josh Mensah',
-    initials: 'JM',
-    role: 'Executive Producer · Events Studio',
-    topic: 'Evening Program & Featured Highlights',
-    time: '03:45 PM',
-  },
-];
 
 const COUNTRY_CODES = [
   { code: '+233', flag: '🇬🇭', label: 'GH' },
@@ -127,6 +114,7 @@ const HERO_THEME_FRAME: Record<
 export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   events,
   attendees,
+  scheduleBlocks = [],
   initialEventId,
   initialFocus = 'top',
   isLoadingEvents = false,
@@ -136,6 +124,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   onOpenStudio,
   onFocusModeChange,
   onRegisterAttendee,
+  onSubmitGiftTableEntry,
   onOpenDisposableCamera,
   onOpenLegal,
 }) => {
@@ -160,15 +149,22 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const selectedEvent =
     events.find((e) => e.id === selectedEventId) ?? activeEvents[0] ?? events[0];
 
-  const [standaloneCheckin, setStandaloneCheckin] = useState(initialFocus === 'checkin');
+  const [screenMode, setScreenMode] = useState<'top' | 'checkin' | 'gifts'>(
+    initialFocus === 'checkin' ? 'checkin' : initialFocus === 'gifts' ? 'gifts' : 'top'
+  );
+  const standaloneCheckin = screenMode === 'checkin';
+  const standaloneGifts = screenMode === 'gifts';
   const [showCheckinModal, setShowCheckinModal] = useState(false);
 
   useEffect(() => {
     if (initialFocus === 'checkin') {
-      setStandaloneCheckin(true);
+      setScreenMode('checkin');
+      setShowCheckinModal(false);
+    } else if (initialFocus === 'gifts') {
+      setScreenMode('gifts');
       setShowCheckinModal(false);
     } else if (initialFocus === 'register' && selectedEvent) {
-      setStandaloneCheckin(false);
+      setScreenMode('top');
       const timer = window.setTimeout(() => {
         const el = document.getElementById('register-section');
         if (el) {
@@ -177,7 +173,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       }, 60);
       return () => window.clearTimeout(timer);
     } else if (initialFocus === 'top') {
-      setStandaloneCheckin(false);
+      setScreenMode('top');
     }
   }, [initialFocus, selectedEvent]);
 
@@ -187,6 +183,18 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   );
   const validationConfig = selectedEvent?.validationConfig ?? categoryPreset.validationConfig;
   const extraDataConfig = selectedEvent?.extraDataConfig ?? categoryPreset.extraDataConfig;
+  const giftTableAvailable = Boolean(
+    extraDataConfig.enableGiftTable ||
+      selectedEvent?.category === 'Wedding' ||
+      (extraDataConfig.giftLedger && extraDataConfig.giftLedger.length > 0)
+  );
+  const eventScheduleBlocks = useMemo(
+    () =>
+      selectedEvent
+        ? scheduleBlocks.filter((b) => b.eventId === selectedEvent.id)
+        : [],
+    [scheduleBlocks, selectedEvent]
+  );
 
   const [name, setName] = useState('');
   const [countryPrefix, setCountryPrefix] = useState('+233');
@@ -194,17 +202,22 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const [email, setEmail] = useState('');
   const [validationGroup, setValidationGroup] = useState('');
   const [inviteCodeInput, setInviteCodeInput] = useState('');
+  const [customResponses, setCustomResponses] = useState<Record<string, string>>({});
 
-  // Wedding gift table & extra custom form state
-  const [giftMode, setGiftMode] = useState<'none' | 'cash-momo' | 'registry-item' | 'blessing-only'>(
-    'none'
+  // Standalone Gift Table state (completely decoupled from RSVP / walk-in / check-in)
+  const [giftGiverName, setGiftGiverName] = useState('');
+  const [giftGiverPhone, setGiftGiverPhone] = useState('');
+  const [giftMode, setGiftMode] = useState<'cash-momo' | 'registry-item' | 'blessing-only'>(
+    'cash-momo'
   );
   const [giftCurrency, setGiftCurrency] = useState<'GHS' | 'USD'>('GHS');
   const [giftAmount, setGiftAmount] = useState<string>('250');
   const [giftItem, setGiftItem] = useState<string>('');
-  const [giftSide, setGiftSide] = useState<string>("Bride's Family");
+  const [giftSide, setGiftSide] = useState<string>('');
   const [giftMessage, setGiftMessage] = useState<string>('');
-  const [customResponses, setCustomResponses] = useState<Record<string, string>>({});
+  const [giftSubmitting, setGiftSubmitting] = useState(false);
+  const [giftError, setGiftError] = useState<string | null>(null);
+  const [giftReceipt, setGiftReceipt] = useState<GiftTableEntry | null>(null);
 
   const [issuedPass, setIssuedPass] = useState<Attendee | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
@@ -221,9 +234,14 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     setHeroFailed(false);
     setValidationGroup('');
     setInviteCodeInput('');
-    setGiftMode('none');
+    setGiftGiverName('');
+    setGiftGiverPhone('');
+    setGiftMode('cash-momo');
     setGiftItem(extraDataConfig.giftRegistryItems?.[0] ?? '');
+    setGiftSide('');
     setGiftMessage('');
+    setGiftError(null);
+    setGiftReceipt(null);
     setCustomResponses({});
     setDuplicateError(null);
     setLookupError(null);
@@ -251,13 +269,20 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     [selectedEvent?.slug, selectedEvent?.id]
   );
 
+  const giftsStandaloneUrl = useMemo(
+    () => buildEventInvitationUrl(selectedEvent?.slug ?? selectedEvent?.id ?? 'event', 'gifts'),
+    [selectedEvent?.slug, selectedEvent?.id]
+  );
+
   const ogImageUrl = useMemo(
     () => buildEventOgImageUrl(selectedEvent?.slug ?? selectedEvent?.id ?? 'event'),
     [selectedEvent?.slug, selectedEvent?.id]
   );
 
-  const switchScreenMode = (mode: 'top' | 'checkin') => {
-    setStandaloneCheckin(mode === 'checkin');
+  const switchScreenMode = (mode: 'top' | 'checkin' | 'gifts') => {
+    setScreenMode(mode);
+    setGiftReceipt(null);
+    setGiftError(null);
     if (selectedEvent) {
       onFocusModeChange?.(mode, selectedEvent);
     }
@@ -265,14 +290,20 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   };
 
   const handleShare = () => {
-    const targetUrl = standaloneCheckin ? checkinKioskUrl : invitationUrl;
+    const targetUrl = standaloneCheckin
+      ? checkinKioskUrl
+      : standaloneGifts
+        ? giftsStandaloneUrl
+        : invitationUrl;
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(targetUrl).catch(() => {});
     }
     setShareToast(
       standaloneCheckin
         ? `Check-in link copied: /e/${selectedEvent?.slug}/checkin`
-        : `Invitation link copied: /e/${selectedEvent?.slug}`
+        : standaloneGifts
+          ? `Gift Table link copied: /e/${selectedEvent?.slug}/gifts`
+          : `Invitation link copied: /e/${selectedEvent?.slug}`
     );
     setTimeout(() => setShareToast(null), 2600);
   };
@@ -294,6 +325,67 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     }
     setShareToast(`Standalone Check-In URL copied: /e/${selectedEvent?.slug}/checkin`);
     setTimeout(() => setShareToast(null), 2600);
+  };
+
+  const handleGiftTableSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEvent || giftSubmitting) return;
+    if (!giftGiverName.trim()) {
+      setGiftError('Please enter your name or family name.');
+      return;
+    }
+    if (giftMode === 'cash-momo' && (!giftAmount || Number(giftAmount) <= 0)) {
+      setGiftError('Please enter a valid cash or MoMo gift amount.');
+      return;
+    }
+    if (!onSubmitGiftTableEntry) {
+      setGiftError('Gift Table submissions are currently unavailable.');
+      return;
+    }
+    setGiftError(null);
+    setGiftSubmitting(true);
+    try {
+      const result = await onSubmitGiftTableEntry(selectedEvent.id, {
+        giverName: giftGiverName.trim(),
+        giverPhone: giftGiverPhone.trim() ? normalizePhoneE164(giftGiverPhone.trim()) : undefined,
+        giftType: giftMode,
+        currency: giftCurrency,
+        amount: giftMode === 'cash-momo' ? Math.max(1, Number(giftAmount) || 0) : undefined,
+        registryItem:
+          giftMode === 'registry-item'
+            ? giftItem || extraDataConfig.giftRegistryItems?.[0] || 'Registry Gift'
+            : undefined,
+        side: giftSide.trim() || undefined,
+        message: giftMessage.trim() || undefined,
+      });
+      if (result?.gift) {
+        setGiftReceipt(result.gift);
+      } else {
+        setGiftReceipt({
+          id: `gift-${Date.now()}`,
+          eventId: selectedEvent.id,
+          giverName: giftGiverName.trim(),
+          giverPhone: giftGiverPhone.trim() || undefined,
+          giftType: giftMode,
+          currency: giftCurrency,
+          amount: giftMode === 'cash-momo' ? Math.max(1, Number(giftAmount) || 0) : undefined,
+          registryItem:
+            giftMode === 'registry-item'
+              ? giftItem || extraDataConfig.giftRegistryItems?.[0] || 'Registry Gift'
+              : undefined,
+          side: giftSide.trim() || undefined,
+          message: giftMessage.trim() || undefined,
+          recordedVia: 'public-table',
+          createdAt: new Date().toISOString(),
+        });
+      }
+      setGiftMessage('');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err) {
+      setGiftError(err instanceof Error ? err.message : 'Unable to record gift entry.');
+    } finally {
+      setGiftSubmitting(false);
+    }
   };
 
   const handleLookupExistingPass = (e: React.FormEvent) => {
@@ -433,21 +525,6 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       return;
     }
 
-    let giftEntry: AttendeeGiftEntry | undefined;
-    if (extraDataConfig.enableGiftTable && giftMode !== 'none') {
-      giftEntry = {
-        giftType: giftMode,
-        currency: giftCurrency,
-        amount: giftMode === 'cash-momo' ? Math.max(1, Number(giftAmount) || 0) : undefined,
-        registryItem:
-          giftMode === 'registry-item'
-            ? giftItem || extraDataConfig.giftRegistryItems?.[0] || 'Registry Gift'
-            : undefined,
-        side: giftSide || validationGroup || undefined,
-        message: giftMessage.trim() || undefined,
-      };
-    }
-
     const filteredCustom: Record<string, string> = {};
     for (const [k, v] of Object.entries(customResponses)) {
       if (v.trim()) filteredCustom[k] = v.trim();
@@ -478,7 +555,6 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       paymentStatus: 'paid',
       validationGroup: validationGroup || undefined,
       inviteCodeUsed: inviteCodeInput.trim() || undefined,
-      giftEntry,
       customResponses: Object.keys(filteredCustom).length > 0 ? filteredCustom : undefined,
     };
 
@@ -511,11 +587,10 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             <CalendarDays className="w-6 h-6 text-[#0B0B0B]" />
           </div>
           <h1 className="font-display text-xl font-bold text-[#0B0B0B]">
-            No published events in Supabase yet
+            No published events yet
           </h1>
           <p className="text-sm text-[#71717A] leading-relaxed">
-            Sign in to Creator Studio to publish an event or load starter events into your Supabase
-            database.
+            Sign in to Creator Studio to create and publish your event page, check-in passes, and optional standalone gift table.
           </p>
           <div className="flex flex-col sm:flex-row gap-2 pt-2 justify-center">
             <button
@@ -550,13 +625,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     100,
     Math.round((selectedEvent.registered / Math.max(1, selectedEvent.capacity)) * 100)
   );
-  const firstName = issuedPass?.name.split(' ')[0] ?? 'Ama';
-  const passInitials = (issuedPass?.name ?? 'Ama Serwaa')
+  const firstName = issuedPass?.name.split(' ')[0] ?? 'Guest';
+  const passInitials = (issuedPass?.name ?? 'Guest')
     .split(' ')
     .map((p) => p[0])
     .join('')
     .slice(0, 2)
-    .toUpperCase();
+    .toUpperCase() || 'GS';
 
   const registerSectionCard = (
     <section
@@ -618,28 +693,6 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     </>
                   )}
                 </button>
-                {checkinSubMode === 'register' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const rand = Math.floor(100 + Math.random() * 899);
-                      setName('Yaw Osei');
-                      setCountryPrefix('+233');
-                      setPhoneInput(`024 778 9${rand}`);
-                      setEmail(`yaw.osei${rand}@eventsbyyou.xyz`);
-                      if (validationConfig.options.length > 0) {
-                        setValidationGroup(validationConfig.options[0]);
-                      }
-                      if (validationConfig.requireInviteCode && validationConfig.inviteCode) {
-                        setInviteCodeInput(validationConfig.inviteCode);
-                      }
-                      setDuplicateError(null);
-                    }}
-                    className="text-[11px] font-semibold text-[#71717A] hover:text-[#0B0B0B] underline underline-offset-2"
-                  >
-                    Fill sample guest
-                  </button>
-                )}
               </div>
             </div>
 
@@ -966,142 +1019,6 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   </div>
                 )}
 
-                {/* WEDDING GIFT TABLE & CASH ENVELOPE REGISTRY FORM */}
-                {(selectedEvent.category === 'Wedding' || extraDataConfig.enableGiftTable) && (
-                  <div className="p-4 sm:p-5 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] space-y-3.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-start gap-2.5">
-                        <div className="w-9 h-9 rounded-xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
-                          <Gift className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-bold text-[#0B0B0B]">
-                            {extraDataConfig.giftTitle || 'Couple Gift Table & Cash Envelope'}
-                          </h4>
-                          <p className="text-[11px] text-[#71717A] mt-0.5">
-                            Log a gift table item, Mobile Money envelope, or well-wishes note with your RSVP.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                      {(
-                        [
-                          { id: 'none', label: 'No Gift Yet' },
-                          { id: 'cash-momo', label: 'MoMo / Cash' },
-                          { id: 'registry-item', label: 'Registry Gift' },
-                          { id: 'blessing-only', label: 'Wishes Note' },
-                        ] as const
-                      ).map((opt) => (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          onClick={() => setGiftMode(opt.id)}
-                          className={`py-2 px-2.5 rounded-xl text-[11px] font-semibold border transition-colors ${
-                            giftMode === opt.id
-                              ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
-                              : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {giftMode !== 'none' && (
-                      <div className="space-y-3 pt-1">
-                        {giftMode === 'cash-momo' && (
-                          <div className="p-3 rounded-xl bg-white border border-[#E5E5EA] space-y-2.5">
-                            {extraDataConfig.momoNumber && (
-                              <p className="text-[11px] text-[#444748]">
-                                Couple MoMo / Gift Line:{' '}
-                                <strong className="font-mono text-[#0B0B0B]">
-                                  {extraDataConfig.momoNumber}
-                                </strong>{' '}
-                                ({extraDataConfig.momoName || selectedEvent.organizer})
-                              </p>
-                            )}
-                            <div className="flex gap-2">
-                              <select
-                                value={giftCurrency}
-                                onChange={(e) =>
-                                  setGiftCurrency(e.target.value as 'GHS' | 'USD')
-                                }
-                                aria-label="Gift currency"
-                                className="h-10 px-3 rounded-xl bg-[#F5F5F7] text-xs font-bold text-[#0B0B0B]"
-                              >
-                                <option value="GHS">GHS</option>
-                                <option value="USD">USD</option>
-                              </select>
-                              <input
-                                type="number"
-                                min={1}
-                                value={giftAmount}
-                                onChange={(e) => setGiftAmount(e.target.value)}
-                                placeholder="Pledge / envelope amount"
-                                className="flex-1 h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono font-semibold text-[#0B0B0B]"
-                              />
-                            </div>
-                          </div>
-                        )}
-
-                        {giftMode === 'registry-item' && (
-                          <div>
-                            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                              Select Gift Table Registry Item
-                            </label>
-                            <select
-                              value={giftItem}
-                              onChange={(e) => setGiftItem(e.target.value)}
-                              className="w-full h-10 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs font-medium text-[#0B0B0B]"
-                            >
-                              {(
-                                extraDataConfig.giftRegistryItems ?? [
-                                  'Cash Envelope Blessing',
-                                  'Couple Dinnerware Set',
-                                  'Honeymoon Travel Fund',
-                                ]
-                              ).map((item) => (
-                                <option key={item} value={item}>
-                                  {item}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                          <div>
-                            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                              Guest Side / Honoring
-                            </label>
-                            <input
-                              type="text"
-                              value={giftSide || validationGroup}
-                              onChange={(e) => setGiftSide(e.target.value)}
-                              placeholder="e.g. Bride's Family / Groom's Friends"
-                              className="w-full h-10 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                              Well-Wishes &amp; Card Note
-                            </label>
-                            <input
-                              type="text"
-                              value={giftMessage}
-                              onChange={(e) => setGiftMessage(e.target.value)}
-                              placeholder="Write a blessing for the couple..."
-                              className="w-full h-10 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 {/* Instant Notification Callout */}
                 <div className="p-3 rounded-2xl bg-[#F3F3F5] flex items-start gap-2 text-[#444748]">
                   <ShieldCheck className="w-4 h-4 text-[#0B0B0B] shrink-0 mt-0.5" />
@@ -1252,7 +1169,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               <ArrowLeft className="w-5 h-5" />
             </button>
             <h1 className="font-display text-base font-semibold text-[#1A1C1D] truncate">
-              {standaloneCheckin ? 'Event Check-In Screen' : 'Event Invitation & Check-In'}
+              {standaloneCheckin
+                ? 'Event Check-In Screen'
+                : standaloneGifts
+                  ? 'Standalone Gift Table'
+                  : 'Event Invitation & Check-In'}
             </h1>
           </div>
 
@@ -1264,7 +1185,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     type="button"
                     onClick={() => switchScreenMode('top')}
                     className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${
-                      !standaloneCheckin
+                      screenMode === 'top'
                         ? 'bg-[#0B0B0B] text-white'
                         : 'text-[#71717A] hover:text-[#0B0B0B]'
                     }`}
@@ -1282,6 +1203,19 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   >
                     Check-In Screen
                   </button>
+                  {giftTableAvailable && (
+                    <button
+                      type="button"
+                      onClick={() => switchScreenMode('gifts')}
+                      className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+                        standaloneGifts
+                          ? 'bg-[#0B0B0B] text-white'
+                          : 'text-[#71717A] hover:text-[#0B0B0B]'
+                      }`}
+                    >
+                      Gift Table
+                    </button>
+                  )}
                 </div>
                 <select
                   value={selectedEvent.id}
@@ -1337,7 +1271,338 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
           )}
 
           {!issuedPass ? (
-            standaloneCheckin ? (
+            standaloneGifts ? (
+              <>
+                {/* Mobile View Mode Switcher */}
+                <div className="sm:hidden flex items-center justify-between gap-1 bg-white rounded-full p-1.5 shadow-sm border border-[#E5E5EA]">
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('top')}
+                    className="flex-1 py-1.5 rounded-full text-xs font-semibold text-[#71717A]"
+                  >
+                    Invitation
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('checkin')}
+                    className="flex-1 py-1.5 rounded-full text-xs font-semibold text-[#71717A]"
+                  >
+                    Check-In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('gifts')}
+                    className="flex-1 py-1.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white"
+                  >
+                    Gift Table
+                  </button>
+                </div>
+
+                {/* Standalone Gift Table Hero Card */}
+                <section className="bg-[#0B0B0B] text-white rounded-[32px] p-5 sm:p-7 shadow-xl space-y-4">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="space-y-1.5 min-w-0">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white text-[#0B0B0B] text-[10px] font-bold uppercase tracking-wider">
+                        <Gift className="w-3 h-3" />
+                        Standalone Gift Table Activity
+                      </span>
+                      <h2 className="font-display text-xl sm:text-2xl font-bold text-white">
+                        {extraDataConfig.giftTitle || `${selectedEvent.title} — Gift Table`}
+                      </h2>
+                      <p className="text-xs text-zinc-300 leading-relaxed max-w-xl">
+                        Gift pledges, Mobile Money envelopes, and well-wishes are completely separate from guest registration, walk-ins, and gate check-in.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleShare}
+                      className="px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold inline-flex items-center gap-1.5 shrink-0"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copy /e/{selectedEvent.slug}/gifts</span>
+                    </button>
+                  </div>
+
+                  {extraDataConfig.momoNumber && (
+                    <div className="p-3.5 rounded-2xl bg-white/10 border border-white/15 flex flex-wrap items-center justify-between gap-3 text-xs">
+                      <div>
+                        <span className="text-[10px] uppercase tracking-wider text-zinc-300 block">
+                          Receiving MoMo / Gift Account
+                        </span>
+                        <span className="font-mono font-bold text-white">
+                          {extraDataConfig.momoNumber} · {extraDataConfig.momoName || selectedEvent.organizer}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(extraDataConfig.momoNumber || '').catch(() => {});
+                          setShareToast(`Copied MoMo number ${extraDataConfig.momoNumber}`);
+                          setTimeout(() => setShareToast(null), 2200);
+                        }}
+                        className="px-3 py-1.5 rounded-full bg-white text-[#0B0B0B] text-[11px] font-bold"
+                      >
+                        Copy Number
+                      </button>
+                    </div>
+                  )}
+                </section>
+
+                {/* Standalone Gift Table Form or Receipt */}
+                <section className="bg-white rounded-[32px] p-6 sm:p-7 shadow-md border border-[#E5E5EA]/70 space-y-5">
+                  {giftReceipt ? (
+                    <div className="text-center space-y-4 py-2">
+                      <div className="w-14 h-14 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
+                        <Check className="w-7 h-7" />
+                      </div>
+                      <div className="space-y-1">
+                        <span className="inline-block px-3 py-1 rounded-full bg-[#F5F5F7] text-[11px] font-semibold text-[#0B0B0B]">
+                          Gift Table Receipt · Standalone Activity
+                        </span>
+                        <h3 className="font-display text-2xl font-bold text-[#0B0B0B]">
+                          Thank you, {giftReceipt.giverName}!
+                        </h3>
+                        <p className="text-xs text-[#71717A] max-w-md mx-auto">
+                          Your gift entry has been recorded on the {selectedEvent.title} Gift Ledger. Attendance &amp; gate check-in remain completely separate.
+                        </p>
+                      </div>
+                      <div className="max-w-md mx-auto p-4 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] text-left text-xs space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[#71717A]">Gift Type</span>
+                          <span className="font-bold text-[#0B0B0B]">
+                            {giftReceipt.giftType === 'cash-momo'
+                              ? `${giftReceipt.currency || 'GHS'} ${giftReceipt.amount?.toLocaleString()}`
+                              : giftReceipt.giftType === 'registry-item'
+                                ? giftReceipt.registryItem
+                                : 'Well-Wishes Note'}
+                          </span>
+                        </div>
+                        {giftReceipt.side && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-[#71717A]">Side / Honoring</span>
+                            <span className="font-semibold text-[#0B0B0B]">{giftReceipt.side}</span>
+                          </div>
+                        )}
+                        {giftReceipt.message && (
+                          <p className="pt-1 text-[11px] text-[#444748] italic">
+                            &ldquo;{giftReceipt.message}&rdquo;
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap justify-center gap-2.5 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setGiftReceipt(null)}
+                          className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold"
+                        >
+                          Record Another Gift
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => switchScreenMode('top')}
+                          className="px-5 py-2.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-xs font-semibold"
+                        >
+                          Back to Event Page
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <form onSubmit={handleGiftTableSubmit} className="space-y-4">
+                      <div>
+                        <h3 className="font-display text-xl font-bold text-[#0B0B0B]">
+                          Record a Gift, Envelope or Well-Wishes
+                        </h3>
+                        <p className="text-xs text-[#71717A] mt-0.5">
+                          No gate registration or attendee ticket is required to leave a gift or blessing.
+                        </p>
+                      </div>
+
+                      {giftError && (
+                        <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 flex items-start gap-2.5 text-xs text-red-700">
+                          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                          <span>{giftError}</span>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-3 gap-2">
+                        {(
+                          [
+                            { id: 'cash-momo', label: 'MoMo / Cash' },
+                            { id: 'registry-item', label: 'Registry Gift' },
+                            { id: 'blessing-only', label: 'Wishes Note' },
+                          ] as const
+                        ).map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setGiftMode(opt.id)}
+                            className={`py-2.5 px-3 rounded-xl text-xs font-semibold border transition-colors ${
+                              giftMode === opt.id
+                                ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                                : 'bg-[#F5F5F7] text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                            Giver / Family Name <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={giftGiverName}
+                            onChange={(e) => setGiftGiverName(e.target.value)}
+                            placeholder="Your full name or family name"
+                            className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-medium text-[#0B0B0B]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                            Phone Number (Optional)
+                          </label>
+                          <input
+                            type="tel"
+                            value={giftGiverPhone}
+                            onChange={(e) => setGiftGiverPhone(e.target.value)}
+                            placeholder="+233 XX XXX XXXX"
+                            className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B]"
+                          />
+                        </div>
+                      </div>
+
+                      {giftMode === 'cash-momo' && (
+                        <div className="flex gap-2">
+                          <select
+                            value={giftCurrency}
+                            onChange={(e) => setGiftCurrency(e.target.value as 'GHS' | 'USD')}
+                            aria-label="Gift currency"
+                            className="h-11 px-3 rounded-xl bg-[#F5F5F7] text-xs font-bold text-[#0B0B0B]"
+                          >
+                            <option value="GHS">GHS</option>
+                            <option value="USD">USD</option>
+                          </select>
+                          <input
+                            type="number"
+                            min={1}
+                            required
+                            value={giftAmount}
+                            onChange={(e) => setGiftAmount(e.target.value)}
+                            placeholder="Envelope / MoMo amount"
+                            className="flex-1 h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-mono font-semibold text-[#0B0B0B]"
+                          />
+                        </div>
+                      )}
+
+                      {giftMode === 'registry-item' && (
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                            Select Gift Table Registry Item
+                          </label>
+                          <select
+                            value={giftItem}
+                            onChange={(e) => setGiftItem(e.target.value)}
+                            className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-medium text-[#0B0B0B]"
+                          >
+                            {(
+                              extraDataConfig.giftRegistryItems &&
+                              extraDataConfig.giftRegistryItems.length > 0
+                                ? extraDataConfig.giftRegistryItems
+                                : ['Cash Envelope Blessing', 'Gift Hamper', 'Keepsake Item']
+                            ).map((item) => (
+                              <option key={item} value={item}>
+                                {item}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                            Honoring / Side (Optional)
+                          </label>
+                          <input
+                            type="text"
+                            value={giftSide}
+                            onChange={(e) => setGiftSide(e.target.value)}
+                            placeholder="e.g. Bride's Family, Friends, Colleagues"
+                            className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                            Well-Wishes Message (Optional)
+                          </label>
+                          <input
+                            type="text"
+                            value={giftMessage}
+                            onChange={(e) => setGiftMessage(e.target.value)}
+                            placeholder="Write a personal note or blessing..."
+                            className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={giftSubmitting}
+                        className="w-full h-13 bg-[#0B0B0B] hover:opacity-90 disabled:opacity-60 text-white text-sm font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
+                      >
+                        <Gift className="w-4 h-4" />
+                        <span>{giftSubmitting ? 'Recording Gift...' : 'Submit Standalone Gift Entry'}</span>
+                      </button>
+                    </form>
+                  )}
+                </section>
+
+                {/* Live Public Gift Ledger / Well-Wishes Wall */}
+                {(extraDataConfig.giftLedger?.length ?? 0) > 0 && (
+                  <section className="bg-white rounded-[28px] p-5 sm:p-6 shadow-sm space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-[#0B0B0B]">
+                        Gift Table Well-Wishes Wall
+                      </h3>
+                      <span className="text-[11px] text-[#71717A] tabular-nums">
+                        {extraDataConfig.giftLedger?.length ?? 0} entries
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {(extraDataConfig.giftLedger ?? []).slice(0, 8).map((entry) => (
+                        <div
+                          key={entry.id}
+                          className="p-3.5 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-[#0B0B0B] truncate">
+                              {entry.giverName}
+                              {entry.side ? ` · ${entry.side}` : ''}
+                            </p>
+                            {entry.message && (
+                              <p className="text-[11px] text-[#444748] mt-0.5 italic">
+                                &ldquo;{entry.message}&rdquo;
+                              </p>
+                            )}
+                          </div>
+                          <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] shrink-0 self-start sm:self-center">
+                            {entry.giftType === 'cash-momo'
+                              ? `${entry.currency || 'GHS'} ${entry.amount?.toLocaleString()}`
+                              : entry.giftType === 'registry-item'
+                                ? entry.registryItem || 'Registry Gift'
+                                : 'Well-Wishes'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </>
+            ) : standaloneCheckin ? (
               <>
                 {/* Mobile View Mode & Event Switcher */}
                 <div className="sm:hidden flex items-center justify-between gap-2 bg-white rounded-full p-1.5 shadow-sm border border-[#E5E5EA]">
@@ -1346,15 +1611,24 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     onClick={() => switchScreenMode('top')}
                     className="flex-1 py-1.5 rounded-full text-xs font-semibold text-[#71717A]"
                   >
-                    Event Invitation
+                    Invitation
                   </button>
                   <button
                     type="button"
                     onClick={() => switchScreenMode('checkin')}
                     className="flex-1 py-1.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white"
                   >
-                    Check-In Screen
+                    Check-In
                   </button>
+                  {giftTableAvailable && (
+                    <button
+                      type="button"
+                      onClick={() => switchScreenMode('gifts')}
+                      className="flex-1 py-1.5 rounded-full text-xs font-semibold text-[#71717A]"
+                    >
+                      Gift Table
+                    </button>
+                  )}
                 </div>
 
                 {/* Standalone Event Check-In Screen Summary & Gate QR Card */}
@@ -1683,7 +1957,6 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     selectedEvent.city,
                     selectedEvent.ticketPrice === 0 ? 'Free RSVP' : `$${selectedEvent.ticketPrice} Ticket`,
                     validationConfig.enabled ? 'Validated Guest List' : 'Open Entry',
-                    extraDataConfig.enableGiftTable ? 'Couple Gift Table' : 'Custom RSVP Form',
                   ].map((tag) => (
                     <span
                       key={tag}
@@ -1694,6 +1967,34 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   ))}
                 </div>
               </section>
+
+              {/* Standalone Gift Table Launch Card */}
+              {giftTableAvailable && (
+                <section className="bg-[#FBF9F5] border border-[#E6DDD0] text-[#0B0B0B] rounded-[28px] p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-start gap-3.5 min-w-0">
+                    <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
+                      <Gift className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-bold text-[#0B0B0B]">
+                        {extraDataConfig.giftTitle || 'Standalone Gift Table & Registry'}
+                      </h3>
+                      <p className="text-xs text-[#71717A] mt-0.5 leading-relaxed">
+                        Gift pledges, MoMo blessings &amp; well-wishes operate standalone at /e/{selectedEvent.slug}/gifts — separate from registration and gate check-in.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('gifts')}
+                    className="w-full sm:w-auto px-4 py-2.5 rounded-full bg-[#0B0B0B] text-white hover:bg-neutral-800 text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Gift className="w-3.5 h-3.5" />
+                    <span>Open Gift Table</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </section>
+              )}
 
               {/* Event Disposable Camera Launch Card */}
               {onOpenDisposableCamera && (
@@ -1717,57 +2018,51 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     className="w-full sm:w-auto px-4 py-2.5 rounded-full bg-[#0B0B0B] text-white hover:bg-neutral-800 text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
                   >
                     <Camera className="w-3.5 h-3.5" />
-                    <span>{isSignedIn ? 'Open Camera' : 'Sign In for Camera'}</span>
+                    <span>Open Disposable Camera (5 Shots)</span>
                   </button>
                 </section>
               )}
 
-              {/* Featured Program / Hosts */}
-              <section className="space-y-2.5">
-                <div className="flex items-center justify-between px-1">
-                  <h3 className="text-base font-semibold text-[#0B0B0B]">
-                    {selectedEvent.category === 'Wedding'
-                      ? 'Officiants & Ceremony Hosts'
-                      : selectedEvent.category === 'Funeral'
-                        ? 'Tributes & Family Officiants'
-                        : selectedEvent.category === 'Church'
-                          ? 'Ministers & Choir Leaders'
-                          : selectedEvent.category === 'Musical'
-                            ? 'Headline Artists & Lineup'
-                            : 'Featured Speakers & Hosts'}
-                  </h3>
-                  <span className="text-[11px] font-medium text-[#71717A]">
-                    {SPEAKERS.length} Highlights
-                  </span>
-                </div>
-
-                {SPEAKERS.map((spk) => (
-                  <div
-                    key={spk.name}
-                    className="bg-white rounded-[24px] p-4 shadow-sm flex items-center gap-4"
-                  >
-                    <div className="w-14 h-14 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center font-bold text-sm shrink-0">
-                      {spk.initials}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <h4 className="text-base font-semibold text-[#0B0B0B] truncate">
-                          {spk.name}
-                        </h4>
-                        <span className="text-[11px] font-medium bg-[#F3F3F5] text-[#71717A] px-2.5 py-0.5 rounded-full shrink-0 tabular-nums">
-                          {spk.time}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-[#71717A] uppercase tracking-wider truncate mt-0.5">
-                        {spk.role}
-                      </p>
-                      <p className="text-[13px] text-[#444748] mt-0.5 truncate font-medium">
-                        {spk.topic}
-                      </p>
-                    </div>
+              {/* Program Schedule Blocks (only rendered when organizer has added real schedule items) */}
+              {eventScheduleBlocks.length > 0 && (
+                <section className="space-y-2.5">
+                  <div className="flex items-center justify-between px-1">
+                    <h3 className="text-base font-semibold text-[#0B0B0B]">
+                      Event Schedule &amp; Run of Show
+                    </h3>
+                    <span className="text-[11px] font-medium text-[#71717A]">
+                      {eventScheduleBlocks.length} Sessions
+                    </span>
                   </div>
-                ))}
-              </section>
+
+                  {eventScheduleBlocks.map((blk) => (
+                    <div
+                      key={blk.id}
+                      className="bg-white rounded-[24px] p-4 shadow-sm flex items-center gap-4"
+                    >
+                      <div className="w-14 h-14 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center font-bold text-[11px] shrink-0 text-center px-1 tabular-nums">
+                        {blk.time.split('-')[0]?.trim() || blk.time}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <h4 className="text-base font-semibold text-[#0B0B0B] truncate">
+                            {blk.title}
+                          </h4>
+                          <span className="text-[11px] font-medium bg-[#F3F3F5] text-[#71717A] px-2.5 py-0.5 rounded-full shrink-0 tabular-nums">
+                            {blk.time}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-[#71717A] uppercase tracking-wider truncate mt-0.5">
+                          {blk.lead}
+                        </p>
+                        <p className="text-[13px] text-[#444748] mt-0.5 truncate font-medium">
+                          {blk.stage}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </section>
+              )}
 
               {/* Venue Location Preview (Architectural Card — no external broken URLs) */}
               <section className="bg-white rounded-[28px] p-5 shadow-sm space-y-3">
@@ -1804,7 +2099,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 </div>
               </section>
 
-              {/* Guest Validation, Gift Table & Check-In Registration Form */}
+              {/* Guest Validation & Check-In Registration Form */}
               {registerSectionCard}
             </>
             )
@@ -1907,41 +2202,19 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   </button>
                 </div>
 
-                {/* Recorded Gift Table or Extra Data Summary */}
-                {(issuedPass.giftEntry || issuedPass.customResponses) && (
-                  <div className="mb-4 p-4 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] space-y-2 text-xs">
-                    {issuedPass.giftEntry && (
-                      <div className="flex items-start gap-2">
-                        <Gift className="w-4 h-4 text-[#0B0B0B] shrink-0 mt-0.5" />
-                        <div>
-                          <p className="font-semibold text-[#0B0B0B]">
-                            Wedding Gift Table Recorded:{' '}
-                            {issuedPass.giftEntry.giftType === 'cash-momo'
-                              ? `${issuedPass.giftEntry.currency || 'GHS'} ${issuedPass.giftEntry.amount?.toLocaleString()} Cash / MoMo Blessing`
-                              : issuedPass.giftEntry.giftType === 'registry-item'
-                                ? issuedPass.giftEntry.registryItem
-                                : 'Couple Well-Wishes Note'}
-                          </p>
-                          {issuedPass.giftEntry.message && (
-                            <p className="text-[11px] text-[#71717A] mt-0.5 italic">
-                              &ldquo;{issuedPass.giftEntry.message}&rdquo;
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    {issuedPass.customResponses && (
-                      <div className="flex flex-wrap gap-1.5 pt-1">
-                        {Object.entries(issuedPass.customResponses).map(([k, v]) => (
-                          <span
-                            key={k}
-                            className="px-2.5 py-0.5 rounded-full bg-white border border-[#E5E5EA] text-[11px] text-[#0B0B0B]"
-                          >
-                            {k}: <strong>{v}</strong>
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                {/* Extra Custom Registration Responses */}
+                {issuedPass.customResponses && Object.keys(issuedPass.customResponses).length > 0 && (
+                  <div className="mb-4 p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2 text-xs">
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.entries(issuedPass.customResponses).map(([k, v]) => (
+                        <span
+                          key={k}
+                          className="px-2.5 py-0.5 rounded-full bg-white border border-[#E5E5EA] text-[11px] text-[#0B0B0B]"
+                        >
+                          {k}: <strong>{v}</strong>
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 )}
 
@@ -2041,15 +2314,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 {onOpenDisposableCamera && (
                   <button
                     type="button"
-                    onClick={() => onOpenDisposableCamera(selectedEvent.id, issuedPass.name)}
+                    onClick={() =>
+                      onOpenDisposableCamera(selectedEvent.id, issuedPass.name, issuedPass.ticketCode)
+                    }
                     className="w-full h-12 bg-[#0B0B0B] text-white rounded-full flex items-center justify-center gap-2 hover:bg-neutral-800 transition-colors shadow-sm text-sm font-semibold"
                   >
                     <Camera className="w-4.5 h-4.5" />
-                    <span>
-                      {isSignedIn
-                        ? 'Snap Photos on Disposable Camera'
-                        : 'Sign In to Use Disposable Camera'}
-                    </span>
+                    <span>Open Disposable Camera (5 Shots &amp; Collage)</span>
                   </button>
                 )}
                 <button
@@ -2107,74 +2378,43 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 </div>
               </div>
 
-              {/* Event Program Preview */}
-              <div className="bg-white rounded-[28px] p-5 mb-6 shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-base font-semibold text-[#0B0B0B]">
-                    {selectedEvent.category} Schedule Preview
-                  </h3>
-                  <span className="text-[11px] text-[#71717A]">Local Event Time</span>
-                </div>
-                <div className="space-y-2.5">
-                  {(selectedEvent.category === 'Wedding'
-                    ? [
-                        { time: '10:00 AM', title: 'Guest Arrival & Processional', meta: 'Main Sanctuary · Ushers & String Quartet', active: true },
-                        { time: '11:30 AM', title: 'Exchange of Vows & Blessing', meta: 'Altar · Ceremony Officiants', active: false },
-                        { time: '02:00 PM', title: 'Grand Reception & Dinner Banquet', meta: 'Garden Pavilion · Live Band', active: false },
-                      ]
-                    : selectedEvent.category === 'Funeral'
-                    ? [
-                        { time: '07:30 AM', title: 'Filing Past & Laying in State', meta: 'Memorial Hall · Family Reception', active: true },
-                        { time: '09:30 AM', title: 'Memorial Service & Tributes', meta: 'Main Forecourt · Officiating Clergy', active: false },
-                        { time: '01:00 PM', title: 'Thanksgiving & Refreshments', meta: 'Family Grounds · Traditional Ensemble', active: false },
-                      ]
-                    : selectedEvent.category === 'Church'
-                    ? [
-                        { time: '05:30 PM', title: 'Doors Open & Prayer Watch', meta: 'Main Auditorium · Intercessory Team', active: true },
-                        { time: '06:30 PM', title: 'Mass Choir Worship Ministration', meta: 'Sanctuary Stage · Praise & Worship', active: false },
-                        { time: '08:00 PM', title: 'Keynote Word & Altar Ministration', meta: 'Main Altar · Guest Minister', active: false },
-                      ]
-                    : selectedEvent.category === 'Musical'
-                    ? [
-                        { time: '06:00 PM', title: 'Gate Entry & Soundcheck Lounge', meta: 'VIP & General Concourse · DJ Opening Set', active: true },
-                        { time: '08:00 PM', title: 'Live Acoustic & Backing Band', meta: 'Main Stage · Supporting Acts', active: false },
-                        { time: '10:00 PM', title: 'Headliner Live Performance', meta: 'Arena Stage · Full Production Finale', active: false },
-                      ]
-                    : selectedEvent.category === 'Corporate'
-                    ? [
-                        { time: '05:30 PM', title: 'Executive Red Carpet & Cocktails', meta: 'Atrium Foyer · Press & Leadership', active: true },
-                        { time: '07:00 PM', title: 'Annual Address & Dinner Service', meta: 'Grand Ballroom · Executive Board', active: false },
-                        { time: '08:45 PM', title: 'Industry Excellence Awards', meta: 'Main Podium · Presentation & Gala', active: false },
-                      ]
-                    : [
-                        { time: '10:00 AM', title: 'Opening Keynote & Welcome', meta: 'Main Auditorium · Lead Host', active: true },
-                        { time: '01:30 PM', title: 'Featured Panel & Live Showcase', meta: 'Hall B · Guest Speakers', active: false },
-                        { time: '03:45 PM', title: 'Closing Fireside & Networking', meta: 'Executive Stage · Q&A Session', active: false },
-                      ]
-                  ).map((item) => (
-                    <div
-                      key={item.time}
-                      className="flex items-start gap-3 p-3 bg-[#F5F5F7] rounded-2xl"
-                    >
+              {/* Event Program Preview (only rendered when organizer configured real schedule blocks) */}
+              {eventScheduleBlocks.length > 0 && (
+                <div className="bg-white rounded-[28px] p-5 mb-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-base font-semibold text-[#0B0B0B]">
+                      {selectedEvent.category} Schedule Preview
+                    </h3>
+                    <span className="text-[11px] text-[#71717A]">Local Event Time</span>
+                  </div>
+                  <div className="space-y-2.5">
+                    {eventScheduleBlocks.map((item, idx) => (
                       <div
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium shrink-0 tabular-nums ${
-                          item.active
-                            ? 'bg-[#0B0B0B] text-white'
-                            : 'bg-[#E8E8EA] text-[#0B0B0B]'
-                        }`}
+                        key={item.id}
+                        className="flex items-start gap-3 p-3 bg-[#F5F5F7] rounded-2xl"
                       >
-                        {item.time}
+                        <div
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium shrink-0 tabular-nums ${
+                            idx === 0
+                              ? 'bg-[#0B0B0B] text-white'
+                              : 'bg-[#E8E8EA] text-[#0B0B0B]'
+                          }`}
+                        >
+                          {item.time}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[13px] font-semibold text-[#0B0B0B] truncate">
+                            {item.title}
+                          </p>
+                          <p className="text-[11px] text-[#71717A]">
+                            {item.stage} · {item.lead}
+                          </p>
+                        </div>
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[13px] font-semibold text-[#0B0B0B] truncate">
-                          {item.title}
-                        </p>
-                        <p className="text-[11px] text-[#71717A]">{item.meta}</p>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Switch between guest demo and studio */}
               <div className="flex flex-wrap items-center justify-center gap-3 mb-4">

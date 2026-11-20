@@ -11,6 +11,7 @@ import {
   validateStrictPassword,
   validateStrictPhoneE164,
 } from '../data/initialData';
+import { resolveEventMessage } from './eventMessages';
 import type {
   AppRole,
   Attendee,
@@ -32,6 +33,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
   SystemAlert,
@@ -145,8 +147,6 @@ function hashPassword(password: string): string {
 
 function createInitialDb(): LocalDatabase {
   const creatorId = 'usr-primary-creator';
-  const partnerId = 'usr-grace-chapel';
-  const enterpriseId = 'usr-meridian-corp';
 
   const creatorProfile: OrganizerProfile = {
     ...INITIAL_PROFILE,
@@ -157,7 +157,7 @@ function createInitialDb(): LocalDatabase {
     email: CREATOR_EMAIL,
     studio: 'Apps Creator Console',
     plan: 'Pro Organizer',
-    smsCredits: 1840,
+    smsCredits: 0,
     capacityAlertThreshold: 90,
     timezone: 'Africa/Accra',
     twoFactorEnabled: false,
@@ -171,76 +171,21 @@ function createInitialDb(): LocalDatabase {
       passwordHash: null,
       profile: creatorProfile,
       suspended: false,
-      lastLoginAt: new Date(Date.now() - 18 * 60 * 1000).toISOString(),
-      createdAt: '2026-09-14T08:30:00.000Z',
-    },
-    [partnerId]: {
-      id: partnerId,
-      email: 'events@gracechapel.org',
-      passwordHash: hashPassword('grace2026'),
-      profile: {
-        name: 'Pastor Daniel Adjei',
-        firstName: 'Daniel',
-        role: 'Lead Organiser',
-        appRole: 'organizer',
-        email: 'events@gracechapel.org',
-        studio: 'Grace Chapel Ministry',
-        plan: 'Starter',
-        smsCredits: 14,
-        capacityAlertThreshold: 90,
-        timezone: 'Africa/Accra',
-        twoFactorEnabled: true,
-        senderId: 'GRACECH',
-      },
-      suspended: false,
-      lastLoginAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
-      createdAt: '2026-10-02T11:15:00.000Z',
-    },
-    [enterpriseId]: {
-      id: enterpriseId,
-      email: 'ops@meridianbank.ng',
-      passwordHash: hashPassword('meridian2026'),
-      profile: {
-        name: 'Chidi Okonkwo',
-        firstName: 'Chidi',
-        role: 'VP Corporate Events',
-        appRole: 'organizer',
-        email: 'ops@meridianbank.ng',
-        studio: 'Meridian Financial Group',
-        plan: 'Enterprise',
-        smsCredits: 4200,
-        capacityAlertThreshold: 95,
-        timezone: 'Africa/Lagos',
-        twoFactorEnabled: true,
-        senderId: 'MERIDIAN',
-      },
-      suspended: false,
-      lastLoginAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
-      createdAt: '2026-09-20T09:00:00.000Z',
+      lastLoginAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
     },
   };
-
-  const events = INITIAL_EVENTS.map((evt) => ({
-    ...evt,
-    organizer: creatorProfile.name || evt.organizer,
-    organizerId: creatorId,
-  }));
-
-  const alerts = INITIAL_ALERTS.map((al) => ({
-    ...al,
-    organizerId: creatorId,
-  }));
 
   return {
     users,
     sessions: {},
     pendingSignups: {},
-    events,
-    attendees: INITIAL_ATTENDEES.map((a) => ({ ...a })),
-    scheduleBlocks: INITIAL_SCHEDULE.map((b) => ({ ...b })),
-    alerts,
-    disposableShots: INITIAL_DISPOSABLE_SHOTS.map((s) => ({ ...s })),
-    rollSettings: { ...INITIAL_ROLL_SETTINGS },
+    events: [],
+    attendees: [],
+    scheduleBlocks: [],
+    alerts: [],
+    disposableShots: [],
+    rollSettings: {},
     creatorApps: [],
     creatorAppLogs: [],
     flags: {
@@ -248,12 +193,12 @@ function createInitialDb(): LocalDatabase {
       pausedEventIds: [],
       smsMode: 'sandbox',
       signupsEnabled: true,
-      starterSeedingEnabled: true,
+      starterSeedingEnabled: false,
     },
     recentErrors: [],
     duplicateBlocksByEvent: {},
     diagnosticFailures: [],
-    gatewayBalanceCredits: 25000,
+    gatewayBalanceCredits: 0,
   };
 }
 
@@ -502,6 +447,11 @@ export async function localFallbackRequest<T>(
       ok: true,
       database: 'browser-local',
       supabaseConfigured: false,
+      arkeselConfigured: false,
+      arkeselSenderIdConfigured: Boolean(db.flags.arkeselSenderId),
+      arkeselActiveSenderId: db.flags.arkeselSenderId || 'EVENTSAPP',
+      smsMode: db.flags.smsMode,
+      otpStorage: 'browser-local',
       inMemoryFallback: true,
       creatorEmail: CREATOR_EMAIL,
       creatorPasswordConfigured: false,
@@ -918,6 +868,48 @@ export async function localFallbackRequest<T>(
     return { attendee, event: cleanEvent } as T;
   }
 
+  const publicGiftMatch = path.match(/^\/public\/events\/([^/]+)\/gifts$/);
+  if (method === 'POST' && publicGiftMatch) {
+    const target = decodeURIComponent(publicGiftMatch[1]).trim().toLowerCase();
+    const evt = db.events.find(
+      (e) => e.id.toLowerCase() === target || e.slug.toLowerCase() === target
+    );
+    if (!evt) throw new LocalApiError('Event Gift Table not found.', 404);
+    const payload = body as Partial<GiftTableEntry>;
+    const giverName = String(payload.giverName || '').trim();
+    if (!giverName) throw new LocalApiError('Your name is required on the Gift Table entry.', 400);
+    const giftType: GiftTableEntry['giftType'] =
+      payload.giftType === 'cash-momo' || payload.giftType === 'registry-item' || payload.giftType === 'blessing-only'
+        ? payload.giftType
+        : 'cash-momo';
+    const gift: GiftTableEntry = {
+      id: `gift-${Date.now()}-${randomHex(2)}`,
+      eventId: evt.id,
+      giverName,
+      giverPhone: payload.giverPhone?.trim() ? normalizePhoneE164(payload.giverPhone.trim()) : undefined,
+      giftType,
+      currency: payload.currency === 'USD' ? 'USD' : 'GHS',
+      amount: giftType === 'cash-momo' ? Math.max(1, Number(payload.amount) || 0) : undefined,
+      registryItem:
+        giftType === 'registry-item'
+          ? payload.registryItem?.trim() || evt.extraDataConfig?.giftRegistryItems?.[0] || 'Registry Gift'
+          : undefined,
+      side: payload.side?.trim() || undefined,
+      message: payload.message?.trim() || undefined,
+      recordedVia: 'public-table',
+      createdAt: new Date().toISOString(),
+    };
+    const existingExtra = evt.extraDataConfig ?? { enableGiftTable: true, customFields: [] };
+    evt.extraDataConfig = {
+      ...existingExtra,
+      enableGiftTable: true,
+      giftLedger: [gift, ...(existingExtra.giftLedger ?? [])],
+    };
+    saveDb(db);
+    const { organizerId: _org, ...cleanEvent } = evt;
+    return { gift, event: cleanEvent } as T;
+  }
+
   // Public Disposable Camera routes
   const publicCamMatch = path.match(/^\/public\/camera\/([^/]+)$/);
   if (method === 'GET' && publicCamMatch) {
@@ -936,7 +928,22 @@ export async function localFallbackRequest<T>(
       exposuresLimit: 24,
       darkroomMode: false,
     };
-    return { event: cleanEvent, shots, rollSettings } as T;
+    const rawQuery = url.includes('?') ? url.split('?')[1] : '';
+    const passParam = new URLSearchParams(rawQuery).get('pass')?.trim().toLowerCase() || '';
+    const matchedPassAtt = passParam
+      ? db.attendees.find(
+          (a) => a.eventId === matched.id && a.ticketCode.trim().toLowerCase() === passParam
+        )
+      : undefined;
+    const verifiedPass = matchedPassAtt
+      ? {
+          attendeeName: matchedPassAtt.name,
+          ticketCode: matchedPassAtt.ticketCode,
+          checkedIn: matchedPassAtt.checkedIn,
+          tier: matchedPassAtt.tier,
+        }
+      : null;
+    return { event: cleanEvent, shots, rollSettings, verifiedPass } as T;
   }
 
   const publicCamShotMatch = path.match(/^\/public\/camera\/([^/]+)\/shots$/);
@@ -1003,15 +1010,7 @@ export async function localFallbackRequest<T>(
 
   if (method === 'POST' && path === '/studio/seed-starter') {
     requireRoles(user, ['creator', 'organizer']);
-    if (!db.flags.starterSeedingEnabled) {
-      throw new LocalApiError(
-        'Starter data seeding is currently disabled by platform administrator.',
-        403
-      );
-    }
-    seedStarterForUser(db, user.id, user.profile.name);
-    saveDb(db);
-    return loadUserWorkspace(db, user.id) as T;
+    throw new LocalApiError('Demo and starter data seeding has been removed.', 403);
   }
 
   if (method === 'PATCH' && path === '/studio/profile') {
@@ -1061,6 +1060,37 @@ export async function localFallbackRequest<T>(
     delete db.users[user.id];
     saveDb(db);
     return { ok: true, deletedUserId: user.id } as T;
+  }
+
+  if (method === 'POST' && path === '/studio/sms/test') {
+    requireRoles(user, ['creator', 'organizer']);
+    const phoneCheck = validateStrictPhoneE164(String(body.phone || ''));
+    if (!phoneCheck.ok) {
+      throw new LocalApiError(phoneCheck.error, 400);
+    }
+    const isSandbox = db.flags.smsMode === 'sandbox';
+    if (user.profile.smsCredits <= 0 && !isSandbox) {
+      throw new LocalApiError('No SMS credits remaining in your organizer balance.', 400);
+    }
+    const rawSender = String(body.senderId || user.profile.senderId || db.flags.arkeselSenderId || 'EVENTSAPP')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 11) || 'EVENTSAPP';
+    const nextCredits = isSandbox
+      ? user.profile.smsCredits
+      : Math.max(0, user.profile.smsCredits - 1);
+    user.profile.smsCredits = nextCredits;
+    saveDb(db);
+    return {
+      ok: true,
+      phone: phoneCheck.normalized,
+      senderId: rawSender,
+      messageId: `loc-sms-${randomHex(4)}`,
+      sandbox: true,
+      warning:
+        'Browser local fallback mode is active (sandbox simulation). Connect live Node server with ARKESEL_API_KEY for real carrier delivery.',
+      smsCredits: nextCredits,
+    } as T;
   }
 
   if (method === 'POST' && path === '/studio/events') {
@@ -1127,8 +1157,65 @@ export async function localFallbackRequest<T>(
     evt.smsDispatched += 1;
     evt.revenue += evt.ticketPrice;
     saveDb(db);
+    const resolved = resolveEventMessage({
+      type: att.checkedIn ? 'checkin' : 'confirmation',
+      event: evt,
+      attendeeName: att.name,
+      ticketCode: att.ticketCode,
+      originOverride:
+        typeof window !== 'undefined' && window.location?.origin
+          ? window.location.origin
+          : 'https://www.eventsbyyou.xyz',
+      includeGuestInCameraUrl: true,
+    });
     const { organizerId: _org, ...cleanEvent } = evt;
-    return { attendee: att, event: cleanEvent } as T;
+    return {
+      attendee: att,
+      event: cleanEvent,
+      cameraUrl: resolved.cameraUrl,
+      dispatchedMessage: resolved.text,
+    } as T;
+  }
+
+  const studioGiftMatch = path.match(/^\/studio\/events\/([^/]+)\/gifts$/);
+  if (method === 'POST' && studioGiftMatch) {
+    requireRoles(user, ['creator', 'organizer', 'gate_staff']);
+    const eventId = decodeURIComponent(studioGiftMatch[1]);
+    const evt = db.events.find((e) => e.id === eventId && e.organizerId === user.id);
+    if (!evt) throw new LocalApiError('Event not found.', 404);
+    const payload = body as Partial<GiftTableEntry>;
+    const giverName = String(payload.giverName || '').trim();
+    if (!giverName) throw new LocalApiError('Donor name is required.', 400);
+    const giftType: GiftTableEntry['giftType'] =
+      payload.giftType === 'cash-momo' || payload.giftType === 'registry-item' || payload.giftType === 'blessing-only'
+        ? payload.giftType
+        : 'cash-momo';
+    const gift: GiftTableEntry = {
+      id: `gift-${Date.now()}-${randomHex(2)}`,
+      eventId: evt.id,
+      giverName,
+      giverPhone: payload.giverPhone?.trim() ? normalizePhoneE164(payload.giverPhone.trim()) : undefined,
+      giftType,
+      currency: payload.currency === 'USD' ? 'USD' : 'GHS',
+      amount: giftType === 'cash-momo' ? Math.max(1, Number(payload.amount) || 0) : undefined,
+      registryItem:
+        giftType === 'registry-item'
+          ? payload.registryItem?.trim() || evt.extraDataConfig?.giftRegistryItems?.[0] || 'Registry Gift'
+          : undefined,
+      side: payload.side?.trim() || undefined,
+      message: payload.message?.trim() || undefined,
+      recordedVia: 'gift-desk',
+      createdAt: new Date().toISOString(),
+    };
+    const existingExtra = evt.extraDataConfig ?? { enableGiftTable: true, customFields: [] };
+    evt.extraDataConfig = {
+      ...existingExtra,
+      enableGiftTable: true,
+      giftLedger: [gift, ...(existingExtra.giftLedger ?? [])],
+    };
+    saveDb(db);
+    const { organizerId: _org, ...cleanEvent } = evt;
+    return { gift, event: cleanEvent } as T;
   }
 
   const evtMatch = path.match(/^\/studio\/events\/([^/]+)$/);
@@ -1166,11 +1253,26 @@ export async function localFallbackRequest<T>(
     }
     saveDb(db);
     const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://www.eventsbyyou.xyz';
-    const cameraUrl =
-      att.checkedIn && evt
-        ? `${origin}/e/${encodeURIComponent(evt.slug || evt.id)}/camera?guest=${encodeURIComponent(att.name)}`
-        : undefined;
-    return { attendee: att, checkInMessageSent: Boolean(att.checkedIn && evt), cameraUrl } as T;
+    let cameraUrl: string | undefined;
+    let dispatchedMessage: string | undefined;
+    if (att.checkedIn && evt) {
+      const resolved = resolveEventMessage({
+        type: 'checkin',
+        event: evt,
+        attendeeName: att.name,
+        ticketCode: att.ticketCode,
+        originOverride: origin,
+        includeGuestInCameraUrl: true,
+      });
+      cameraUrl = resolved.cameraUrl;
+      dispatchedMessage = resolved.text;
+    }
+    return {
+      attendee: att,
+      checkInMessageSent: Boolean(att.checkedIn && evt),
+      cameraUrl,
+      dispatchedMessage,
+    } as T;
   }
 
   const retryPayMatch = path.match(/^\/studio\/attendees\/([^/]+)\/retry-payment$/);
@@ -1695,6 +1797,34 @@ export async function localFallbackRequest<T>(
       return { retried } as T;
     }
 
+    if (method === 'POST' && path === '/builder/sms/sync-dlr') {
+      return {
+        ok: true,
+        balance: {
+          ok: true,
+          balanceCredits: db.gatewayBalanceCredits,
+        },
+        dlr: {
+          ok: true,
+          checked: 0,
+          updated: 0,
+        },
+        emailDiagnostics: {
+          resendConfigured: false,
+          activeFrom: 'onboarding@resend.dev',
+          domainName: 'resend.dev',
+          domainVerified: false,
+          usingSharedSandboxSender: true,
+          usingSupabaseFallback: false,
+          verifiedDomains: [],
+          dnsStatus: 'unconfigured',
+          recommendation:
+            'Browser local fallback mode is active. Configure RESEND_API_KEY & verified RESEND_FROM_EMAIL on the server for inbox delivery.',
+        },
+        recentDispatches: [],
+      } as T;
+    }
+
     if (method === 'PATCH' && path === '/builder/flags') {
       const patch = body as Partial<BuilderFeatureFlags>;
       if (typeof patch.publicRegistrationsPaused === 'boolean') {
@@ -1705,6 +1835,14 @@ export async function localFallbackRequest<T>(
       }
       if (patch.smsMode === 'live' || patch.smsMode === 'sandbox') {
         db.flags.smsMode = patch.smsMode;
+      }
+      if (typeof patch.arkeselSenderId === 'string') {
+        const cleaned = patch.arkeselSenderId
+          .trim()
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, '')
+          .slice(0, 11);
+        db.flags.arkeselSenderId = cleaned || undefined;
       }
       if (typeof patch.signupsEnabled === 'boolean') {
         db.flags.signupsEnabled = patch.signupsEnabled;

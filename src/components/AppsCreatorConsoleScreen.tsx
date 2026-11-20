@@ -13,6 +13,7 @@ import {
   KeyRound,
   Lock,
   LogOut,
+  Mail,
   Pause,
   Play,
   Plus,
@@ -211,6 +212,9 @@ export const AppsCreatorConsoleScreen: React.FC<AppsCreatorConsoleScreenProps> =
   const [tenantSearch, setTenantSearch] = useState('');
   const [tenantInspection, setTenantInspection] = useState<BuilderTenantInspection | null>(null);
   const [inspectLoading, setInspectLoading] = useState(false);
+  const [syncingDlr, setSyncingDlr] = useState(false);
+  const [dlrSyncSummary, setDlrSyncSummary] = useState<string | null>(null);
+  const [defaultSenderInput, setDefaultSenderInput] = useState('');
 
   // Tester & Logs state
   const [selectedWebhookTrigger, setSelectedWebhookTrigger] = useState<WebhookTriggerEvent>('attendee.registered');
@@ -242,6 +246,16 @@ export const AppsCreatorConsoleScreen: React.FC<AppsCreatorConsoleScreenProps> =
       refreshBuilderOverview();
     }
   }, [isConsoleReady, refreshBuilderOverview]);
+
+  useEffect(() => {
+    if (builderOverview) {
+      setDefaultSenderInput(
+        builderOverview.flags.arkeselSenderId ||
+          builderOverview.smsTelemetry.activeSenderId ||
+          'EVENTSAPP'
+      );
+    }
+  }, [builderOverview]);
 
   const showToast = (msg: string) => {
     setBuilderFeedback(msg);
@@ -407,10 +421,35 @@ export const AppsCreatorConsoleScreen: React.FC<AppsCreatorConsoleScreenProps> =
     }
   };
 
+  const handleSyncSmsDlr = async () => {
+    setSyncingDlr(true);
+    setBuilderError(null);
+    try {
+      const res = await api.builder.syncSmsDlr();
+      const parts: string[] = [];
+      if (res.balance?.ok && typeof res.balance.balanceCredits === 'number') {
+        parts.push(`Arkesel Balance: ${res.balance.balanceCredits.toLocaleString()} credits`);
+      } else if (res.balance?.error) {
+        parts.push(`Balance err: ${res.balance.error}`);
+      }
+      if (res.dlr) {
+        parts.push(`DLR checked: ${res.dlr.checked} (${res.dlr.updated} updated)`);
+      }
+      setDlrSyncSummary(parts.join(' · ') || 'Synced Arkesel balance & DLR.');
+      showToast('Synced Arkesel balance, DLR & Resend diagnostics.');
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Failed to sync SMS DLR');
+    } finally {
+      setSyncingDlr(false);
+    }
+  };
+
   const handleUpdateFlag = async (
     patch: Partial<{
       publicRegistrationsPaused: boolean;
       smsMode: 'live' | 'sandbox';
+      arkeselSenderId: string;
       signupsEnabled: boolean;
       starterSeedingEnabled: boolean;
     }>,
@@ -1065,14 +1104,26 @@ const { attendee, event } = await response.json();`;
                         Arkesel SMS &amp; Gateway Telemetry
                       </h2>
                       <p className="text-xs text-[#71717A]">
-                        Carrier delivery rate, organizer credit liabilities, and failed SMS retry queue
+                        Carrier delivery rate, active Sender ID, DLR receipts &amp; retry queue
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-2.5 py-1 rounded-md bg-[#F5F5F7] border border-[#E5E5EA] font-mono text-xs font-semibold text-[#0B0B0B]">
+                      Sender: {builderOverview.smsTelemetry.activeSenderId || 'EVENTSAPP'}
+                    </span>
                     <span className="px-2.5 py-1 rounded-md bg-[#F5F5F7] border border-[#E5E5EA] font-mono text-xs font-semibold text-[#0B0B0B] uppercase">
                       Mode: {builderOverview.smsTelemetry.mode}
                     </span>
+                    <button
+                      type="button"
+                      disabled={syncingDlr}
+                      onClick={() => void handleSyncSmsDlr()}
+                      className="px-3.5 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${syncingDlr ? 'animate-spin' : ''}`} />
+                      <span>{syncingDlr ? 'Syncing...' : 'Sync Balance & DLR'}</span>
+                    </button>
                     {builderOverview.smsTelemetry.failedQueue.length > 0 && (
                       <button
                         type="button"
@@ -1090,6 +1141,24 @@ const { attendee, event } = await response.json();`;
                     )}
                   </div>
                 </div>
+
+                {builderOverview.smsTelemetry.usingDefaultSenderIdWarning && (
+                  <div className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-950">
+                    <strong>Carrier Filter Warning:</strong> Server default Sender ID is unverified (
+                    <span className="font-mono">{builderOverview.smsTelemetry.activeSenderId}</span>). Ghana telcos (MTN/Telecel/AT) deduct Arkesel SMS credits on API acceptance but silently drop unregistered Sender IDs. Register an approved Sender ID in Arkesel or override it under Kill Switches.
+                  </div>
+                )}
+
+                {(dlrSyncSummary || builderOverview.smsTelemetry.gatewayBalanceError) && (
+                  <div className="rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] px-4 py-2.5 text-xs text-[#0B0B0B] flex flex-wrap items-center justify-between gap-2">
+                    <span>{dlrSyncSummary || builderOverview.smsTelemetry.gatewayBalanceError}</span>
+                    {builderOverview.smsTelemetry.dlrWebhookUrl && (
+                      <span className="font-mono text-[11px] text-[#71717A]">
+                        DLR Webhook: {builderOverview.smsTelemetry.dlrWebhookUrl}
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div className="rounded-2xl bg-[#F5F5F7] p-4">
@@ -1113,7 +1182,9 @@ const { attendee, event } = await response.json();`;
                     <p className="font-display text-2xl font-bold text-[#0B0B0B] mt-1 tabular-nums">
                       {builderOverview.smsTelemetry.gatewayBalanceCredits.toLocaleString()}
                     </p>
-                    <p className="text-[11px] text-[#71717A] mt-0.5">Arkesel pool credits</p>
+                    <p className="text-[11px] text-[#71717A] mt-0.5">
+                      {builderOverview.smsTelemetry.gatewayBalanceLive ? 'Live Arkesel balance' : 'Arkesel pool credits'}
+                    </p>
                   </div>
                   <div className="rounded-2xl bg-[#F5F5F7] p-4">
                     <p className="text-xs text-[#71717A]">Tenant Liabilities</p>
@@ -1123,6 +1194,41 @@ const { attendee, event } = await response.json();`;
                     <p className="text-[11px] text-[#71717A] mt-0.5">Allocated to organisers</p>
                   </div>
                 </div>
+
+                {builderOverview.smsTelemetry.recentDispatches &&
+                  builderOverview.smsTelemetry.recentDispatches.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-[#0B0B0B]">
+                        Recent Arkesel Carrier Receipts &amp; DLR Status
+                      </p>
+                      <div className="rounded-2xl border border-[#E5E5EA] overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="border-b border-[#E5E5EA] bg-[#F5F5F7] text-[#71717A] font-semibold">
+                              <th className="py-2 px-3">Recipient</th>
+                              <th className="py-2 px-3">Sender ID</th>
+                              <th className="py-2 px-3">Purpose</th>
+                              <th className="py-2 px-3">Gateway</th>
+                              <th className="py-2 px-3">DLR</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#E5E5EA]">
+                            {builderOverview.smsTelemetry.recentDispatches.slice(0, 10).map((d) => (
+                              <tr key={d.id}>
+                                <td className="py-2 px-3 font-mono text-[#0B0B0B]">{d.recipient}</td>
+                                <td className="py-2 px-3 font-mono text-[#0B0B0B]">{d.senderId}</td>
+                                <td className="py-2 px-3 uppercase text-[11px] text-[#71717A]">{d.purpose}</td>
+                                <td className="py-2 px-3 font-mono text-[#0B0B0B]">{d.gatewayStatus}</td>
+                                <td className="py-2 px-3 font-mono font-semibold text-[#0B0B0B]">
+                                  {d.dlrStatus}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
 
                 {builderOverview.smsTelemetry.failedQueue.length === 0 ? (
                   <p className="text-xs text-[#71717A] bg-[#F5F5F7] rounded-2xl px-4 py-3">
@@ -1172,6 +1278,64 @@ const { attendee, event } = await response.json();`;
                   </div>
                 )}
               </section>
+
+              {/* Resend Email Deliverability & Anti-Spam Diagnostics */}
+              {builderOverview.emailDiagnostics && (
+                <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-center justify-center text-[#0B0B0B] shrink-0">
+                        <Mail className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h2 className="font-display text-base font-bold text-[#0B0B0B]">
+                          Resend Email Deliverability &amp; Spam Protection
+                        </h2>
+                        <p className="text-xs text-[#71717A]">
+                          SPF / DKIM domain verification, Reply-To header alignment, and sandbox sender detection
+                        </p>
+                      </div>
+                    </div>
+                    <span
+                      className={`px-3 py-1 rounded-full font-mono text-xs font-semibold uppercase ${
+                        builderOverview.emailDiagnostics.dnsStatus === 'verified'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-amber-50 text-amber-800 border border-amber-200'
+                      }`}
+                    >
+                      DNS: {builderOverview.emailDiagnostics.dnsStatus}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <div className="rounded-2xl bg-[#F5F5F7] p-3.5">
+                      <span className="text-[#71717A] block">Active From Identity</span>
+                      <span className="font-mono font-semibold text-[#0B0B0B] mt-1 block break-all">
+                        {builderOverview.emailDiagnostics.activeFrom}
+                      </span>
+                    </div>
+                    <div className="rounded-2xl bg-[#F5F5F7] p-3.5">
+                      <span className="text-[#71717A] block">Sending Domain</span>
+                      <span className="font-mono font-semibold text-[#0B0B0B] mt-1 block">
+                        {builderOverview.emailDiagnostics.domainName}{' '}
+                        {builderOverview.emailDiagnostics.domainVerified ? '(Verified)' : '(Unverified)'}
+                      </span>
+                    </div>
+                    <div className="rounded-2xl bg-[#F5F5F7] p-3.5">
+                      <span className="text-[#71717A] block">Verified Resend Domains</span>
+                      <span className="font-mono font-semibold text-[#0B0B0B] mt-1 block">
+                        {builderOverview.emailDiagnostics.verifiedDomains.length > 0
+                          ? builderOverview.emailDiagnostics.verifiedDomains.join(', ')
+                          : 'None yet'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-[#0B0B0B] bg-[#F5F5F7] border border-[#E5E5EA] rounded-2xl px-4 py-3 leading-relaxed">
+                    {builderOverview.emailDiagnostics.recommendation}
+                  </p>
+                </section>
+              )}
 
               {/* Recent Server & Constraint Error Stack Traces */}
               <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-4">
@@ -1600,6 +1764,44 @@ const { attendee, event } = await response.json();`;
                 </button>
               </div>
 
+              <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-[#0B0B0B]">
+                    Arkesel Default Sender ID Override
+                  </p>
+                  <p className="text-xs text-[#71717A]">
+                    Platform fallback Sender ID (up to 11 alphanumeric chars) when an organizer/event does not set a custom Sender ID
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <input
+                    type="text"
+                    maxLength={11}
+                    value={defaultSenderInput}
+                    onChange={(e) =>
+                      setDefaultSenderInput(
+                        e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11)
+                      )
+                    }
+                    placeholder="EVENTSAPP"
+                    className="w-36 h-9 px-3 rounded-xl bg-[#F5F5F7] border border-[#E5E5EA] font-mono text-xs font-bold uppercase text-[#0B0B0B] focus:outline-none focus:border-[#0B0B0B]"
+                  />
+                  <button
+                    type="button"
+                    disabled={actionBusyId === 'flag-Arkesel Sender ID'}
+                    onClick={() =>
+                      handleUpdateFlag(
+                        { arkeselSenderId: defaultSenderInput || 'EVENTSAPP' },
+                        'Arkesel Sender ID'
+                      )
+                    }
+                    className="px-3.5 h-9 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 disabled:opacity-50"
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+
               <div className="p-4 flex items-center justify-between gap-4">
                 <div>
                   <p className="text-sm font-semibold text-[#0B0B0B]">New Organiser Signups</p>
@@ -1623,32 +1825,6 @@ const { attendee, event } = await response.json();`;
                   }`}
                 >
                   {builderOverview.flags.signupsEnabled ? 'Enabled (Disable)' : 'Disabled (Enable)'}
-                </button>
-              </div>
-
-              <div className="p-4 flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-sm font-semibold text-[#0B0B0B]">Starter Data Seeding</p>
-                  <p className="text-xs text-[#71717A]">
-                    Control whether new workspaces can seed sample Ghana/Lagos starter events
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  disabled={actionBusyId === 'flag-Starter Seeding'}
-                  onClick={() =>
-                    handleUpdateFlag(
-                      { starterSeedingEnabled: !builderOverview.flags.starterSeedingEnabled },
-                      'Starter Seeding'
-                    )
-                  }
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
-                    builderOverview.flags.starterSeedingEnabled
-                      ? 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
-                      : 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
-                  }`}
-                >
-                  {builderOverview.flags.starterSeedingEnabled ? 'Enabled (Disable)' : 'Disabled (Enable)'}
                 </button>
               </div>
             </div>

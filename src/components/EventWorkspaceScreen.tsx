@@ -30,12 +30,22 @@ import {
   Attendee,
   AttendeeTier,
   EventItem,
+  GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
   SystemAlert,
   TimeRange,
 } from '../types/events';
-import { getCategoryPreset, normalizePhoneE164, VELOCITY_SERIES } from '../data/initialData';
+import {
+  computeVelocitySeries,
+  getCategoryPreset,
+  normalizePhoneE164,
+} from '../data/initialData';
+import {
+  buildCameraLinkForOrigin,
+  getDefaultMessageConfig,
+  resolveEventMessage,
+} from '../lib/eventMessages';
 import { compressFlyerImageFile } from '../lib/flyerUpload';
 import {
   buildEventInvitationUrl,
@@ -51,6 +61,7 @@ type WorkspaceTab =
   | 'program'
   | 'messages'
   | 'attendees'
+  | 'gifts'
   | 'analytics'
   | 'share';
 
@@ -65,9 +76,13 @@ interface EventWorkspaceScreenProps {
   onOpenEditModal: (event: EventItem) => void;
   onUpdateEvent?: (updated: EventItem) => Promise<void> | void;
   onOpenPlans: () => void;
-  onPreviewPublicEvent: (focus?: 'top' | 'checkin') => void;
+  onPreviewPublicEvent: (focus?: 'top' | 'checkin' | 'gifts') => void;
   onToggleCheckIn: (attendeeId: string) => void;
   onRegisterAttendee?: (eventId: string, attendee: Attendee) => void;
+  onRecordGiftEntry?: (
+    eventId: string,
+    gift: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
+  ) => Promise<{ gift: GiftTableEntry; event: EventItem }> | void;
   onToggleScheduleBlock: (blockId: string) => void;
   onAddScheduleBlock: (block: ScheduleBlock) => void;
   onDeleteScheduleBlock?: (blockId: string) => void;
@@ -94,6 +109,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   onPreviewPublicEvent,
   onToggleCheckIn,
   onRegisterAttendee,
+  onRecordGiftEntry,
   onToggleScheduleBlock,
   onAddScheduleBlock,
   onDeleteScheduleBlock,
@@ -130,27 +146,87 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const [walkInEmail, setWalkInEmail] = useState('');
   const [walkInTier, setWalkInTier] = useState<AttendeeTier>('General');
 
+  // Standalone Gift Table desk entry state
+  const [giftGiverName, setGiftGiverName] = useState('');
+  const [giftGiverPhone, setGiftGiverPhone] = useState('');
+  const [giftDeskType, setGiftDeskType] = useState<'cash-momo' | 'registry-item' | 'blessing-only'>(
+    'cash-momo'
+  );
+  const [giftDeskCurrency, setGiftDeskCurrency] = useState<'GHS' | 'USD'>('GHS');
+  const [giftDeskAmount, setGiftDeskAmount] = useState('');
+  const [giftDeskItem, setGiftDeskItem] = useState('');
+  const [giftDeskSide, setGiftDeskSide] = useState('');
+  const [giftDeskMessage, setGiftDeskMessage] = useState('');
+  const [savingGiftDesk, setSavingGiftDesk] = useState(false);
+
   // Message automations state
-  const [confirmationTemplate, setConfirmationTemplate] = useState(
-    `Hi {name}, you're confirmed for ${event.title} on ${event.date} at ${event.venue}!`
+  const defaultMsgs = getDefaultMessageConfig(event);
+  const [senderIdDraft, setSenderIdDraft] = useState(
+    event.senderId || profile.senderId || 'EVENTSAPP'
   );
-  const [reminderTemplate, setReminderTemplate] = useState(
-    `Reminder: ${event.title} starts tomorrow at ${event.time}. Show your QR pass at the gate.`
-  );
+  const [confirmationTemplate, setConfirmationTemplate] = useState(defaultMsgs.confirmationMessage);
+  const [reminderTemplate, setReminderTemplate] = useState(defaultMsgs.reminderMessage);
+  const [checkInTemplate, setCheckInTemplate] = useState(defaultMsgs.checkInMessage);
+  const [thankYouTemplate, setThankYouTemplate] = useState(defaultMsgs.thankYouMessage);
+  const [includeCameraLink, setIncludeCameraLink] = useState(defaultMsgs.includeCameraLink);
+  const [savingMessages, setSavingMessages] = useState(false);
   const [editingReminder, setEditingReminder] = useState(false);
   const [thankYouSent, setThankYouSent] = useState(false);
   const [actionToast, setActionToast] = useState<string | null>(null);
 
   useEffect(() => {
-    setConfirmationTemplate(
-      `Hi {name}, you're confirmed for ${event.title} on ${event.date} at ${event.venue}!`
-    );
-    setReminderTemplate(
-      `Reminder: ${event.title} starts tomorrow at ${event.time}. Show your QR pass at the gate.`
-    );
+    const cfg = getDefaultMessageConfig(event);
+    setSenderIdDraft(event.senderId || profile.senderId || 'EVENTSAPP');
+    setConfirmationTemplate(cfg.confirmationMessage);
+    setReminderTemplate(cfg.reminderMessage);
+    setCheckInTemplate(cfg.checkInMessage);
+    setThankYouTemplate(cfg.thankYouMessage);
+    setIncludeCameraLink(cfg.includeCameraLink);
     setThankYouSent(false);
     setFlyerFailed(false);
-  }, [event.id, event.title, event.date, event.venue, event.time, event.flyerUrl]);
+  }, [
+    event.id,
+    event.senderId,
+    event.messageConfig,
+    event.flyerUrl,
+    profile.senderId,
+  ]);
+
+  const cameraUrlForEvent = useMemo(
+    () => buildCameraLinkForOrigin(event.slug || event.id),
+    [event.slug, event.id]
+  );
+
+  const handleSaveMessageSettings = async (successToast = 'Event Sender ID & message templates saved') => {
+    const cleanSender =
+      senderIdDraft
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .slice(0, 11) || 'EVENTSAPP';
+    setSenderIdDraft(cleanSender);
+    if (!onUpdateEvent) {
+      triggerToast(successToast);
+      return;
+    }
+    setSavingMessages(true);
+    try {
+      await onUpdateEvent({
+        ...event,
+        senderId: cleanSender,
+        messageConfig: {
+          confirmationMessage: confirmationTemplate.trim(),
+          reminderMessage: reminderTemplate.trim(),
+          checkInMessage: checkInTemplate.trim(),
+          thankYouMessage: thankYouTemplate.trim(),
+          includeCameraLink,
+        },
+      });
+      triggerToast(successToast);
+    } finally {
+      setSavingMessages(false);
+    }
+  };
 
   const handleWorkspaceFlyerUpload = async (file: File | undefined) => {
     if (!file || !onUpdateEvent) return;
@@ -225,21 +301,31 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   );
   const flyerSrc = event.flyerUrl || getCategoryPreset(event.category).flyerUrl;
 
+  const giftsStandaloneUrl = useMemo(
+    () => buildEventInvitationUrl(event.slug || event.id, 'gifts'),
+    [event.slug, event.id]
+  );
+
+  const giftLedger = useMemo(
+    () => event.extraDataConfig?.giftLedger ?? [],
+    [event.extraDataConfig?.giftLedger]
+  );
+
   const giftTotalGhs = useMemo(
     () =>
-      eventAttendees.reduce(
-        (sum, a) =>
+      giftLedger.reduce(
+        (sum, g) =>
           sum +
-          (a.giftEntry?.giftType === 'cash-momo' && (a.giftEntry.currency || 'GHS') === 'GHS'
-            ? a.giftEntry.amount || 0
-            : 0),
+          (g.giftType === 'cash-momo' && (g.currency || 'GHS') === 'GHS' ? g.amount || 0 : 0),
         0
       ),
-    [eventAttendees]
+    [giftLedger]
   );
-  const giftEntriesCount = useMemo(
-    () => eventAttendees.filter((a) => Boolean(a.giftEntry)).length,
-    [eventAttendees]
+  const giftEntriesCount = giftLedger.length;
+
+  const velocitySeries = useMemo(
+    () => computeVelocitySeries([event], eventAttendees, timeRange),
+    [event, eventAttendees, timeRange]
   );
 
   const handleCopyLink = () => {
@@ -251,7 +337,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   };
 
   const handleExportCsv = () => {
-    const headers = ['Name', 'Email', 'Phone', 'ValidationCircle', 'Tier', 'TicketCode', 'CheckedIn', 'GiftSummary'];
+    const headers = ['Name', 'Email', 'Phone', 'ValidationCircle', 'Tier', 'TicketCode', 'CheckedIn'];
     const rows = eventAttendees.map((a) => [
       a.name,
       a.email,
@@ -260,9 +346,6 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
       a.tier,
       a.ticketCode,
       a.checkedIn ? 'Yes' : 'No',
-      a.giftEntry
-        ? `${a.giftEntry.giftType}${a.giftEntry.amount ? ` (${a.giftEntry.currency || 'GHS'} ${a.giftEntry.amount})` : ''}`
-        : '',
     ]);
     const csv = [headers.join(','), ...rows.map((r) => r.map((c) => `"${c}"`).join(','))].join(
       '\n'
@@ -275,6 +358,67 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     link.click();
     URL.revokeObjectURL(url);
     triggerToast(`Exported ${eventAttendees.length} attendees to CSV`);
+  };
+
+  const handleExportGiftsCsv = () => {
+    const headers = ['GiverName', 'Phone', 'GiftType', 'Amount', 'Currency', 'RegistryItem', 'Side', 'Message', 'Source', 'CreatedAt'];
+    const rows = giftLedger.map((g) => [
+      g.giverName,
+      g.giverPhone || '',
+      g.giftType,
+      g.amount !== undefined ? String(g.amount) : '',
+      g.currency || 'GHS',
+      g.registryItem || '',
+      g.side || '',
+      (g.message || '').replace(/"/g, '""'),
+      g.recordedVia || 'public-table',
+      g.createdAt,
+    ]);
+    const csv = [headers.join(','), ...rows.map((r) => r.map((c) => `"${c}"`).join(','))].join(
+      '\n'
+    );
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${event.slug}-gift-ledger.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    triggerToast(`Exported ${giftLedger.length} gift table entries to CSV`);
+  };
+
+  const handleRecordDeskGift = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onRecordGiftEntry || !giftGiverName.trim() || savingGiftDesk) return;
+    if (giftDeskType === 'cash-momo' && (!giftDeskAmount || Number(giftDeskAmount) <= 0)) {
+      triggerToast('Enter a valid gift amount');
+      return;
+    }
+    setSavingGiftDesk(true);
+    try {
+      await onRecordGiftEntry(event.id, {
+        giverName: giftGiverName.trim(),
+        giverPhone: giftGiverPhone.trim() ? normalizePhoneE164(giftGiverPhone.trim()) : undefined,
+        giftType: giftDeskType,
+        currency: giftDeskCurrency,
+        amount: giftDeskType === 'cash-momo' ? Math.max(1, Number(giftDeskAmount) || 0) : undefined,
+        registryItem:
+          giftDeskType === 'registry-item'
+            ? giftDeskItem || event.extraDataConfig?.giftRegistryItems?.[0] || 'Registry Gift'
+            : undefined,
+        side: giftDeskSide.trim() || undefined,
+        message: giftDeskMessage.trim() || undefined,
+      });
+      setGiftGiverName('');
+      setGiftGiverPhone('');
+      setGiftDeskAmount('');
+      setGiftDeskMessage('');
+      triggerToast('Gift table entry recorded cleanly');
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message : 'Unable to record gift entry');
+    } finally {
+      setSavingGiftDesk(false);
+    }
   };
 
   const handleDownloadQrSvg = () => {
@@ -624,6 +768,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
             { id: 'program', label: 'Program Builder', icon: LayoutGrid },
             { id: 'messages', label: 'Message Templates' },
             { id: 'attendees', label: 'Attendees', count: totalRegistered },
+            { id: 'gifts', label: 'Gift Table', icon: Gift, count: giftEntriesCount },
             { id: 'analytics', label: 'Analytics Dashboard' },
             { id: 'share', label: 'Share & QR' },
           ] as const
@@ -736,7 +881,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 </div>
               </div>
               <div className="bg-white rounded-2xl p-4">
-                <SplineChart data={VELOCITY_SERIES[timeRange]} />
+                <SplineChart data={velocitySeries} />
               </div>
             </section>
           )}
@@ -754,7 +899,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       Program Schedule
                     </h2>
                     <p className="text-[13px] text-[#71717A] tabular-nums">
-                      {eventBlocks.length} scheduled production blocks · Total duration: 8h 00m
+                      {eventBlocks.length} scheduled run-of-show {eventBlocks.length === 1 ? 'block' : 'blocks'}
                     </p>
                   </div>
                 </div>
@@ -1091,14 +1236,6 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                                   {att.validationGroup}
                                 </span>
                               )}
-                              {att.giftEntry && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#FBF9F5] border border-[#E6DDD0] text-[#0B0B0B] text-[10px] font-semibold">
-                                  <Gift className="w-2.5 h-2.5" />
-                                  {att.giftEntry.giftType === 'cash-momo'
-                                    ? `${att.giftEntry.currency || 'GHS'} ${att.giftEntry.amount?.toLocaleString()}`
-                                    : att.giftEntry.registryItem || 'Gift Note'}
-                                </span>
-                              )}
                               {att.checkedIn ? (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#E8E8EA] text-[#0B0B0B] text-[11px] font-medium tabular-nums">
                                   <span className="w-1.5 h-1.5 rounded-full bg-[#0B0B0B]" />
@@ -1149,32 +1286,362 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
 
           {/* Dedicated Message Editor when Message Templates tab active */}
           {activeTab === 'messages' && (
-            <section className="bg-[#F5F5F7] rounded-[28px] p-6 sm:p-8 space-y-4">
-              <h2 className="font-display text-[22px] font-bold text-[#0B0B0B] tracking-[-0.02em]">
-                Arkesel SMS &amp; Resend Template Studio
-              </h2>
-              <div className="p-4 rounded-2xl bg-white space-y-3">
-                <div className="flex items-center justify-between text-xs font-semibold">
-                  <span>Confirmation SMS Template</span>
-                  <span className="text-[#71717A] tabular-nums">
-                    {smsSegments} SMS segment · {confirmationTemplate.length} / 160 chars
+            <section className="bg-[#F5F5F7] rounded-[28px] p-6 sm:p-8 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-[22px] font-bold text-[#0B0B0B] tracking-[-0.02em]">
+                    Arkesel SMS &amp; Check-In Camera Studio
+                  </h2>
+                  <p className="text-xs text-[#71717A] mt-0.5">
+                    Customize your Arkesel Sender ID and every attendee message (up to 5 photos + collage per guest).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (navigator.clipboard?.writeText) {
+                      navigator.clipboard.writeText(cameraUrlForEvent).catch(() => {});
+                    }
+                    triggerToast('Disposable Camera link copied');
+                  }}
+                  className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 self-start shrink-0"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  Copy Camera Link
+                </button>
+              </div>
+
+              {/* Event Arkesel Sender ID + Auto Camera Link Toggle */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 rounded-2xl bg-white space-y-2 border border-[#E5E5EA]/70">
+                  <div className="flex items-center justify-between text-xs font-semibold">
+                    <label htmlFor="ws-sender-id">Event Arkesel Sender ID</label>
+                    <span className="font-mono text-[#71717A]">{senderIdDraft.length}/11</span>
+                  </div>
+                  <input
+                    id="ws-sender-id"
+                    type="text"
+                    maxLength={11}
+                    value={senderIdDraft}
+                    onChange={(e) =>
+                      setSenderIdDraft(
+                        e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11)
+                      )
+                    }
+                    className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono font-bold tracking-wider uppercase text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                  />
+                </div>
+
+                <div className="p-4 rounded-2xl bg-white flex items-center justify-between gap-3 border border-[#E5E5EA]/70">
+                  <div>
+                    <p className="text-xs font-semibold text-[#0B0B0B]">
+                      Attach Disposable Camera Link
+                    </p>
+                    <p className="text-[11px] text-[#71717A] mt-0.5">
+                      Include <code className="font-mono">{'{cameraLink}'}</code> in SMS &amp; email
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={includeCameraLink}
+                      onChange={(e) => setIncludeCameraLink(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-[#E5E5EA] rounded-full peer peer-checked:bg-[#0B0B0B] after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+                  </label>
+                </div>
+              </div>
+
+              {/* Confirmation SMS */}
+              <div className="p-4 rounded-2xl bg-white space-y-3 border border-[#E5E5EA]/70">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold">
+                  <span>Registration Confirmation SMS</span>
+                  <span className="text-[#71717A] font-mono tabular-nums">
+                    {smsSegments} SMS segment · {confirmationTemplate.length} chars
                   </span>
                 </div>
                 <textarea
                   rows={3}
                   value={confirmationTemplate}
                   onChange={(e) => setConfirmationTemplate(e.target.value)}
-                  className="w-full p-3.5 rounded-2xl bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                  className="w-full p-3.5 rounded-2xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
                 />
-                <div className="flex justify-end">
+              </div>
+
+              {/* Check-In Welcome SMS */}
+              <div className="p-4 rounded-2xl bg-white space-y-3 border border-[#E5E5EA]/70">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold">
+                  <span>Check-In Welcome SMS (Dispatched When Guest Checks In)</span>
+                  <div className="flex flex-wrap gap-1">
+                    {['{name}', '{event}', '{code}', '{cameraLink}'].map((tag) => (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => setCheckInTemplate((prev) => `${prev} ${tag}`.trim())}
+                        className="px-2 py-0.5 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[10px] font-mono text-[#0B0B0B]"
+                      >
+                        + {tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <textarea
+                  rows={3}
+                  value={checkInTemplate}
+                  onChange={(e) => setCheckInTemplate(e.target.value)}
+                  className="w-full p-3.5 rounded-2xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                />
+                <div className="p-3 rounded-xl bg-[#F5F5F7] text-[11px] text-[#0B0B0B]">
+                  <span className="font-semibold text-[#71717A] block mb-1">
+                    Live Gate Check-In Preview (5 Photos + Collage):
+                  </span>
+                  <p className="font-mono break-words">
+                    {
+                      resolveEventMessage({
+                        type: 'checkin',
+                        template: checkInTemplate,
+                        event: {
+                          ...event,
+                          messageConfig: { includeCameraLink },
+                        },
+                        attendeeName: 'Guest Name',
+                        ticketCode: 'PASS-0001',
+                      }).text
+                    }
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  disabled={savingMessages}
+                  onClick={() => void handleSaveMessageSettings()}
+                  className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors disabled:opacity-60"
+                >
+                  {savingMessages ? 'Saving...' : 'Save All Message Templates & Sender ID'}
+                </button>
+              </div>
+            </section>
+          )}
+
+          {/* Standalone Gift Table Ledger Tab */}
+          {activeTab === 'gifts' && (
+            <section className="bg-[#F5F5F7] rounded-[28px] p-6 sm:p-8 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-[#71717A]">
+                    <Gift className="w-3.5 h-3.5 text-[#0B0B0B]" />
+                    Standalone Activity · Separate from Walk-Ins &amp; RSVP
+                  </span>
+                  <h2 className="font-display text-[22px] font-bold text-[#0B0B0B] tracking-[-0.02em] mt-0.5">
+                    {event.extraDataConfig?.giftTitle || 'Event Gift Table & Ledger'}
+                  </h2>
+                  <p className="text-xs text-[#71717A] mt-0.5">
+                    Public URL: <span className="font-mono text-[#0B0B0B]">/e/{event.slug}/gifts</span>
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <button
                     type="button"
-                    onClick={() => triggerToast('SMS Confirmation template saved')}
-                    className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(giftsStandaloneUrl).catch(() => {});
+                      triggerToast('Standalone Gift Table URL copied');
+                    }}
+                    className="px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5"
                   >
-                    Save Template
+                    <Copy className="w-3.5 h-3.5" />
+                    Copy Gift URL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onPreviewPublicEvent('gifts')}
+                    className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold inline-flex items-center gap-1.5"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open Public Gift Table
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportGiftsCsv}
+                    className="px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Gift CSV
                   </button>
                 </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-4 rounded-2xl bg-white">
+                  <span className="text-[11px] text-[#71717A] block">Recorded Entries</span>
+                  <span className="text-lg font-bold text-[#0B0B0B] tabular-nums">
+                    {giftEntriesCount}
+                  </span>
+                </div>
+                <div className="p-4 rounded-2xl bg-white">
+                  <span className="text-[11px] text-[#71717A] block">GHS Cash / MoMo Total</span>
+                  <span className="text-lg font-bold text-[#0B0B0B] tabular-nums">
+                    GHS {giftTotalGhs.toLocaleString()}
+                  </span>
+                </div>
+                <div className="p-4 rounded-2xl bg-white">
+                  <span className="text-[11px] text-[#71717A] block">MoMo Account</span>
+                  <span className="text-xs font-mono font-bold text-[#0B0B0B] truncate block mt-1">
+                    {event.extraDataConfig?.momoNumber || 'Configured in Edit Event'}
+                  </span>
+                </div>
+              </div>
+
+              {onRecordGiftEntry && (
+                <form
+                  onSubmit={handleRecordDeskGift}
+                  className="p-5 rounded-2xl bg-white border border-[#E5E5EA]/70 space-y-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold text-[#0B0B0B]">
+                      Record Physical Envelope / Venue Gift Desk Entry
+                    </h3>
+                    <span className="text-[10px] font-mono text-[#71717A]">
+                      Does not modify attendee capacity
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <input
+                      type="text"
+                      required
+                      value={giftGiverName}
+                      onChange={(e) => setGiftGiverName(e.target.value)}
+                      placeholder="Giver / Family name *"
+                      className="h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-medium text-[#0B0B0B]"
+                    />
+                    <input
+                      type="tel"
+                      value={giftGiverPhone}
+                      onChange={(e) => setGiftGiverPhone(e.target.value)}
+                      placeholder="Phone (optional)"
+                      className="h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B]"
+                    />
+                    <select
+                      value={giftDeskType}
+                      onChange={(e) =>
+                        setGiftDeskType(
+                          e.target.value as 'cash-momo' | 'registry-item' | 'blessing-only'
+                        )
+                      }
+                      className="h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B]"
+                    >
+                      <option value="cash-momo">Cash / MoMo Envelope</option>
+                      <option value="registry-item">Registry Gift Box</option>
+                      <option value="blessing-only">Well-Wishes Card</option>
+                    </select>
+                  </div>
+
+                  {giftDeskType === 'cash-momo' && (
+                    <div className="grid grid-cols-3 gap-2.5">
+                      <select
+                        value={giftDeskCurrency}
+                        onChange={(e) => setGiftDeskCurrency(e.target.value as 'GHS' | 'USD')}
+                        className="h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-bold text-[#0B0B0B]"
+                      >
+                        <option value="GHS">GHS</option>
+                        <option value="USD">USD</option>
+                      </select>
+                      <input
+                        type="number"
+                        min={1}
+                        required
+                        value={giftDeskAmount}
+                        onChange={(e) => setGiftDeskAmount(e.target.value)}
+                        placeholder="Amount"
+                        className="col-span-2 h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono font-semibold text-[#0B0B0B]"
+                      />
+                    </div>
+                  )}
+
+                  {giftDeskType === 'registry-item' && (
+                    <input
+                      type="text"
+                      value={giftDeskItem}
+                      onChange={(e) => setGiftDeskItem(e.target.value)}
+                      placeholder="Gift item description"
+                      className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                    />
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <input
+                      type="text"
+                      value={giftDeskSide}
+                      onChange={(e) => setGiftDeskSide(e.target.value)}
+                      placeholder="Side / Honoring (optional)"
+                      className="h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                    />
+                    <input
+                      type="text"
+                      value={giftDeskMessage}
+                      onChange={(e) => setGiftDeskMessage(e.target.value)}
+                      placeholder="Well-wishes note (optional)"
+                      className="h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                    />
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={savingGiftDesk}
+                      className="px-5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 disabled:opacity-60"
+                    >
+                      {savingGiftDesk ? 'Recording...' : 'Record Desk Gift'}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              <div className="space-y-2">
+                {giftLedger.length === 0 ? (
+                  <div className="p-8 rounded-2xl bg-white text-center text-xs text-[#71717A]">
+                    No gift table entries yet. Share <span className="font-mono text-[#0B0B0B]">/e/{event.slug}/gifts</span> or record venue desk gifts above.
+                  </div>
+                ) : (
+                  giftLedger.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="p-4 rounded-2xl bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-bold text-[#0B0B0B]">
+                            {entry.giverName}
+                          </span>
+                          {entry.side && (
+                            <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[10px] font-medium text-[#71717A]">
+                              {entry.side}
+                            </span>
+                          )}
+                          <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[10px] font-mono text-[#71717A]">
+                            {entry.recordedVia === 'gift-desk' ? 'Venue Desk' : 'Public Table'}
+                          </span>
+                        </div>
+                        {entry.message && (
+                          <p className="text-[11px] text-[#444748] mt-1 italic">
+                            &ldquo;{entry.message}&rdquo;
+                          </p>
+                        )}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-xs font-bold text-[#0B0B0B] tabular-nums">
+                          {entry.giftType === 'cash-momo'
+                            ? `${entry.currency || 'GHS'} ${entry.amount?.toLocaleString()}`
+                            : entry.giftType === 'registry-item'
+                              ? entry.registryItem || 'Registry Gift'
+                              : 'Well-Wishes'}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </section>
           )}
@@ -1305,19 +1772,43 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
             </div>
 
             <div className="space-y-3">
-              {/* Flow 1: Confirmation SMS */}
-              <div className="p-3.5 bg-white rounded-2xl">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-semibold text-[#0B0B0B]">Confirmation SMS</span>
+              {/* Flow 1: Confirmation & Check-In SMS */}
+              <div className="p-3.5 bg-white rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[#0B0B0B]">
+                    Check-In Welcome + Camera Link
+                  </span>
                   <span className="inline-flex items-center gap-1 text-[11px] text-[#0B0B0B] font-semibold">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Active
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> {senderIdDraft}
                   </span>
                 </div>
-                <p className="text-[11px] text-[#71717A] mb-2 tabular-nums">
-                  {smsSegments} SMS segment · {confirmationTemplate.length} / 160 characters
+                <p className="text-[11px] text-[#71717A] tabular-nums">
+                  Includes disposable camera link (5 shots + collage)
                 </p>
-                <div className="p-2.5 rounded-xl bg-[#F5F5F7] text-xs text-[#1A1C1D] italic">
-                  &ldquo;{confirmationTemplate}&rdquo;
+                <div className="p-2.5 rounded-xl bg-[#F5F5F7] text-[11px] text-[#1A1C1D] italic line-clamp-3">
+                  &ldquo;{checkInTemplate}&rdquo;
+                </div>
+                <div className="flex items-center justify-between pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('messages')}
+                    className="text-[11px] text-[#0B0B0B] underline font-semibold"
+                  >
+                    Customize Messages
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (navigator.clipboard?.writeText) {
+                        navigator.clipboard.writeText(cameraUrlForEvent).catch(() => {});
+                      }
+                      triggerToast('Disposable Camera URL copied');
+                    }}
+                    className="text-[11px] font-mono text-[#71717A] hover:text-[#0B0B0B] inline-flex items-center gap-1"
+                  >
+                    <Copy className="w-3 h-3" />
+                    Camera URL
+                  </button>
                 </div>
               </div>
 
@@ -1342,9 +1833,10 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     />
                     <button
                       type="button"
+                      disabled={savingMessages}
                       onClick={() => {
                         setEditingReminder(false);
-                        triggerToast('24h reminder template updated');
+                        void handleSaveMessageSettings('24h reminder template saved');
                       }}
                       className="px-3 py-1 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold"
                     >
@@ -1386,7 +1878,9 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     type="button"
                     onClick={() => {
                       setThankYouSent(true);
-                      triggerToast(`Post-event broadcast queued for ${totalRegistered} guests`);
+                      void handleSaveMessageSettings(
+                        `Post-event broadcast queued for ${totalRegistered} guests`
+                      );
                     }}
                     className="px-3 py-1.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:opacity-90"
                   >

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Aperture,
+  Archive,
   ArrowLeft,
   Camera,
   CameraOff,
@@ -10,8 +11,11 @@ import {
   Film,
   Heart,
   ImagePlus,
+  LayoutGrid,
   Lock,
   RefreshCw,
+  Share2,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Trash2,
@@ -29,6 +33,8 @@ import {
   OrganizerProfile,
   SystemAlert,
 } from '../types/events';
+import { MAX_SHOTS_PER_USER } from '../lib/eventMessages';
+import { createZipBlob, type ZipFileEntry } from '../lib/zip';
 import { TopUtilityBar } from './TopUtilityBar';
 
 interface DisposableCameraScreenProps {
@@ -40,7 +46,14 @@ interface DisposableCameraScreenProps {
   profile: OrganizerProfile;
   initialEventId?: string;
   initialGuestName?: string;
-  onAddShot: (shot: DisposableShot) => void;
+  initialPassCode?: string;
+  verifiedPass?: {
+    attendeeName: string;
+    ticketCode: string;
+    checkedIn: boolean;
+    tier: string;
+  } | null;
+  onAddShot: (shot: DisposableShot) => Promise<{ ok: boolean; error?: string } | void> | void;
   onToggleLikeShot: (shotId: string) => void;
   onDeleteShot: (shotId: string) => void;
   onDevelopRoll: (eventId: string) => void;
@@ -129,6 +142,23 @@ function formatQuartzDateStamp(): string {
   return `'${yy} ${mm} ${dd}`;
 }
 
+const CAMERA_SHOOTER_KEY_STORAGE = 'eventsapp_camera_shooter_key_v1';
+
+function getOrCreateShooterKey(): string {
+  try {
+    const existing = localStorage.getItem(CAMERA_SHOOTER_KEY_STORAGE);
+    if (existing && existing.trim()) return existing.trim();
+    const created = `cam-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
+    localStorage.setItem(CAMERA_SHOOTER_KEY_STORAGE, created);
+    return created;
+  } catch {
+    return `cam-sess-${Math.random().toString(36).slice(2, 8)}`;
+  }
+}
+
+type CollageLayout = '2-split' | '3-strip' | '4-grid' | '5-mosaic';
+type CollageTheme = 'dark' | 'ivory';
+
 export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
   mode,
   events,
@@ -138,6 +168,8 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
   profile,
   initialEventId,
   initialGuestName,
+  initialPassCode,
+  verifiedPass,
   onAddShot,
   onToggleLikeShot,
   onDeleteShot,
@@ -186,19 +218,54 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
   const [dateStampEnabled, setDateStampEnabled] = useState(true);
   const [selectedStock, setSelectedStock] = useState<FilmStock>('ilford-bw');
   const [guestName, setGuestName] = useState(
-    initialGuestName?.trim() || (mode === 'studio' ? profile.name : 'Guest Photographer')
+    verifiedPass?.attendeeName?.trim() ||
+      initialGuestName?.trim() ||
+      (mode === 'studio' ? profile.name : 'Guest Photographer')
   );
+  const [guestNameTouched, setGuestNameTouched] = useState(false);
   const [caption, setCaption] = useState('');
+
+  useEffect(() => {
+    if (guestNameTouched) return;
+    const incoming = verifiedPass?.attendeeName?.trim() || initialGuestName?.trim();
+    if (incoming) {
+      setGuestName(incoming);
+    }
+  }, [verifiedPass?.attendeeName, initialGuestName, guestNameTouched]);
+
+  const activePassCode = (verifiedPass?.ticketCode || initialPassCode || '').trim().toUpperCase();
+
+  const effectiveShooterKey = useMemo(() => {
+    if (mode === 'studio' && profile.email?.trim()) {
+      return `studio:${profile.email.trim().toLowerCase()}`;
+    }
+    if (activePassCode && selectedEvent?.id) {
+      return `pass:${selectedEvent.id}:${activePassCode}`;
+    }
+    return getOrCreateShooterKey();
+  }, [mode, profile.email, activePassCode, selectedEvent?.id]);
 
   // Tactile shutter + winding states
   const [flashPulse, setFlashPulse] = useState(false);
   const [winding, setWinding] = useState(false);
+  const [savingShot, setSavingShot] = useState(false);
+  const [zippingPhotos, setZippingPhotos] = useState(false);
+  const [shotError, setShotError] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   // Gallery filter + Lightbox state
   const [searchQuery, setSearchQuery] = useState('');
   const [galleryTab, setGalleryTab] = useState<'all' | 'developed' | 'favorites'>('all');
   const [lightboxShot, setLightboxShot] = useState<DisposableShot | null>(null);
+
+  // Interactive Photo Collage Studio state
+  const [collageOpen, setCollageOpen] = useState(false);
+  const [collageSelectedIds, setCollageSelectedIds] = useState<string[]>([]);
+  const [collageLayout, setCollageLayout] = useState<CollageLayout>('5-mosaic');
+  const [collageTheme, setCollageTheme] = useState<CollageTheme>('dark');
+  const [collageTitle, setCollageTitle] = useState('');
+  const [collagePreviewUrl, setCollagePreviewUrl] = useState<string | null>(null);
+  const [collageRendering, setCollageRendering] = useState(false);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -247,10 +314,20 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       });
     } catch {
       setCameraError(
-        'Camera access unavailable or declined. Use "Upload Photo" or "Snap Film Scene" to shoot onto the roll.'
+        'Camera access unavailable or declined. Use "Upload Photo" or "Snap Film Frame" to shoot onto the roll.'
       );
     }
   };
+
+  const autoStartedSmsRef = useRef(false);
+  useEffect(() => {
+    if (autoStartedSmsRef.current) return;
+    if (mode !== 'public') return;
+    if (!initialPassCode && !initialGuestName && !verifiedPass) return;
+    if (!navigator.mediaDevices?.getUserMedia) return;
+    autoStartedSmsRef.current = true;
+    void startCamera('environment');
+  }, [mode, initialPassCode, initialGuestName, verifiedPass]);
 
   const handleFlipCamera = () => {
     const next = facingMode === 'environment' ? 'user' : 'environment';
@@ -293,8 +370,27 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     });
   }, [eventShots, galleryTab, searchQuery]);
 
+  const myEventShots = useMemo(() => {
+    const authorNorm = (guestName.trim() || 'Guest Photographer').toLowerCase();
+    return eventShots.filter((s) =>
+      s.shooterKey
+        ? s.shooterKey === effectiveShooterKey
+        : s.capturedBy.trim().toLowerCase() === authorNorm
+    );
+  }, [eventShots, effectiveShooterKey, guestName]);
+
+  const myDevelopedShots = useMemo(
+    () => myEventShots.filter((s) => s.developed),
+    [myEventShots]
+  );
+
+  const userShotsUsed = myEventShots.length;
+  const userShotsLeft = Math.max(0, MAX_SHOTS_PER_USER - userShotsUsed);
+  const isUserLimitReached = userShotsUsed >= MAX_SHOTS_PER_USER;
+
   const rollRemaining = Math.max(0, currentRollConfig.exposuresLimit - eventShots.length);
   const isRollFull = eventShots.length >= currentRollConfig.exposuresLimit;
+  const isCaptureDisabled = isRollFull || isUserLimitReached || savingShot;
   const activeStockMeta =
     FILM_STOCKS.find((f) => f.id === selectedStock) ?? FILM_STOCKS[0];
 
@@ -308,8 +404,14 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     setTimeout(() => setWinding(false), 360);
   };
 
-  const finalizeCanvasToRoll = (canvas: HTMLCanvasElement, stamp: string) => {
+  const finalizeCanvasToRoll = async (canvas: HTMLCanvasElement, stamp: string) => {
     if (!selectedEvent) return;
+    if (isUserLimitReached) {
+      setShotError(
+        `Camera limit reached: each user is allowed up to ${MAX_SHOTS_PER_USER} pictures per event.`
+      );
+      return;
+    }
     const ctx = canvas.getContext('2d');
     if (ctx) {
       const w = canvas.width;
@@ -341,20 +443,23 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
         ctx.fillRect(gx, gy, 1.4, 1.4);
       }
 
-      // Quartz 35mm LED date stamp
+      // Quartz 35mm LED date stamp (scaled proportionally to canvas resolution)
       if (dateStampEnabled) {
+        const fontPx = Math.max(24, Math.round(w * 0.027));
+        const marginX = Math.round(w * 0.035);
+        const marginY = Math.round(h * 0.038);
         ctx.save();
-        ctx.font = 'bold 26px "JetBrains Mono", monospace';
+        ctx.font = `bold ${fontPx}px "JetBrains Mono", monospace`;
         ctx.textAlign = 'right';
         ctx.shadowColor = 'rgba(255, 115, 29, 0.75)';
-        ctx.shadowBlur = 8;
+        ctx.shadowBlur = Math.round(fontPx * 0.3);
         ctx.fillStyle = '#FF8A2B';
-        ctx.fillText(stamp, w - 34, h - 28);
+        ctx.fillText(stamp, w - marginX, h - marginY);
         ctx.restore();
       }
     }
 
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.84);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.91);
     const nextFrame =
       eventShots.reduce((max, s) => Math.max(max, s.frameNumber), 0) + 1;
 
@@ -364,6 +469,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       frameNumber: nextFrame,
       dataUrl,
       capturedBy: guestName.trim() || 'Guest Photographer',
+      shooterKey: effectiveShooterKey,
       caption: caption.trim() || undefined,
       filmStock: selectedStock,
       dateStamp: stamp,
@@ -376,22 +482,43 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       liked: false,
     };
 
-    onAddShot(newShot);
-    setCaption('');
-    showToast(
-      currentRollConfig.darkroomMode
-        ? `Frame #${String(nextFrame).padStart(2, '0')}A sealed in darkroom`
-        : `Frame #${String(nextFrame).padStart(2, '0')}A captured to film roll`
-    );
+    setSavingShot(true);
+    setShotError(null);
+    try {
+      const res = await Promise.resolve(onAddShot(newShot));
+      if (res && res.ok === false) {
+        setShotError(
+          res.error ||
+            `Camera limit reached: each user is allowed up to ${MAX_SHOTS_PER_USER} pictures per event.`
+        );
+        showToast(res.error || `Max ${MAX_SHOTS_PER_USER} pictures per user reached`);
+        return;
+      }
+      setCaption('');
+      showToast(
+        currentRollConfig.darkroomMode
+          ? `Frame #${String(nextFrame).padStart(2, '0')}A sealed in darkroom (${userShotsUsed + 1}/${MAX_SHOTS_PER_USER})`
+          : `Frame #${String(nextFrame).padStart(2, '0')}A captured (${userShotsUsed + 1}/${MAX_SHOTS_PER_USER} shots)`
+      );
+    } finally {
+      setSavingShot(false);
+    }
   };
 
   const handleCaptureLiveOrDemo = () => {
-    if (!selectedEvent || isRollFull) return;
+    if (!selectedEvent || isCaptureDisabled) {
+      if (isUserLimitReached) {
+        setShotError(
+          `You have used all ${MAX_SHOTS_PER_USER} shots on this camera. Select 2–5 shots to build your Collage!`
+        );
+      }
+      return;
+    }
 
     const stamp = formatQuartzDateStamp();
     const canvas = document.createElement('canvas');
-    canvas.width = 960;
-    canvas.height = 720;
+    canvas.width = 1600;
+    canvas.height = 1200;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -399,9 +526,9 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
 
     if (cameraActive && videoRef.current && videoRef.current.readyState >= 2) {
       const video = videoRef.current;
-      const vw = video.videoWidth || 960;
-      const vh = video.videoHeight || 720;
-      const targetRatio = 960 / 720;
+      const vw = video.videoWidth || 1600;
+      const vh = video.videoHeight || 1200;
+      const targetRatio = 1600 / 1200;
       const sourceRatio = vw / vh;
 
       let sx = 0;
@@ -424,13 +551,15 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       }
       ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
       ctx.restore();
-      finalizeCanvasToRoll(canvas, stamp);
+      void finalizeCanvasToRoll(canvas, stamp);
       return;
     }
 
     // Procedural high-contrast documentary film frame fallback (zero dead-end when no webcam)
     ctx.save();
     ctx.filter = activeStockMeta.cssFilter;
+    const sceneScale = canvas.width / 960;
+    ctx.scale(sceneScale, sceneScale);
 
     const bg = ctx.createLinearGradient(0, 0, 960, 720);
     bg.addColorStop(0, '#18181B');
@@ -475,25 +604,25 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     ctx.fillText(`${selectedEvent.title} · ${selectedEvent.city}`, 38, 668);
     ctx.restore();
 
-    finalizeCanvasToRoll(canvas, stamp);
+    void finalizeCanvasToRoll(canvas, stamp);
   };
 
   const handleUploadPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file || !selectedEvent || isRollFull) return;
+    if (!file || !selectedEvent || isCaptureDisabled) return;
 
     const reader = new FileReader();
     reader.onload = () => {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        canvas.width = 960;
-        canvas.height = 720;
+        canvas.width = 1600;
+        canvas.height = 1200;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        const targetRatio = 960 / 720;
+        const targetRatio = 1600 / 1200;
         const sourceRatio = img.width / Math.max(1, img.height);
         let sx = 0;
         let sy = 0;
@@ -513,7 +642,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
         ctx.filter = activeStockMeta.cssFilter;
         ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
         ctx.restore();
-        finalizeCanvasToRoll(canvas, formatQuartzDateStamp());
+        void finalizeCanvasToRoll(canvas, formatQuartzDateStamp());
       };
       img.src = String(reader.result);
     };
@@ -526,6 +655,117 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     link.download = `${selectedEvent?.slug ?? 'event'}-frame-${String(shot.frameNumber).padStart(2, '0')}.jpg`;
     link.click();
     showToast(`Downloaded Frame #${String(shot.frameNumber).padStart(2, '0')}A`);
+  };
+
+  const handleDownloadMyPhotosZip = async () => {
+    if (!selectedEvent || zippingPhotos) return;
+    if (myDevelopedShots.length === 0) {
+      showToast(
+        myEventShots.length > 0
+          ? 'Your photos are sealed in the darkroom until the organiser develops the roll.'
+          : 'Capture your photos first to download your high-resolution ZIP roll.'
+      );
+      return;
+    }
+
+    setZippingPhotos(true);
+    try {
+      const ownShots = [...myDevelopedShots]
+        .sort((a, b) => a.frameNumber - b.frameNumber)
+        .slice(0, MAX_SHOTS_PER_USER);
+
+      const folderName = `${selectedEvent.slug || selectedEvent.id}-my-photos`;
+      const renderHighResJpegBytes = (shot: DisposableShot): Promise<Uint8Array> =>
+        new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            const natW = img.naturalWidth || img.width || 1600;
+            const natH = img.naturalHeight || img.height || 1200;
+            const targetW = Math.max(2400, natW);
+            const targetH = Math.round((targetW * natH) / Math.max(1, natW));
+
+            const hiCanvas = document.createElement('canvas');
+            hiCanvas.width = targetW;
+            hiCanvas.height = targetH;
+            const hiCtx = hiCanvas.getContext('2d');
+            if (!hiCtx) {
+              reject(new Error('Canvas unavailable for high-resolution export.'));
+              return;
+            }
+            hiCtx.imageSmoothingEnabled = true;
+            hiCtx.imageSmoothingQuality = 'high';
+            hiCtx.drawImage(img, 0, 0, targetW, targetH);
+
+            hiCanvas.toBlob(
+              (blob) => {
+                if (!blob) {
+                  reject(new Error('Failed to encode high-resolution JPEG frame.'));
+                  return;
+                }
+                blob
+                  .arrayBuffer()
+                  .then((buf) => resolve(new Uint8Array(buf)))
+                  .catch(reject);
+              },
+              'image/jpeg',
+              0.96
+            );
+          };
+          img.onerror = () => {
+            fetch(shot.dataUrl)
+              .then((r) => r.arrayBuffer())
+              .then((buf) => resolve(new Uint8Array(buf)))
+              .catch(() => reject(new Error(`Unable to load frame #${shot.frameNumber}`)));
+          };
+          img.src = shot.dataUrl;
+        });
+
+      const entries: ZipFileEntry[] = [];
+      for (let i = 0; i < ownShots.length; i++) {
+        const shot = ownShots[i];
+        const idxPrefix = String(i + 1).padStart(2, '0');
+        const frameCode = `${String(shot.frameNumber).padStart(2, '0')}A`;
+        const stockSlug = shot.filmStock.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+        const bytes = await renderHighResJpegBytes(shot);
+        entries.push({
+          name: `${folderName}/${idxPrefix}-frame-${frameCode}-${stockSlug}.jpg`,
+          data: bytes,
+        });
+      }
+
+      const infoLines = [
+        `${selectedEvent.title} — Personal 35mm Film Roll (High-Resolution Print Archive)`,
+        `Date: ${selectedEvent.date} · Venue: ${selectedEvent.venue}, ${selectedEvent.city}`,
+        `Photographer: ${guestName.trim() || 'Guest Photographer'}${activePassCode ? ` · Pass: ${activePassCode}` : ''}`,
+        `Frames Exported: ${ownShots.length} of ${MAX_SHOTS_PER_USER} max per user (2400px Hi-Res JPEG)`,
+        '',
+        ...ownShots.map((s, idx) => {
+          const frameCode = `${String(s.frameNumber).padStart(2, '0')}A`;
+          return `${idx + 1}. Frame ${frameCode} | ${s.filmStock} | ${s.capturedAt}${s.caption ? ` | "${s.caption}"` : ''}`;
+        }),
+      ].join('\n');
+
+      entries.push({
+        name: `${folderName}/roll-details.txt`,
+        data: new TextEncoder().encode(infoLines),
+      });
+
+      const zipBlob = createZipBlob(entries);
+      const url = URL.createObjectURL(zipBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${selectedEvent.slug || selectedEvent.id}-my-${ownShots.length}-photos-hi-res.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+      showToast(`Downloaded ${ownShots.length} high-res photo${ownShots.length > 1 ? 's' : ''} (.ZIP)`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Could not build high-resolution ZIP.');
+    } finally {
+      setZippingPhotos(false);
+    }
   };
 
   const handleDownloadContactSheet = async () => {
@@ -599,6 +839,216 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     link.download = `${selectedEvent.slug}-contact-sheet.png`;
     link.click();
     showToast('35mm Contact Sheet PNG exported');
+  };
+
+  const openCollageStudio = (preferMyShots = false) => {
+    const sourcePool =
+      preferMyShots && myDevelopedShots.length >= 2 ? myDevelopedShots : developedShots;
+    if (sourcePool.length < 2) {
+      showToast('Capture or develop at least 2 photos to create a collage.');
+      return;
+    }
+    const picked = sourcePool.slice(0, MAX_SHOTS_PER_USER).map((s) => s.id);
+    setCollageSelectedIds(picked);
+    setCollageLayout(
+      picked.length >= 5
+        ? '5-mosaic'
+        : picked.length === 4
+          ? '4-grid'
+          : picked.length === 3
+            ? '3-strip'
+            : '2-split'
+    );
+    setCollageTitle(selectedEvent?.title || 'Event Memories');
+    setCollageOpen(true);
+  };
+
+  const toggleCollageShot = (shotId: string) => {
+    setCollageSelectedIds((prev) => {
+      if (prev.includes(shotId)) {
+        return prev.length <= 2 ? prev : prev.filter((id) => id !== shotId);
+      }
+      if (prev.length >= MAX_SHOTS_PER_USER) {
+        showToast(`Collages hold up to ${MAX_SHOTS_PER_USER} photos.`);
+        return prev;
+      }
+      return [...prev, shotId];
+    });
+  };
+
+  const collageShots = useMemo(() => {
+    const map = new Map(developedShots.map((s) => [s.id, s]));
+    return collageSelectedIds
+      .map((id) => map.get(id))
+      .filter((s): s is DisposableShot => Boolean(s));
+  }, [collageSelectedIds, developedShots]);
+
+  useEffect(() => {
+    if (!collageOpen || collageShots.length === 0) return;
+    let cancelled = false;
+    setCollageRendering(true);
+
+    const render = async () => {
+      const width = 1440;
+      const height = 1440;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const isDark = collageTheme === 'dark';
+      ctx.fillStyle = isDark ? '#0B0B0B' : '#F5F5F7';
+      ctx.fillRect(0, 0, width, height);
+
+      const pad = 56;
+      const gap = 22;
+      const footerH = 160;
+      const areaX = pad;
+      const areaY = pad;
+      const areaW = width - pad * 2;
+      const areaH = height - pad * 2 - footerH;
+
+      const frames: Array<{ x: number; y: number; w: number; h: number }> = [];
+      if (collageLayout === '2-split') {
+        const cellW = (areaW - gap) / 2;
+        frames.push({ x: areaX, y: areaY, w: cellW, h: areaH });
+        frames.push({ x: areaX + cellW + gap, y: areaY, w: cellW, h: areaH });
+      } else if (collageLayout === '3-strip') {
+        const topH = Math.round(areaH * 0.56);
+        const botH = areaH - topH - gap;
+        const botW = (areaW - gap) / 2;
+        frames.push({ x: areaX, y: areaY, w: areaW, h: topH });
+        frames.push({ x: areaX, y: areaY + topH + gap, w: botW, h: botH });
+        frames.push({ x: areaX + botW + gap, y: areaY + topH + gap, w: botW, h: botH });
+      } else if (collageLayout === '4-grid') {
+        const cw = (areaW - gap) / 2;
+        const ch = (areaH - gap) / 2;
+        frames.push({ x: areaX, y: areaY, w: cw, h: ch });
+        frames.push({ x: areaX + cw + gap, y: areaY, w: cw, h: ch });
+        frames.push({ x: areaX, y: areaY + ch + gap, w: cw, h: ch });
+        frames.push({ x: areaX + cw + gap, y: areaY + ch + gap, w: cw, h: ch });
+      } else {
+        // 5-mosaic: 2 featured frames on top, 3 frames across bottom
+        const topH = Math.round(areaH * 0.55);
+        const botH = areaH - topH - gap;
+        const topW = (areaW - gap) / 2;
+        const botW = (areaW - gap * 2) / 3;
+        frames.push({ x: areaX, y: areaY, w: topW, h: topH });
+        frames.push({ x: areaX + topW + gap, y: areaY, w: topW, h: topH });
+        frames.push({ x: areaX, y: areaY + topH + gap, w: botW, h: botH });
+        frames.push({ x: areaX + botW + gap, y: areaY + topH + gap, w: botW, h: botH });
+        frames.push({ x: areaX + (botW + gap) * 2, y: areaY + topH + gap, w: botW, h: botH });
+      }
+
+      await Promise.all(
+        frames.map((rect, idx) => {
+          const shot = collageShots[idx % collageShots.length];
+          return new Promise<void>((resolve) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+              ctx.save();
+              ctx.beginPath();
+              ctx.roundRect(rect.x, rect.y, rect.w, rect.h, 24);
+              ctx.clip();
+
+              const targetRatio = rect.w / rect.h;
+              const srcRatio = img.width / Math.max(1, img.height);
+              let sx = 0;
+              let sy = 0;
+              let sw = img.width;
+              let sh = img.height;
+              if (srcRatio > targetRatio) {
+                sw = img.height * targetRatio;
+                sx = (img.width - sw) / 2;
+              } else {
+                sh = img.width / targetRatio;
+                sy = (img.height - sh) / 2;
+              }
+              ctx.drawImage(img, sx, sy, sw, sh, rect.x, rect.y, rect.w, rect.h);
+              ctx.restore();
+
+              ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.14)' : 'rgba(11,11,11,0.08)';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.roundRect(rect.x, rect.y, rect.w, rect.h, 24);
+              ctx.stroke();
+              resolve();
+            };
+            img.onerror = () => resolve();
+            img.src = shot.dataUrl;
+          });
+        })
+      );
+
+      // Footer editorial stamp
+      const footY = height - pad - footerH + 46;
+      ctx.fillStyle = isDark ? '#FFFFFF' : '#0B0B0B';
+      ctx.font = 'bold 38px "Plus Jakarta Sans", sans-serif';
+      ctx.fillText(
+        (collageTitle.trim() || selectedEvent?.title || 'Event Memories').slice(0, 44),
+        areaX,
+        footY + 14
+      );
+      ctx.fillStyle = isDark ? '#A1A1AA' : '#71717A';
+      ctx.font = '20px "JetBrains Mono", monospace';
+      ctx.fillText(
+        `${selectedEvent?.date || ''} · ${selectedEvent?.city || ''} · ${collageShots.length} FRAMES · EVENTS APP 35MM`.toUpperCase(),
+        areaX,
+        footY + 56
+      );
+
+      if (!cancelled) {
+        setCollagePreviewUrl(canvas.toDataURL('image/png'));
+        setCollageRendering(false);
+      }
+    };
+
+    void render();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    collageOpen,
+    collageShots,
+    collageLayout,
+    collageTheme,
+    collageTitle,
+    selectedEvent?.title,
+    selectedEvent?.date,
+    selectedEvent?.city,
+  ]);
+
+  const handleDownloadCollage = () => {
+    if (!collagePreviewUrl) return;
+    const link = document.createElement('a');
+    link.href = collagePreviewUrl;
+    link.download = `${selectedEvent?.slug ?? 'event'}-collage-${collageLayout}.png`;
+    link.click();
+    showToast('Photo Collage PNG downloaded!');
+  };
+
+  const handleShareCollage = async () => {
+    if (!collagePreviewUrl) return;
+    try {
+      if (navigator.share) {
+        const blob = await (await fetch(collagePreviewUrl)).blob();
+        const file = new File([blob], `${selectedEvent?.slug ?? 'event'}-collage.png`, {
+          type: 'image/png',
+        });
+        if (navigator.canShare?.({ files: [file] })) {
+          await navigator.share({
+            title: collageTitle || selectedEvent?.title || 'Event Collage',
+            files: [file],
+          });
+          return;
+        }
+      }
+    } catch {
+      // Fallback to download
+    }
+    handleDownloadCollage();
   };
 
   return (
@@ -699,6 +1149,42 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
           </div>
         )}
 
+        {/* Checked-In SMS / Pass Auto-Access Banner */}
+        {mode === 'public' && (verifiedPass || activePassCode || initialGuestName) && (
+          <section className="p-4 sm:p-5 rounded-3xl bg-[#0B0B0B] text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 shadow-sm">
+            <div className="flex items-start sm:items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-400/15 border border-emerald-400/30 text-emerald-300 flex items-center justify-center shrink-0">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs sm:text-sm font-bold text-white">
+                    {verifiedPass
+                      ? `${verifiedPass.attendeeName} · Check-In Camera Unlocked`
+                      : initialGuestName
+                        ? `${initialGuestName} · Guest Camera Unlocked`
+                        : 'Check-In Camera Pass Unlocked'}
+                  </span>
+                  {activePassCode && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-white/15 font-mono text-[11px] font-semibold text-white">
+                      {activePassCode}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-zinc-300 mt-0.5">
+                  All features ready: live 35mm camera, 4 film stocks, {MAX_SHOTS_PER_USER} personal shots, &amp; Collage Studio.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="px-3 py-1.5 rounded-full bg-white text-[#0B0B0B] font-mono text-xs font-bold tabular-nums">
+                {userShotsLeft}/{MAX_SHOTS_PER_USER} Shots Left
+              </span>
+            </div>
+          </section>
+        )}
+
         {/* Active Event Film Roll Context Bar */}
         {selectedEvent && (
           <section className="p-4 sm:p-6 rounded-3xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -732,7 +1218,20 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
               <div className="px-4 py-2 rounded-2xl bg-white border border-[#E5E5EA] flex items-center gap-3">
                 <div>
                   <span className="text-[10px] uppercase tracking-wider text-[#71717A] block">
-                    Exposures Used
+                    Your Allowance
+                  </span>
+                  <span
+                    className={`font-mono text-base font-bold tabular-nums ${
+                      isUserLimitReached ? 'text-amber-600' : 'text-[#0B0B0B]'
+                    }`}
+                  >
+                    {userShotsUsed} / {MAX_SHOTS_PER_USER} Shots
+                  </span>
+                </div>
+                <div className="h-7 w-px bg-[#E5E5EA]" />
+                <div>
+                  <span className="text-[10px] uppercase tracking-wider text-[#71717A] block">
+                    Exposures
                   </span>
                   <span className="font-mono text-base font-bold text-[#0B0B0B] tabular-nums">
                     {String(eventShots.length).padStart(2, '0')} /{' '}
@@ -742,7 +1241,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                 <div className="h-7 w-px bg-[#E5E5EA]" />
                 <div>
                   <span className="text-[10px] uppercase tracking-wider text-[#71717A] block">
-                    Remaining
+                    Roll Left
                   </span>
                   <span className="font-mono text-base font-bold text-emerald-700 tabular-nums">
                     {rollRemaining} Left
@@ -839,7 +1338,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                   <p className="text-xs text-zinc-300 leading-relaxed">
                     {cameraError
                       ? cameraError
-                      : 'Start your device camera for a live optical viewfinder, upload a photo, or snap a demo film frame.'}
+                      : 'Start your device camera for a live optical viewfinder, upload a photo, or snap an instant 35mm film frame.'}
                   </p>
                 </div>
               )}
@@ -899,7 +1398,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={isRollFull}
+                disabled={isCaptureDisabled}
                 className="h-10 px-3 rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-40 border border-white/15 text-xs font-semibold text-white inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
               >
                 <ImagePlus className="w-3.5 h-3.5" />
@@ -963,7 +1462,10 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                 <input
                   type="text"
                   value={guestName}
-                  onChange={(e) => setGuestName(e.target.value)}
+                  onChange={(e) => {
+                    setGuestNameTouched(true);
+                    setGuestName(e.target.value);
+                  }}
                   placeholder="Your name"
                   aria-label="Photographer name"
                   className="h-10 px-3.5 rounded-2xl bg-white/10 border border-white/15 text-xs text-white placeholder:text-zinc-400 focus:bg-white focus:text-[#0B0B0B] focus:outline-none transition-colors"
@@ -981,11 +1483,16 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
 
             {/* Big Tactile Shutter Button */}
             <div className="pt-1 flex flex-col items-center gap-2">
+              {shotError && (
+                <div className="w-full px-3.5 py-2 rounded-2xl bg-[#EF4444]/15 border border-[#EF4444]/30 text-xs text-red-200 text-center">
+                  {shotError}
+                </div>
+              )}
               <button
                 type="button"
                 onClick={handleCaptureLiveOrDemo}
-                disabled={isRollFull}
-                className="w-full h-14 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 disabled:bg-zinc-700 disabled:text-zinc-400 active:scale-[0.98] transition-all font-display text-sm font-bold flex items-center justify-center gap-2.5 shadow-lg"
+                disabled={isCaptureDisabled}
+                className="w-full h-14 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 disabled:bg-zinc-700 disabled:text-zinc-300 active:scale-[0.98] transition-all font-display text-sm font-bold flex items-center justify-center gap-2.5 shadow-lg"
               >
                 <span className="w-7 h-7 rounded-full border-2 border-[#0B0B0B] flex items-center justify-center">
                   <span className="w-3.5 h-3.5 rounded-full bg-[#0B0B0B]" />
@@ -993,16 +1500,53 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                 <span>
                   {isRollFull
                     ? `Film Roll Full (${currentRollConfig.exposuresLimit}/${currentRollConfig.exposuresLimit})`
-                    : cameraActive
-                      ? 'Snap Analog Photo'
-                      : 'Snap Film Frame'}
+                    : isUserLimitReached
+                      ? `${MAX_SHOTS_PER_USER}/${MAX_SHOTS_PER_USER} Shot Limit Reached`
+                      : savingShot
+                        ? 'Developing Frame...'
+                        : cameraActive
+                          ? `Snap Photo (${userShotsLeft} left)`
+                          : `Snap Film Frame (${userShotsLeft} left)`}
                 </span>
               </button>
-              <span className="text-[11px] text-zinc-400 font-mono tabular-nums">
-                {currentRollConfig.darkroomMode
-                  ? 'Darkroom Seal Active — photos develop when organizer reveals roll'
-                  : 'Instant Develop — appears immediately on the event contact sheet'}
+              <span className="text-[11px] text-zinc-400 font-mono tabular-nums text-center">
+                {isUserLimitReached
+                  ? `You've captured ${userShotsUsed}/${MAX_SHOTS_PER_USER} shots. Combine them in the Collage Studio!`
+                  : currentRollConfig.darkroomMode
+                    ? `Darkroom Seal Active · ${userShotsLeft} of ${MAX_SHOTS_PER_USER} user shots left`
+                    : `Instant Reveal · ${userShotsLeft} of ${MAX_SHOTS_PER_USER} user shots left`}
               </span>
+
+              {myDevelopedShots.length > 0 && (
+                <button
+                  type="button"
+                  disabled={zippingPhotos}
+                  onClick={() => void handleDownloadMyPhotosZip()}
+                  className="w-full h-11 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 disabled:opacity-50 text-xs font-bold inline-flex items-center justify-center gap-2 transition-colors"
+                >
+                  <Archive className="w-4 h-4" />
+                  <span>
+                    {zippingPhotos
+                      ? 'Packing Hi-Res .ZIP...'
+                      : `Download My ${Math.min(MAX_SHOTS_PER_USER, myDevelopedShots.length)} Hi-Res Photos (.ZIP)`}
+                  </span>
+                </button>
+              )}
+
+              {developedShots.length >= 2 && (
+                <button
+                  type="button"
+                  onClick={() => openCollageStudio(myDevelopedShots.length >= 2)}
+                  className="w-full h-11 rounded-full bg-white/15 hover:bg-white/25 border border-white/20 text-white text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors"
+                >
+                  <LayoutGrid className="w-4 h-4" />
+                  <span>
+                    {myDevelopedShots.length >= 2
+                      ? `Turn My ${Math.min(MAX_SHOTS_PER_USER, myDevelopedShots.length)} Photos into a Collage`
+                      : 'Open Photo Collage Studio (2–5 Shots)'}
+                  </span>
+                </button>
+              )}
             </div>
           </section>
 
@@ -1022,6 +1566,43 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  {developedShots.length >= 2 && (
+                    <button
+                      type="button"
+                      onClick={() => openCollageStudio(myDevelopedShots.length >= 2)}
+                      className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white hover:bg-neutral-800 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                      <span>
+                        {myDevelopedShots.length >= 2
+                          ? `Make Collage (${Math.min(MAX_SHOTS_PER_USER, myDevelopedShots.length)})`
+                          : 'Make Collage'}
+                      </span>
+                    </button>
+                  )}
+
+                  {myDevelopedShots.length > 0 && (
+                    <button
+                      type="button"
+                      disabled={zippingPhotos}
+                      onClick={() => void handleDownloadMyPhotosZip()}
+                      className="px-3.5 py-2 rounded-full bg-white border border-[#0B0B0B] hover:bg-[#0B0B0B] hover:text-white disabled:opacity-50 text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                    >
+                      <Archive className="w-3.5 h-3.5" />
+                      <span>
+                        {zippingPhotos
+                          ? 'Packing .ZIP...'
+                          : `My Hi-Res .ZIP (${Math.min(MAX_SHOTS_PER_USER, myDevelopedShots.length)}/${MAX_SHOTS_PER_USER})`}
+                      </span>
+                    </button>
+                  )}
+
+                  {myEventShots.length > 0 && myDevelopedShots.length === 0 && (
+                    <span className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-medium text-[#71717A] whitespace-nowrap">
+                      Hi-Res .ZIP unlocks once darkroom develops roll
+                    </span>
+                  )}
+
                   {developedShots.length > 0 && (
                     <button
                       type="button"
@@ -1033,7 +1614,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                     </button>
                   )}
 
-                  {sealedCount > 0 && selectedEvent && (
+                  {mode === 'studio' && sealedCount > 0 && selectedEvent && (
                     <button
                       type="button"
                       onClick={() => {
@@ -1077,7 +1658,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                   ))}
                 </div>
 
-                {selectedEvent && (
+                {mode === 'studio' && selectedEvent ? (
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
@@ -1129,6 +1710,20 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                       ))}
                     </div>
                   </div>
+                ) : (
+                  <span className="px-3 py-1 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-semibold text-[#71717A] inline-flex items-center gap-1.5 self-start sm:self-auto">
+                    {currentRollConfig.darkroomMode ? (
+                      <>
+                        <Lock className="w-3 h-3 text-[#0B0B0B]" />
+                        <span>Darkroom Seal Active · Organiser Develops Roll</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3 h-3 text-[#0B0B0B]" />
+                        <span>Instant Reveal · {currentRollConfig.exposuresLimit} EXP Roll</span>
+                      </>
+                    )}
+                  </span>
                 )}
               </div>
             </div>
@@ -1333,6 +1928,213 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                     <Trash2 className="w-4 h-4" />
                   </button>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Photo Collage Studio Modal */}
+      {collageOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="collage-studio-title"
+        >
+          <div className="bg-white text-[#0B0B0B] w-full max-w-4xl max-h-[92vh] rounded-3xl overflow-hidden border border-[#E5E5EA] shadow-2xl flex flex-col">
+            <div className="px-5 sm:px-6 py-4 flex items-center justify-between border-b border-[#E5E5EA] bg-[#F5F5F7]">
+              <div>
+                <h3 id="collage-studio-title" className="font-display text-lg font-bold text-[#0B0B0B]">
+                  35mm Photo Collage Studio
+                </h3>
+                <p className="text-xs text-[#71717A] tabular-nums">
+                  Select 2–{MAX_SHOTS_PER_USER} photos to compose your downloadable keepsake collage ({collageShots.length}/{MAX_SHOTS_PER_USER} selected)
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCollageOpen(false)}
+                aria-label="Close collage studio"
+                className="w-9 h-9 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] flex items-center justify-center text-[#0B0B0B]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              {/* Left: Live Rendered Collage Canvas Preview */}
+              <div className="lg:col-span-6 space-y-3">
+                <div className="aspect-square w-full rounded-2xl bg-[#0B0B0B] border border-[#E5E5EA] overflow-hidden flex items-center justify-center relative">
+                  {collagePreviewUrl ? (
+                    <img
+                      src={collagePreviewUrl}
+                      alt="Generated event photo collage preview"
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <span className="text-xs font-mono text-zinc-400">
+                      Rendering collage...
+                    </span>
+                  )}
+                  {collageRendering && (
+                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                      <span className="px-3 py-1 rounded-full bg-black/80 text-white text-xs font-mono">
+                        Composing...
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <button
+                    type="button"
+                    disabled={!collagePreviewUrl || collageRendering}
+                    onClick={handleDownloadCollage}
+                    className="flex-1 h-11 px-5 rounded-full bg-[#0B0B0B] text-white hover:bg-zinc-800 disabled:opacity-50 text-xs font-semibold inline-flex items-center justify-center gap-1.5"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download Collage PNG</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!collagePreviewUrl || collageRendering}
+                    onClick={() => void handleShareCollage()}
+                    className="h-11 px-5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5"
+                  >
+                    <Share2 className="w-3.5 h-3.5" />
+                    <span>Share</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Right: Layout, Frame Theme & Photo Picker */}
+              <div className="lg:col-span-6 space-y-5">
+                <div>
+                  <span className="text-xs font-semibold text-[#0B0B0B] block mb-2">
+                    Collage Layout
+                  </span>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(
+                      [
+                        { id: '2-split', label: '2-Up Split' },
+                        { id: '3-strip', label: '3-Frame Hero' },
+                        { id: '4-grid', label: '4-Square Grid' },
+                        { id: '5-mosaic', label: '5-Photo Mosaic' },
+                      ] as const
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setCollageLayout(opt.id)}
+                        className={`px-3.5 py-2.5 rounded-2xl text-xs font-semibold border transition-colors ${
+                          collageLayout === opt.id
+                            ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                            : 'bg-[#F5F5F7] text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <span className="text-xs font-semibold text-[#0B0B0B] block mb-1.5">
+                      Frame Border Style
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(
+                        [
+                          { id: 'dark', label: 'Darkroom' },
+                          { id: 'ivory', label: 'Ivory Matte' },
+                        ] as const
+                      ).map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => setCollageTheme(t.id)}
+                          className={`px-3 py-2 rounded-xl text-xs font-semibold border ${
+                            collageTheme === t.id
+                              ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                              : 'bg-[#F5F5F7] text-[#0B0B0B] border-[#E5E5EA]'
+                          }`}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="collage-caption-input"
+                      className="text-xs font-semibold text-[#0B0B0B] block mb-1.5"
+                    >
+                      Collage Title Imprint
+                    </label>
+                    <input
+                      id="collage-caption-input"
+                      type="text"
+                      value={collageTitle}
+                      onChange={(e) => setCollageTitle(e.target.value)}
+                      placeholder="Event title or memory"
+                      className="w-full h-9 px-3 rounded-xl bg-[#F5F5F7] border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-[#0B0B0B]">
+                      Pick Photos (up to {MAX_SHOTS_PER_USER})
+                    </span>
+                    {myDevelopedShots.length >= 2 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCollageSelectedIds(
+                            myDevelopedShots.slice(0, MAX_SHOTS_PER_USER).map((s) => s.id)
+                          )
+                        }
+                        className="text-[11px] font-semibold underline text-[#0B0B0B]"
+                      >
+                        Select My Shots ({Math.min(MAX_SHOTS_PER_USER, myDevelopedShots.length)})
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-56 overflow-y-auto p-1">
+                    {developedShots.map((shot) => {
+                      const active = collageSelectedIds.includes(shot.id);
+                      const orderIdx = collageSelectedIds.indexOf(shot.id);
+                      return (
+                        <button
+                          key={shot.id}
+                          type="button"
+                          onClick={() => toggleCollageShot(shot.id)}
+                          className={`relative aspect-[4/3] rounded-xl overflow-hidden border-2 transition-all ${
+                            active
+                              ? 'border-[#0B0B0B] ring-2 ring-[#0B0B0B]/20'
+                              : 'border-transparent opacity-75 hover:opacity-100'
+                          }`}
+                        >
+                          <img
+                            src={shot.dataUrl}
+                            alt={`Frame ${shot.frameNumber}`}
+                            className="w-full h-full object-cover"
+                          />
+                          {active && (
+                            <span className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-[#0B0B0B] text-white text-[10px] font-mono font-bold flex items-center justify-center">
+                              {orderIdx + 1}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             </div>
           </div>

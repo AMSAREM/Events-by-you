@@ -92,12 +92,28 @@ export interface CustomFormField {
   options?: string[];
 }
 
+export interface GiftTableEntry {
+  id: string;
+  eventId: string;
+  giverName: string;
+  giverPhone?: string;
+  giftType: 'cash-momo' | 'registry-item' | 'blessing-only';
+  amount?: number;
+  currency?: 'GHS' | 'USD';
+  registryItem?: string;
+  side?: string;
+  message?: string;
+  recordedVia?: 'public-table' | 'gift-desk';
+  createdAt: string;
+}
+
 export interface EventExtraDataConfig {
   enableGiftTable: boolean;
   giftTitle?: string;
   momoNumber?: string;
   momoName?: string;
   giftRegistryItems?: string[];
+  giftLedger?: GiftTableEntry[];
   customFields: CustomFormField[];
 }
 

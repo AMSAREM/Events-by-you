@@ -43,7 +43,8 @@ interface SignInScreenProps {
   onAuthenticated: (
     session: StoredAuthSession,
     profile: OrganizerProfile,
-    openCreatorConsole?: boolean
+    openCreatorConsole?: boolean,
+    isNewUser?: boolean
   ) => void;
 }
 
@@ -243,7 +244,7 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
               onClick={onNavigateDemoEvent}
               className="text-xs font-semibold text-[#444748] hover:text-[#0B0B0B] transition-colors whitespace-nowrap"
             >
-              Live Demo Event
+              Published Events
             </button>
           </nav>
 

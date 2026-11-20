@@ -24,7 +24,12 @@ interface VerifyOtpScreenProps {
   otpType?: 'signup' | 'email' | 'recovery' | 'sms';
   onBackHome: () => void;
   onBackSignIn: () => void;
-  onVerified: (session: StoredAuthSession, profile: OrganizerProfile) => void;
+  onVerified: (
+    session: StoredAuthSession,
+    profile: OrganizerProfile,
+    openCreatorConsole?: boolean,
+    isNewUser?: boolean
+  ) => void;
   onNavigateDemoEvent: () => void;
   onOpenLegal?: (doc: 'terms' | 'privacy') => void;
 }
@@ -141,7 +146,7 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
         countryGateway,
       });
       saveStoredSession(res.session);
-      onVerified(res.session, res.profile);
+      onVerified(res.session, res.profile, false, otpType === 'signup');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Invalid verification code.');
     } finally {
@@ -182,7 +187,7 @@ export const VerifyOtpScreen: React.FC<VerifyOtpScreenProps> = ({
               onClick={onNavigateDemoEvent}
               className="text-xs font-semibold text-[#444748] hover:text-[#0B0B0B] transition-colors"
             >
-              Live Demo Event
+              Published Events
             </button>
           </nav>
 

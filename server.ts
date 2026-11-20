@@ -44,6 +44,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
 } from './src/types/events.ts';
@@ -484,15 +485,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
     const target = slugOrId.trim();
     if (!target) return null;
     if (!isSupabaseConfigured()) {
-      return (
-        memoryStore.getAnyEventBySlugOrId(target) ??
-        INITIAL_EVENTS.find(
-          (e) =>
-            e.id.toLowerCase() === target.toLowerCase() ||
-            e.slug.toLowerCase() === target.toLowerCase()
-        ) ??
-        null
-      );
+      return memoryStore.getAnyEventBySlugOrId(target) ?? null;
     }
     try {
       const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
@@ -509,20 +502,34 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         .maybeSingle();
       if (byId) return mapEventRow(byId as Record<string, unknown>);
     } catch {
-      // Fallback to seeded data below
+      // Return null when lookup fails
     }
-    return (
-      INITIAL_EVENTS.find(
-        (e) =>
-          e.id.toLowerCase() === target.toLowerCase() ||
-          e.slug.toLowerCase() === target.toLowerCase()
-      ) ?? null
-    );
+    return null;
   };
 
   app.get('/api/og/event/:slugOrId', async (req, res) => {
-    const evt = (await resolveEventForPublicOrOg(req.params.slugOrId)) ?? INITIAL_EVENTS[0];
     const baseUrl = resolveBaseUrl(req);
+    const evt = (await resolveEventForPublicOrOg(req.params.slugOrId)) ?? {
+      id: 'events-app',
+      slug: 'events-app',
+      title: 'Events App',
+      subtitle: 'Event Invitations, SMS Passes & Gate Check-In',
+      category: 'Events',
+      status: 'live' as const,
+      date: 'Upcoming',
+      isoDate: new Date().toISOString().slice(0, 10),
+      time: '',
+      venue: 'Event Venue',
+      city: 'Accra',
+      capacity: 100,
+      registered: 0,
+      checkedIn: 0,
+      smsDispatched: 0,
+      ticketPrice: 0,
+      revenue: 0,
+      organizer: 'Events App',
+      artwork: 'architecture' as const,
+    };
     const svg = buildEventOgSvg(evt, baseUrl);
     res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=300');
@@ -1722,8 +1729,9 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
       if (!evt) {
         return res.status(404).json({ error: 'Event disposable camera not found.' });
       }
+      const passQuery = typeof req.query.pass === 'string' ? req.query.pass.trim() : '';
       const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
-      const [shotsRes, rollRes] = await Promise.all([
+      const [shotsRes, rollRes, passRes] = await Promise.all([
         supabase
           .from('disposable_shots')
           .select('*')
@@ -1734,12 +1742,29 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
           .select('*')
           .eq('event_id', evt.id)
           .maybeSingle(),
+        passQuery
+          ? supabase
+              .from('attendees')
+              .select('name, ticket_code, checked_in, tier')
+              .eq('event_id', evt.id)
+              .ilike('ticket_code', passQuery)
+              .maybeSingle()
+          : Promise.resolve({ data: null }),
       ]);
       const shots = (shotsRes.data ?? []).map((r) => mapShotRow(r as Record<string, unknown>));
       const rollSettings = rollRes.data
         ? mapRollSettingsRow(rollRes.data as Record<string, unknown>)
         : { exposuresLimit: 24 as const, darkroomMode: false };
-      return res.json({ event: evt, shots, rollSettings });
+      const passRow = passRes.data as Record<string, unknown> | null;
+      const verifiedPass = passRow
+        ? {
+            attendeeName: String(passRow.name || 'Checked-In Guest'),
+            ticketCode: String(passRow.ticket_code || passQuery),
+            checkedIn: Boolean(passRow.checked_in),
+            tier: String(passRow.tier || 'General'),
+          }
+        : null;
+      return res.json({ event: evt, shots, rollSettings, verifiedPass });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load disposable camera.';
       return res.status(500).json({ error: message });
@@ -1979,15 +2004,20 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         const event = mapEventRow(payload.event);
 
         let replyTo: string | undefined;
+        let orgSenderId: string | undefined;
         const organizerId = payload.event?.organizer_id ? String(payload.event.organizer_id) : undefined;
         if (organizerId) {
           const { data: orgProf } = await supabase
             .from('profiles')
-            .select('reply_to_email')
+            .select('reply_to_email, sender_id')
             .eq('id', organizerId)
             .maybeSingle();
-          if (orgProf && typeof (orgProf as Record<string, unknown>).reply_to_email === 'string') {
-            replyTo = String((orgProf as Record<string, unknown>).reply_to_email);
+          const profRec = orgProf as Record<string, unknown> | null;
+          if (profRec && typeof profRec.reply_to_email === 'string') {
+            replyTo = profRec.reply_to_email;
+          }
+          if (profRec && typeof profRec.sender_id === 'string' && profRec.sender_id.trim()) {
+            orgSenderId = profRec.sender_id.trim();
           }
         }
 
@@ -2005,7 +2035,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
             normalizedPhone,
             event.title,
             finalCode,
-            event.senderId,
+            event.senderId || orgSenderId,
             resolvedMsg.text
           ),
           isResendConfigured()
@@ -2057,6 +2087,85 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
     }
   );
 
+  // Standalone Public Gift Table Entry (never creates registration/attendee pass)
+  app.post(
+    '/api/public/events/:slugOrId/gifts',
+    requireSupabaseConfiguredMiddleware,
+    async (req, res) => {
+      try {
+        const evt = await resolveEventForPublicOrOg(req.params.slugOrId);
+        if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
+          return res.status(404).json({ error: 'Event Gift Table not found.' });
+        }
+        const body = req.body as Partial<GiftTableEntry>;
+        const giverName = (body.giverName || '').trim();
+        if (!giverName) {
+          return res.status(400).json({ error: 'Your name is required on the Gift Table entry.' });
+        }
+        const giftType: GiftTableEntry['giftType'] =
+          body.giftType === 'cash-momo' || body.giftType === 'registry-item' || body.giftType === 'blessing-only'
+            ? body.giftType
+            : 'cash-momo';
+        const giftEntry: GiftTableEntry = {
+          id: `gift-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+          eventId: evt.id,
+          giverName,
+          giverPhone: body.giverPhone?.trim() ? normalizePhoneE164(body.giverPhone.trim()) : undefined,
+          giftType,
+          currency: body.currency === 'USD' ? 'USD' : 'GHS',
+          amount:
+            giftType === 'cash-momo'
+              ? Math.max(1, Number(body.amount) || 0)
+              : undefined,
+          registryItem:
+            giftType === 'registry-item'
+              ? body.registryItem?.trim() || evt.extraDataConfig?.giftRegistryItems?.[0] || 'Registry Gift'
+              : undefined,
+          side: body.side?.trim() || undefined,
+          message: body.message?.trim() || undefined,
+          recordedVia: 'public-table',
+          createdAt: new Date().toISOString(),
+        };
+
+        const adminClient = createServiceSupabaseClient() ?? createPublicSupabaseClient();
+        const { data: rawRow } = await adminClient
+          .from('events')
+          .select('extra_data_config')
+          .eq('id', evt.id)
+          .maybeSingle();
+        const currentExtra =
+          rawRow && (rawRow as Record<string, unknown>).extra_data_config &&
+          typeof (rawRow as Record<string, unknown>).extra_data_config === 'object'
+            ? ((rawRow as Record<string, unknown>).extra_data_config as Record<string, unknown>)
+            : ({ ...(evt.extraDataConfig ?? { enableGiftTable: true, customFields: [] }) } as Record<string, unknown>);
+        const currentLedger = Array.isArray(currentExtra.giftLedger)
+          ? (currentExtra.giftLedger as GiftTableEntry[])
+          : [];
+        const nextExtra = {
+          ...currentExtra,
+          enableGiftTable: true,
+          giftLedger: [giftEntry, ...currentLedger],
+        };
+        const { data: updatedRow, error: updErr } = await adminClient
+          .from('events')
+          .update({ extra_data_config: nextExtra })
+          .eq('id', evt.id)
+          .select('*')
+          .single();
+        if (updErr) {
+          return res.status(400).json({ error: updErr.message });
+        }
+        return res.status(201).json({
+          gift: giftEntry,
+          event: mapEventRow(updatedRow as Record<string, unknown>),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to record gift table entry.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
   // =========================================================================
   // PROTECTED STUDIO & EVENT MODULE ROUTES (Authenticated Organisers Only)
   // =========================================================================
@@ -2071,209 +2180,10 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
     }
   });
 
-  const seedInFlightByUser = new Map<string, Promise<unknown>>();
-
-  app.post('/api/studio/seed-starter', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
-    if (!platformRuntime.flags.starterSeedingEnabled) {
-      return res.status(403).json({
-        error: 'Starter data seeding is currently disabled by platform administrator.',
-      });
-    }
-    const client = req.supabase!;
-    const user = req.user!;
-
-    const existingPromise = seedInFlightByUser.get(user.id);
-    if (existingPromise) {
-      try {
-        const workspace = await existingPromise;
-        return res.json(workspace);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to seed starter data.';
-        return res.status(500).json({ error: message });
-      }
-    }
-
-    const runSeed = async () => {
-      const profile = await ensureProfileRow(client, user);
-      const adminOrUserClient = createServiceSupabaseClient() ?? client;
-
-      const buildSeededEvents = (suffix: string) =>
-        INITIAL_EVENTS.map((evt) => ({
-          id: `${evt.id}-${suffix}`,
-          organizer_id: user.id,
-          slug: `${evt.slug}-${suffix}`,
-          title: evt.title,
-          subtitle: evt.subtitle,
-          category: evt.category,
-          status: evt.status,
-          date: evt.date,
-          iso_date: evt.isoDate,
-          time: evt.time,
-          venue: evt.venue,
-          city: evt.city,
-          capacity: evt.capacity,
-          registered: evt.registered,
-          checked_in: evt.checkedIn,
-          sms_dispatched: evt.smsDispatched,
-          ticket_price: evt.ticketPrice,
-          revenue: evt.revenue,
-          organizer: profile.name || evt.organizer,
-          artwork: evt.artwork,
-          broadcast_error: evt.broadcastError ?? null,
-          flyer_url: evt.flyerUrl ?? null,
-          venue_format: evt.venueFormat ?? 'in-person',
-          sender_id: evt.senderId ?? null,
-          qr_pass_published: evt.qrPassPublished ?? evt.status !== 'draft',
-          design_theme: evt.designTheme ?? 'editorial-ivory',
-          validation_config: evt.validationConfig ?? null,
-          extra_data_config: evt.extraDataConfig ?? null,
-        }));
-
-      let idSuffix = user.id.slice(0, 6);
-      const candidateIds = INITIAL_EVENTS.map((evt) => `${evt.id}-${idSuffix}`);
-      const candidateSlugs = INITIAL_EVENTS.map((evt) => `${evt.slug}-${idSuffix}`);
-      const [{ data: collidingIds }, { data: collidingSlugs }] = await Promise.all([
-        adminOrUserClient.from('events').select('id, organizer_id').in('id', candidateIds),
-        adminOrUserClient.from('events').select('id, organizer_id').in('slug', candidateSlugs),
-      ]);
-
-      const claimedByOther = [...(collidingIds ?? []), ...(collidingSlugs ?? [])].some(
-        (r) => String((r as Record<string, unknown>).organizer_id) !== user.id
-      );
-      if (claimedByOther) {
-        idSuffix = `${user.id.slice(0, 6)}-${crypto.randomBytes(3).toString('hex')}`;
-      }
-
-      let seedRows: Array<Record<string, unknown>> = buildSeededEvents(idSuffix);
-      let { error: evtErr } = await client
-        .from('events')
-        .upsert(seedRows, { onConflict: 'id' });
-
-      if (evtErr && isMissingColumnError(evtErr)) {
-        seedRows = seedRows.map((row) => stripOptionalEventColumns(row));
-        const legacyRes = await client
-          .from('events')
-          .upsert(seedRows, { onConflict: 'id' });
-        evtErr = legacyRes.error;
-      }
-
-      if (
-        evtErr &&
-        (evtErr.code === '23505' ||
-          evtErr.message.toLowerCase().includes('duplicate key') ||
-          evtErr.message.toLowerCase().includes('row-level security'))
-      ) {
-        idSuffix = `${user.id.slice(0, 6)}-${crypto.randomBytes(3).toString('hex')}`;
-        let retryRows: Array<Record<string, unknown>> = buildSeededEvents(idSuffix);
-        let retryRes = await client
-          .from('events')
-          .upsert(retryRows, { onConflict: 'id' });
-        if (retryRes.error && isMissingColumnError(retryRes.error)) {
-          retryRows = retryRows.map((row) => stripOptionalEventColumns(row));
-          retryRes = await client
-            .from('events')
-            .upsert(retryRows, { onConflict: 'id' });
-        }
-        evtErr = retryRes.error;
-      }
-
-      if (evtErr) throw new Error(evtErr.message);
-
-      const seededAttendees = INITIAL_ATTENDEES.map((att) => ({
-        id: `${att.id}-${idSuffix}`,
-        event_id: `${att.eventId}-${idSuffix}`,
-        name: att.name,
-        email: att.email,
-        phone: att.phone,
-        organization: att.organization,
-        tier: att.tier,
-        checked_in: att.checkedIn,
-        checked_in_at: att.checkedInAt ?? null,
-        ticket_code: att.ticketCode,
-        sms_status: att.smsStatus,
-        payment_status: att.paymentStatus,
-      }));
-      const { error: attErr } = await client
-        .from('attendees')
-        .upsert(seededAttendees, { onConflict: 'id' });
-      if (attErr) throw new Error(attErr.message);
-
-      const seededSchedule = INITIAL_SCHEDULE.map((sch) => ({
-        id: `${sch.id}-${idSuffix}`,
-        event_id: `${sch.eventId}-${idSuffix}`,
-        time: sch.time,
-        duration: sch.duration,
-        title: sch.title,
-        stage: sch.stage,
-        lead: sch.lead,
-        completed: sch.completed,
-        day: sch.day,
-      }));
-      const { error: schErr } = await client
-        .from('schedule_blocks')
-        .upsert(seededSchedule, { onConflict: 'id' });
-      if (schErr) throw new Error(schErr.message);
-
-      const seededAlerts = INITIAL_ALERTS.map((al) => ({
-        id: `${al.id}-${idSuffix}`,
-        organizer_id: user.id,
-        title: al.title,
-        detail: al.detail,
-        category: al.category,
-        event_id: al.eventId ? `${al.eventId}-${idSuffix}` : null,
-        timestamp: al.timestamp,
-        resolved: al.resolved,
-      }));
-      const { error: altErr } = await client
-        .from('system_alerts')
-        .upsert(seededAlerts, { onConflict: 'id' });
-      if (altErr) throw new Error(altErr.message);
-
-      const rollRows = Object.entries(INITIAL_ROLL_SETTINGS).map(([evtId, cfg]) => ({
-        event_id: `${evtId}-${idSuffix}`,
-        exposures_limit: cfg.exposuresLimit,
-        darkroom_mode: cfg.darkroomMode,
-      }));
-      if (rollRows.length > 0) {
-        const { error: rollErr } = await client
-          .from('disposable_roll_settings')
-          .upsert(rollRows, { onConflict: 'event_id' });
-        if (rollErr) throw new Error(rollErr.message);
-      }
-
-      const shotRows = INITIAL_DISPOSABLE_SHOTS.map((s) => ({
-        id: `${s.id}-${idSuffix}`,
-        event_id: `${s.eventId}-${idSuffix}`,
-        frame_number: s.frameNumber,
-        data_url: s.dataUrl,
-        captured_by: s.capturedBy,
-        caption: s.caption ?? null,
-        film_stock: s.filmStock,
-        date_stamp: s.dateStamp,
-        captured_at: s.capturedAt,
-        developed: s.developed,
-        likes: s.likes,
-        liked: Boolean(s.liked),
-      }));
-      const { error: shotErr } = await client
-        .from('disposable_shots')
-        .upsert(shotRows, { onConflict: 'id' });
-      if (shotErr) throw new Error(shotErr.message);
-
-      return loadOrganizerWorkspace(client, user);
-    };
-
-    const seedPromise = runSeed();
-    seedInFlightByUser.set(user.id, seedPromise);
-    try {
-      const workspace = await seedPromise;
-      return res.json(workspace);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to seed starter data.';
-      return res.status(500).json({ error: message });
-    } finally {
-      seedInFlightByUser.delete(user.id);
-    }
+  app.post('/api/studio/seed-starter', requireSupabaseAuth, requireRole('creator', 'organizer'), async (_req: AuthedRequest, res) => {
+    return res.status(403).json({
+      error: 'Demo and starter data seeding has been removed.',
+    });
   });
 
   app.patch('/api/studio/profile', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
@@ -2318,8 +2228,8 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         .select('*')
         .single();
 
-      if (error && error.message?.toLowerCase().includes('phone')) {
-        const { phone: _dropPhone, ...legacyUpdate } = updatePayload;
+      if (error && isMissingColumnError(error)) {
+        const { phone: _dropPhone, sender_id: _dropSender, ...legacyUpdate } = updatePayload;
         const retry = await req
           .supabase!.from('profiles')
           .update(legacyUpdate)
@@ -2351,7 +2261,6 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
     }
     const user = req.user!;
     try {
-      seedInFlightByUser.delete(user.id);
       const { data: profRow } = await svc
         .from('profiles')
         .select('email, phone')
@@ -2676,6 +2585,85 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
     }
   });
 
+  // Standalone Studio Gift Table Desk Recording (never creates registration/attendee)
+  app.post(
+    '/api/studio/events/:eventId/gifts',
+    requireSupabaseAuth,
+    requireRole('creator', 'organizer', 'gate_staff'),
+    async (req: AuthedRequest, res) => {
+      try {
+        const client = req.supabase!;
+        const { data: evtRow, error: evtErr } = await client
+          .from('events')
+          .select('*')
+          .eq('id', req.params.eventId)
+          .maybeSingle();
+        if (evtErr || !evtRow) {
+          return res.status(404).json({ error: 'Event not found in studio.' });
+        }
+        const body = req.body as Partial<GiftTableEntry>;
+        const giverName = (body.giverName || '').trim();
+        if (!giverName) {
+          return res.status(400).json({ error: 'Donor or guest name is required.' });
+        }
+        const giftType: GiftTableEntry['giftType'] =
+          body.giftType === 'cash-momo' || body.giftType === 'registry-item' || body.giftType === 'blessing-only'
+            ? body.giftType
+            : 'cash-momo';
+        const evtMapped = mapEventRow(evtRow as Record<string, unknown>);
+        const giftEntry: GiftTableEntry = {
+          id: `gift-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+          eventId: evtMapped.id,
+          giverName,
+          giverPhone: body.giverPhone?.trim() ? normalizePhoneE164(body.giverPhone.trim()) : undefined,
+          giftType,
+          currency: body.currency === 'USD' ? 'USD' : 'GHS',
+          amount:
+            giftType === 'cash-momo'
+              ? Math.max(1, Number(body.amount) || 0)
+              : undefined,
+          registryItem:
+            giftType === 'registry-item'
+              ? body.registryItem?.trim() || evtMapped.extraDataConfig?.giftRegistryItems?.[0] || 'Registry Gift'
+              : undefined,
+          side: body.side?.trim() || undefined,
+          message: body.message?.trim() || undefined,
+          recordedVia: 'gift-desk',
+          createdAt: new Date().toISOString(),
+        };
+        const rawExtra =
+          (evtRow as Record<string, unknown>).extra_data_config &&
+          typeof (evtRow as Record<string, unknown>).extra_data_config === 'object'
+            ? ((evtRow as Record<string, unknown>).extra_data_config as Record<string, unknown>)
+            : ({ ...(evtMapped.extraDataConfig ?? { enableGiftTable: true, customFields: [] }) } as Record<string, unknown>);
+        const currentLedger = Array.isArray(rawExtra.giftLedger)
+          ? (rawExtra.giftLedger as GiftTableEntry[])
+          : [];
+        const nextExtra = {
+          ...rawExtra,
+          enableGiftTable: true,
+          giftLedger: [giftEntry, ...currentLedger],
+        };
+        const { data: updatedRow, error: updErr } = await client
+          .from('events')
+          .update({ extra_data_config: nextExtra })
+          .eq('id', evtMapped.id)
+          .select('*')
+          .single();
+        if (updErr) {
+          return res.status(400).json({ error: updErr.message });
+        }
+        return res.status(201).json({
+          gift: giftEntry,
+          event: mapEventRow(updatedRow as Record<string, unknown>),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to log gift desk entry.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
   app.delete('/api/studio/events/:id', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const { error } = await req
@@ -2719,15 +2707,18 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
       const normalizedPhone = normalizePhoneE164(attendee.phone);
       const evtMapped = mapEventRow(evtCheckRec);
       let replyTo: string | undefined;
-      if (isResendConfigured()) {
-        const { data: orgProf } = await client
-          .from('profiles')
-          .select('reply_to_email')
-          .eq('id', req.user!.id)
-          .maybeSingle();
-        if (orgProf && typeof (orgProf as Record<string, unknown>).reply_to_email === 'string') {
-          replyTo = String((orgProf as Record<string, unknown>).reply_to_email);
-        }
+      let orgSenderId: string | undefined;
+      const { data: orgProf } = await client
+        .from('profiles')
+        .select('reply_to_email, sender_id')
+        .eq('id', req.user!.id)
+        .maybeSingle();
+      const orgProfRec = orgProf as Record<string, unknown> | null;
+      if (orgProfRec && typeof orgProfRec.reply_to_email === 'string') {
+        replyTo = orgProfRec.reply_to_email;
+      }
+      if (orgProfRec && typeof orgProfRec.sender_id === 'string' && orgProfRec.sender_id.trim()) {
+        orgSenderId = orgProfRec.sender_id.trim();
       }
 
       const studioMsgType = attendee.checkedIn ? 'checkin' : 'confirmation';
@@ -2745,7 +2736,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
           normalizedPhone,
           evtMapped.title,
           attendee.ticketCode,
-          evtMapped.senderId,
+          evtMapped.senderId || orgSenderId,
           studioResolvedMsg.text
         ),
         isResendConfigured() && attendee.email?.includes('@')
@@ -2919,13 +2910,18 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         dispatchedMessage = resolved.text;
 
         let replyTo: string | undefined;
+        let orgSenderId: string | undefined;
         const { data: orgProf } = await client
           .from('profiles')
-          .select('reply_to_email')
+          .select('reply_to_email, sender_id')
           .eq('id', String((evtRow as Record<string, unknown>).organizer_id || req.user!.id))
           .maybeSingle();
-        if (orgProf && typeof (orgProf as Record<string, unknown>).reply_to_email === 'string') {
-          replyTo = String((orgProf as Record<string, unknown>).reply_to_email);
+        const orgProfRec = orgProf as Record<string, unknown> | null;
+        if (orgProfRec && typeof orgProfRec.reply_to_email === 'string') {
+          replyTo = orgProfRec.reply_to_email;
+        }
+        if (orgProfRec && typeof orgProfRec.sender_id === 'string' && orgProfRec.sender_id.trim()) {
+          orgSenderId = orgProfRec.sender_id.trim();
         }
 
         await Promise.all([
@@ -2934,7 +2930,7 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
                 normalizePhoneE164(mappedAttendee.phone),
                 evtMapped.title,
                 mappedAttendee.ticketCode,
-                evtMapped.senderId,
+                evtMapped.senderId || orgSenderId,
                 resolved.text
               )
             : Promise.resolve('Pending' as const),
@@ -3482,8 +3478,8 @@ export async function createExpressApp(options?: { serverless?: boolean }) {
         clientId: String(rec.client_id),
         environment: String(rec.environment ?? 'sandbox'),
         data: {
-          eventId: rec.event_id ? String(rec.event_id) : 'evt-tech-leaders-2026',
-          attendeeName: 'Ama Serwaa (Test Dispatch)',
+          eventId: rec.event_id ? String(rec.event_id) : 'evt-test-webhook',
+          attendeeName: 'Test Webhook Attendee',
           ticketCode: '#EVT-TEST-2026',
           smsStatus: 'Arkesel Sent',
         },

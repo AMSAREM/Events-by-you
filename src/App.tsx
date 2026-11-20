@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Clock, Database, Loader2, LogOut, ShieldCheck, Sparkles, X } from 'lucide-react';
-import { INITIAL_EVENTS, INITIAL_PROFILE } from './data/initialData';
+import { Clock, Compass, Database, Loader2, LogOut, ShieldCheck, X } from 'lucide-react';
+import { INITIAL_PROFILE } from './data/initialData';
 import type {
   AppRole,
   AppRoute,
@@ -14,6 +14,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  GiftTableEntry,
   NavScreen,
   OrganizerProfile,
   ScheduleBlock,
@@ -53,36 +54,73 @@ import { DisposableCameraScreen } from './components/DisposableCameraScreen';
 import { AppsCreatorConsoleScreen } from './components/AppsCreatorConsoleScreen';
 import { LegalScreen } from './components/LegalScreen';
 import { EventDetailModal } from './components/EventModals';
+import { OnboardingWalkthroughModal } from './components/OnboardingWalkthroughModal';
 
 const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_WARNING_MS = 60 * 1000;
 const LAST_ACTIVITY_KEY = 'eventsapp_last_activity_v1';
 
+function getWalkthroughStorageKey(profile?: Pick<OrganizerProfile, 'email' | 'phone' | 'name'> | null): string {
+  const userKey =
+    profile?.email?.trim().toLowerCase() ||
+    profile?.phone?.trim() ||
+    profile?.name?.trim().toLowerCase() ||
+    'organiser';
+  return `eventsapp_walkthrough_done_${userKey}`;
+}
+
 function parseInvitationFromLocation(): {
   slugOrId?: string;
-  focus?: 'top' | 'register' | 'checkin';
+  focus?: 'top' | 'register' | 'checkin' | 'camera' | 'gifts';
+  guest?: string;
+  pass?: string;
 } {
   if (typeof window === 'undefined') return {};
   const pathname = window.location.pathname;
+  const params = new URLSearchParams(window.location.search);
+  const guest = params.get('guest')?.trim() || undefined;
+  const pass = params.get('pass')?.trim() || params.get('code')?.trim() || undefined;
+
+  const cameraMatch = pathname.match(/^\/e\/([^/]+)\/camera\/?$/i);
+  if (cameraMatch && cameraMatch[1]) {
+    return { slugOrId: decodeURIComponent(cameraMatch[1]), focus: 'camera', guest, pass };
+  }
+  if (pathname.toLowerCase() === '/camera' || pathname.toLowerCase() === '/camera/') {
+    const camEvt = params.get('event')?.trim() || params.get('camera')?.trim();
+    return { slugOrId: camEvt, focus: 'camera', guest, pass };
+  }
+  const cameraQuery = params.get('camera')?.trim();
+  if (cameraQuery) {
+    return { slugOrId: cameraQuery, focus: 'camera', guest, pass };
+  }
+
+  const giftsMatch = pathname.match(/^\/e\/([^/]+)\/gifts\/?$/i);
+  if (giftsMatch && giftsMatch[1]) {
+    return { slugOrId: decodeURIComponent(giftsMatch[1]), focus: 'gifts', guest, pass };
+  }
+
   const checkinMatch = pathname.match(/^\/e\/([^/]+)\/checkin\/?$/i);
   if (checkinMatch && checkinMatch[1]) {
     return { slugOrId: decodeURIComponent(checkinMatch[1]), focus: 'checkin' };
   }
   const match = pathname.match(/^\/e\/([^/]+)\/?$/i);
-  const params = new URLSearchParams(window.location.search);
   const tab = (params.get('tab') || '').toLowerCase();
-  const focus: 'top' | 'register' | 'checkin' =
-    tab === 'checkin' || tab === 'qr'
-      ? 'checkin'
-      : tab === 'register'
-        ? 'register'
-        : 'top';
+  const focus: 'top' | 'register' | 'checkin' | 'camera' | 'gifts' =
+    tab === 'camera'
+      ? 'camera'
+      : tab === 'gifts' || tab === 'gift'
+        ? 'gifts'
+        : tab === 'checkin' || tab === 'qr'
+          ? 'checkin'
+          : tab === 'register'
+            ? 'register'
+            : 'top';
   if (match && match[1]) {
-    return { slugOrId: decodeURIComponent(match[1]), focus };
+    return { slugOrId: decodeURIComponent(match[1]), focus, guest, pass };
   }
   const eventQuery = params.get('event')?.trim();
   if (eventQuery) {
-    return { slugOrId: eventQuery, focus };
+    return { slugOrId: eventQuery, focus, guest, pass };
   }
   return {};
 }
@@ -94,7 +132,9 @@ function getInitialRouteFromPathname(): AppRoute {
   if (path === '/privacy') return 'privacy';
   if (path === '/signin') return 'signin';
   if (path === '/signup') return 'signup';
-  if (parseInvitationFromLocation().slugOrId) return 'demo-event';
+  const invite = parseInvitationFromLocation();
+  if (invite.focus === 'camera') return 'camera';
+  if (invite.slugOrId) return 'demo-event';
   return 'home';
 }
 
@@ -123,7 +163,7 @@ export default function App() {
   const [isSignedIn, setIsSignedIn] = useState<boolean>(() => Boolean(getStoredSession()));
   const [authBootstrapping, setAuthBootstrapping] = useState<boolean>(() => Boolean(getStoredSession()));
   const [studioLoading, setStudioLoading] = useState(false);
-  const [seedingStarter, setSeedingStarter] = useState(false);
+  const [showWalkthrough, setShowWalkthrough] = useState(false);
   const [supabaseConfigured, setSupabaseConfigured] = useState<boolean>(true);
   const [inMemoryMode, setInMemoryMode] = useState<boolean>(false);
   const [creatorEmail, setCreatorEmail] = useState<string>('amoakoimml@gmail.com');
@@ -162,17 +202,37 @@ export default function App() {
   const [csvExportEventId, setCsvExportEventId] = useState<string | undefined>(undefined);
   const [checkinEventId, setCheckinEventId] = useState<string | undefined>(undefined);
   const [checkinPrefillCode, setCheckinPrefillCode] = useState<string | undefined>(undefined);
-  const [cameraEventId, setCameraEventId] = useState<string | undefined>(undefined);
-  const [cameraGuestName, setCameraGuestName] = useState<string | undefined>(undefined);
+  const [cameraEventId, setCameraEventId] = useState<string | undefined>(() => {
+    const inv = parseInvitationFromLocation();
+    return inv.focus === 'camera' ? inv.slugOrId : undefined;
+  });
+  const [cameraGuestName, setCameraGuestName] = useState<string | undefined>(() => {
+    const inv = parseInvitationFromLocation();
+    return inv.focus === 'camera' ? inv.guest : undefined;
+  });
+  const [cameraPassCode, setCameraPassCode] = useState<string | undefined>(() => {
+    const inv = parseInvitationFromLocation();
+    return inv.focus === 'camera' ? inv.pass : undefined;
+  });
+  const [verifiedCameraPass, setVerifiedCameraPass] = useState<{
+    attendeeName: string;
+    ticketCode: string;
+    checkedIn: boolean;
+    tier: string;
+  } | null>(null);
   const [cameraReturnRoute, setCameraReturnRoute] = useState<'home' | 'demo-event'>('home');
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [workspaceEventId, setWorkspaceEventId] = useState<string | null>(null);
-  const [publicPreviewEventId, setPublicPreviewEventId] = useState<string | undefined>(
-    () => parseInvitationFromLocation().slugOrId
-  );
-  const [publicPreviewFocus, setPublicPreviewFocus] = useState<'top' | 'register' | 'checkin'>(
-    () => parseInvitationFromLocation().focus || 'top'
-  );
+  const [publicPreviewEventId, setPublicPreviewEventId] = useState<string | undefined>(() => {
+    const inv = parseInvitationFromLocation();
+    return inv.focus === 'camera' ? undefined : inv.slugOrId;
+  });
+  const [publicPreviewFocus, setPublicPreviewFocus] = useState<
+    'top' | 'register' | 'checkin' | 'gifts'
+  >(() => {
+    const focus = parseInvitationFromLocation().focus;
+    return focus === 'register' || focus === 'checkin' || focus === 'gifts' ? focus : 'top';
+  });
   const [publicEventsLoading, setPublicEventsLoading] = useState<boolean>(true);
 
   const notifyError = useCallback((err: unknown, fallback: string) => {
@@ -209,6 +269,16 @@ export default function App() {
       setCreatorAppLogs(Array.isArray(data?.creatorAppLogs) ? data.creatorAppLogs : []);
       setIsSignedIn(true);
       setApiBannerError(null);
+      try {
+        const loadedProfile = data?.profile;
+        const loadedEvents = Array.isArray(data?.events) ? data.events : [];
+        const wtKey = getWalkthroughStorageKey(loadedProfile);
+        if (loadedEvents.length === 0 && !localStorage.getItem(wtKey)) {
+          setShowWalkthrough(true);
+        }
+      } catch {
+        // Ignore storage failures
+      }
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unable to load workspace from Supabase.';
@@ -366,24 +436,29 @@ export default function App() {
   }, [syncBrowserPath]);
 
   const openEventInvitation = useCallback(
-    (evtOrSlug?: EventItem | string, focus: 'top' | 'register' | 'checkin' = 'top') => {
+    (
+      evtOrSlug?: EventItem | string,
+      focus: 'top' | 'register' | 'checkin' | 'gifts' = 'top'
+    ) => {
       const slugOrId =
-        typeof evtOrSlug === 'string'
-          ? evtOrSlug
-          : evtOrSlug?.slug || evtOrSlug?.id || 'tech-leaders-summit-2026';
+        typeof evtOrSlug === 'string' ? evtOrSlug : evtOrSlug?.slug || evtOrSlug?.id;
       const targetId =
         typeof evtOrSlug === 'string' ? evtOrSlug : evtOrSlug?.id || slugOrId;
       setPublicPreviewEventId(targetId);
       setPublicPreviewFocus(focus);
       setRoute('demo-event');
-      const nextPath =
-        focus === 'checkin'
-          ? `/e/${encodeURIComponent(slugOrId)}/checkin`
-          : focus === 'register'
-            ? `/e/${encodeURIComponent(slugOrId)}?tab=register`
-            : `/e/${encodeURIComponent(slugOrId)}`;
-      syncBrowserPath(nextPath);
-      if (focus === 'top' || focus === 'checkin') {
+      if (slugOrId) {
+        const nextPath =
+          focus === 'checkin'
+            ? `/e/${encodeURIComponent(slugOrId)}/checkin`
+            : focus === 'gifts'
+              ? `/e/${encodeURIComponent(slugOrId)}/gifts`
+              : focus === 'register'
+                ? `/e/${encodeURIComponent(slugOrId)}?tab=register`
+                : `/e/${encodeURIComponent(slugOrId)}`;
+        syncBrowserPath(nextPath);
+      }
+      if (focus === 'top' || focus === 'checkin' || focus === 'gifts') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     },
@@ -393,9 +468,21 @@ export default function App() {
   useEffect(() => {
     const handlePopState = () => {
       const invite = parseInvitationFromLocation();
+      if (invite.focus === 'camera') {
+        setCameraEventId(invite.slugOrId);
+        setCameraGuestName(invite.guest);
+        setCameraPassCode(invite.pass);
+        setVerifiedCameraPass(null);
+        setRoute('camera');
+        return;
+      }
       if (invite.slugOrId) {
         setPublicPreviewEventId(invite.slugOrId);
-        setPublicPreviewFocus(invite.focus || 'top');
+        setPublicPreviewFocus(
+          invite.focus === 'register' || invite.focus === 'checkin' || invite.focus === 'gifts'
+            ? invite.focus
+            : 'top'
+        );
         setRoute('demo-event');
         return;
       }
@@ -407,7 +494,8 @@ export default function App() {
           prev === 'privacy' ||
           prev === 'signin' ||
           prev === 'signup' ||
-          prev === 'demo-event'
+          prev === 'demo-event' ||
+          prev === 'camera'
         ) {
           return 'home';
         }
@@ -421,7 +509,8 @@ export default function App() {
   const handleAuthenticated = async (
     session: StoredAuthSession,
     nextProfile: OrganizerProfile,
-    openCreatorConsole = false
+    openCreatorConsole = false,
+    isNewUser = false
   ) => {
     saveStoredSession(session);
     if (nextProfile) setProfile(nextProfile);
@@ -442,6 +531,17 @@ export default function App() {
     }
     await hydrateStudioWorkspace();
     await loadPublicEvents();
+
+    if (!openCreatorConsole) {
+      try {
+        const wtKey = getWalkthroughStorageKey(nextProfile);
+        if (isNewUser || !localStorage.getItem(wtKey)) {
+          setShowWalkthrough(true);
+        }
+      } catch {
+        if (isNewUser) setShowWalkthrough(true);
+      }
+    }
 
     if (openCreatorConsole) {
       const canAccessConsole =
@@ -483,6 +583,7 @@ export default function App() {
       }
       setCreatorUnlocked(false);
       setIsSignedIn(false);
+      setShowWalkthrough(false);
       setSessionWarningSecondsLeft(null);
       setSessionTimeoutNotice(
         isTimeout
@@ -649,32 +750,19 @@ export default function App() {
     };
   }, [handleSignOut, isSignedIn]);
 
-  const handleSeedStarterData = async () => {
-    if (seedingStarter) return;
-    setSeedingStarter(true);
-    setApiBannerError(null);
-    try {
-      const data = await api.studio.seedStarter();
-      if (data?.profile) setProfile(data.profile);
-      setEvents(Array.isArray(data?.events) ? data.events : []);
-      setAttendees(Array.isArray(data?.attendees) ? data.attendees : []);
-      setScheduleBlocks(Array.isArray(data?.scheduleBlocks) ? data.scheduleBlocks : []);
-      setAlerts(Array.isArray(data?.alerts) ? data.alerts : []);
-      setDisposableShots(Array.isArray(data?.disposableShots) ? data.disposableShots : []);
-      setRollSettings(
-        data?.rollSettings && typeof data.rollSettings === 'object' ? data.rollSettings : {}
-      );
-      setCreatorApps(Array.isArray(data?.creatorApps) ? data.creatorApps : []);
-      setCreatorAppLogs(Array.isArray(data?.creatorAppLogs) ? data.creatorAppLogs : []);
-      setWorkspaceEventId(null);
-      setSelectedEventId(null);
-      void loadPublicEvents();
-    } catch (err) {
-      notifyError(err, 'Failed to seed starter data into Supabase.');
-    } finally {
-      setSeedingStarter(false);
-    }
-  };
+  const closeWalkthrough = useCallback(
+    (markComplete = true) => {
+      setShowWalkthrough(false);
+      if (markComplete) {
+        try {
+          localStorage.setItem(getWalkthroughStorageKey(profile), '1');
+        } catch {
+          // Ignore storage failures
+        }
+      }
+    },
+    [profile]
+  );
 
   const handleUpdateProfile = async (nextProfile: OrganizerProfile) => {
     setProfile(nextProfile);
@@ -772,15 +860,33 @@ export default function App() {
   const openPublicCamera = (
     eventId?: string,
     guestName?: string,
-    returnTo: 'home' | 'demo-event' = 'home'
+    returnTo: 'home' | 'demo-event' = 'home',
+    passCode?: string
   ) => {
-    requireSignedIn({
-      route: 'camera',
-      eventId,
-      guestName,
-      returnRoute: returnTo,
-      label: 'Event Disposable Camera',
-    });
+    const pool = [...safeEvents, ...safePublicEvents];
+    const targetLower = (eventId || '').toLowerCase();
+    const matched = targetLower
+      ? pool.find((e) => e.id.toLowerCase() === targetLower || e.slug.toLowerCase() === targetLower)
+      : pool[0];
+    const resolvedId = matched?.id || eventId || pool[0]?.id;
+    const resolvedSlug = matched?.slug || resolvedId;
+
+    setCameraEventId(resolvedId);
+    setCameraGuestName(guestName);
+    setCameraPassCode(passCode);
+    setVerifiedCameraPass(null);
+    setCameraReturnRoute(returnTo);
+    setRoute('camera');
+    const search = new URLSearchParams();
+    if (passCode?.trim()) search.set('pass', passCode.trim());
+    if (guestName?.trim()) search.set('guest', guestName.trim());
+    const qs = search.toString();
+    syncBrowserPath(
+      resolvedSlug
+        ? `/e/${encodeURIComponent(resolvedSlug)}/camera${qs ? `?${qs}` : ''}`
+        : `/camera${qs ? `?${qs}` : ''}`
+    );
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const openStudioCamera = (eventId?: string) => {
@@ -792,14 +898,21 @@ export default function App() {
     });
   };
 
-  const handleAddShot = async (shot: DisposableShot) => {
+  const handleAddShot = async (
+    shot: DisposableShot
+  ): Promise<{ ok: boolean; error?: string }> => {
     setDisposableShots((prev) => [shot, ...prev]);
     try {
-      const res = await api.studio.addShot(shot);
+      const res = isSignedIn
+        ? await api.studio.addShot(shot)
+        : await api.public.addCameraShot(shot.eventId, shot);
       setDisposableShots((prev) => prev.map((s) => (s.id === shot.id ? res.shot : s)));
+      return { ok: true };
     } catch (err) {
       setDisposableShots((prev) => prev.filter((s) => s.id !== shot.id));
-      notifyError(err, 'Failed to save camera shot to Supabase.');
+      const msg = err instanceof Error ? err.message : 'Failed to save camera shot.';
+      notifyError(err, msg);
+      return { ok: false, error: msg };
     }
   };
 
@@ -816,10 +929,12 @@ export default function App() {
       )
     );
     try {
-      const res = await api.studio.toggleLikeShot(shotId);
+      const res = isSignedIn
+        ? await api.studio.toggleLikeShot(shotId)
+        : await api.public.toggleLikeCameraShot(shotId);
       setDisposableShots((prev) => prev.map((s) => (s.id === shotId ? res.shot : s)));
     } catch (err) {
-      notifyError(err, 'Failed to update shot favorite in Supabase.');
+      notifyError(err, 'Failed to update shot favorite.');
     }
   };
 
@@ -912,7 +1027,6 @@ export default function App() {
       ticketCode: attendee.ticketCode,
       validationGroup: attendee.validationGroup,
       inviteCodeUsed: attendee.inviteCodeUsed,
-      giftEntry: attendee.giftEntry,
       customResponses: attendee.customResponses,
     });
     setPublicEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
@@ -921,6 +1035,28 @@ export default function App() {
       setAttendees((prev) => [res.attendee, ...prev]);
     }
     return res.attendee;
+  };
+
+  const handlePublicSubmitGiftTableEntry = async (
+    eventId: string,
+    gift: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
+  ) => {
+    const res = await api.public.submitGiftTableEntry(eventId, gift);
+    setPublicEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
+    if (isSignedIn) {
+      setEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
+    }
+    return res;
+  };
+
+  const handleStudioRecordGiftTableEntry = async (
+    eventId: string,
+    gift: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
+  ) => {
+    const res = await api.studio.recordGiftTableEntry(eventId, gift);
+    setEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
+    setPublicEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
+    return res;
   };
 
   const handleStudioRegisterAttendee = async (eventId: string, attendee: Attendee) => {
@@ -934,7 +1070,13 @@ export default function App() {
     }
   };
 
-  const handleToggleCheckIn = async (attendeeId: string) => {
+  const handleToggleCheckIn = async (
+    attendeeId: string
+  ): Promise<{
+    checkInMessageSent?: boolean;
+    cameraUrl?: string;
+    dispatchedMessage?: string;
+  } | void> => {
     const target = attendees.find((a) => a.id === attendeeId);
     const nowTime = new Date().toLocaleTimeString('en-GB', {
       hour: '2-digit',
@@ -962,6 +1104,11 @@ export default function App() {
     try {
       const res = await api.studio.toggleCheckIn(attendeeId);
       setAttendees((prev) => prev.map((a) => (a.id === attendeeId ? res.attendee : a)));
+      return {
+        checkInMessageSent: res.checkInMessageSent,
+        cameraUrl: res.cameraUrl,
+        dispatchedMessage: res.dispatchedMessage,
+      };
     } catch (err) {
       notifyError(err, 'Failed to update check-in status in Supabase.');
       void hydrateStudioWorkspace();
@@ -1181,10 +1328,10 @@ export default function App() {
       : safePublicEvents.length > 0
         ? safePublicEvents
         : safeEvents;
-  const featuredEvent =
+  const featuredEvent: EventItem | null =
     landingEvents.find((e) => e.status !== 'draft' && e.flyerUrl?.startsWith('data:')) ??
     landingEvents[0] ??
-    INITIAL_EVENTS[0];
+    null;
 
   useEffect(() => {
     if (route !== 'demo-event' || !publicPreviewEventId) return;
@@ -1212,6 +1359,41 @@ export default function App() {
       };
     }
   }, [route, publicPreviewEventId, safeEvents, safePublicEvents]);
+
+  useEffect(() => {
+    if (route !== 'camera') return;
+    const target = cameraEventId || safePublicEvents[0]?.id || safeEvents[0]?.id;
+    if (!target) return;
+    let cancelled = false;
+    api.public
+      .getCameraRoll(target, cameraPassCode)
+      .then((res) => {
+        if (cancelled || !res?.event) return;
+        setPublicEvents((prev) =>
+          prev.some((e) => e.id === res.event.id)
+            ? prev.map((e) => (e.id === res.event.id ? res.event : e))
+            : [res.event, ...prev]
+        );
+        setCameraEventId((prev) => prev || res.event.id);
+        setRollSettings((prev) => ({ ...prev, [res.event.id]: res.rollSettings }));
+        if (res.verifiedPass) {
+          setVerifiedCameraPass(res.verifiedPass);
+          setCameraGuestName((prev) => prev || res.verifiedPass?.attendeeName);
+        } else {
+          setVerifiedCameraPass(null);
+        }
+        setDisposableShots((prev) => {
+          const otherShots = prev.filter((s) => s.eventId !== res.event.id);
+          return [...res.shots, ...otherShots];
+        });
+      })
+      .catch(() => {
+        // Non-fatal fallback
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [route, cameraEventId, cameraPassCode, isSignedIn]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -1254,15 +1436,17 @@ export default function App() {
     }
 
     document.title = 'Events App — Event Registration & SMS Ticketing';
-    const defaultOgPath = `/api/og/event/${encodeURIComponent(
-      featuredEvent.slug || featuredEvent.id
-    )}`;
-    const resolvedDefaultOg = resolveApiUrl(defaultOgPath);
-    const defaultOg = /^https?:\/\//i.test(resolvedDefaultOg)
-      ? resolvedDefaultOg
-      : `${window.location.origin}${resolvedDefaultOg}`;
-    setMeta('property', 'og:image', defaultOg);
-    setMeta('name', 'twitter:image', defaultOg);
+    if (featuredEvent) {
+      const defaultOgPath = `/api/og/event/${encodeURIComponent(
+        featuredEvent.slug || featuredEvent.id
+      )}`;
+      const resolvedDefaultOg = resolveApiUrl(defaultOgPath);
+      const defaultOg = /^https?:\/\//i.test(resolvedDefaultOg)
+        ? resolvedDefaultOg
+        : `${window.location.origin}${resolvedDefaultOg}`;
+      setMeta('property', 'og:image', defaultOg);
+      setMeta('name', 'twitter:image', defaultOg);
+    }
   }, [route, publicPreviewEventId, safeEvents, safePublicEvents, featuredEvent]);
 
   const sessionTimeoutModal =
@@ -1355,7 +1539,7 @@ export default function App() {
       <>
         <LandingScreen
           featuredEvent={featuredEvent}
-          allEvents={landingEvents.length > 0 ? landingEvents : [featuredEvent]}
+          allEvents={landingEvents}
           recentAttendees={safeAttendees}
           isSignedIn={isSignedIn}
           hasSetEvent={hasSetEvent}
@@ -1400,7 +1584,7 @@ export default function App() {
           onNavigateDemoEvent={(eventId, focusSection = 'top') => {
             const pool = landingEvents.length > 0 ? landingEvents : safePublicEvents;
             const matched =
-              pool.find((e) => e.id === eventId || e.slug === eventId) ?? featuredEvent;
+              pool.find((e) => e.id === eventId || e.slug === eventId) ?? featuredEvent ?? undefined;
             openEventInvitation(matched, focusSection);
           }}
           onNavigateStudio={() =>
@@ -1411,9 +1595,9 @@ export default function App() {
             })
           }
           onSignOut={() => void handleSignOut('manual')}
-          onOpenQrScanner={(eventId) => openQrScanner(eventId || featuredEvent.id)}
+          onOpenQrScanner={(eventId) => openQrScanner(eventId || featuredEvent?.id)}
           onOpenDisposableCamera={(eventId) =>
-            openPublicCamera(eventId || featuredEvent.id, undefined, 'home')
+            openPublicCamera(eventId || featuredEvent?.id, undefined, 'home')
           }
           onUpgradePro={() =>
             requireSignedIn({
@@ -1555,6 +1739,7 @@ export default function App() {
         <PublicEventScreen
           events={demoEventsPool}
           attendees={safeAttendees}
+          scheduleBlocks={safeScheduleBlocks}
           initialEventId={publicPreviewEventId}
           initialFocus={publicPreviewFocus}
           isLoadingEvents={publicEventsLoading}
@@ -1565,13 +1750,23 @@ export default function App() {
             setPublicPreviewEventId(evt.id);
             const cleanSlug = encodeURIComponent(evt.slug || evt.id);
             syncBrowserPath(
-              publicPreviewFocus === 'checkin' ? `/e/${cleanSlug}/checkin` : `/e/${cleanSlug}`
+              publicPreviewFocus === 'checkin'
+                ? `/e/${cleanSlug}/checkin`
+                : publicPreviewFocus === 'gifts'
+                  ? `/e/${cleanSlug}/gifts`
+                  : `/e/${cleanSlug}`
             );
           }}
           onFocusModeChange={(mode, evt) => {
             setPublicPreviewFocus(mode);
             const cleanSlug = encodeURIComponent(evt.slug || evt.id);
-            syncBrowserPath(mode === 'checkin' ? `/e/${cleanSlug}/checkin` : `/e/${cleanSlug}`);
+            syncBrowserPath(
+              mode === 'checkin'
+                ? `/e/${cleanSlug}/checkin`
+                : mode === 'gifts'
+                  ? `/e/${cleanSlug}/gifts`
+                  : `/e/${cleanSlug}`
+            );
           }}
           onOpenStudio={() =>
             requireSignedIn({
@@ -1594,10 +1789,50 @@ export default function App() {
           }}
           onCreateEvent={openCreateWizard}
           onRegisterAttendee={handlePublicRegisterAttendee}
-          onOpenDisposableCamera={(eventId, guestName) =>
-            openPublicCamera(eventId, guestName, 'demo-event')
+          onSubmitGiftTableEntry={handlePublicSubmitGiftTableEntry}
+          onOpenDisposableCamera={(eventId, guestName, passCode) =>
+            openPublicCamera(eventId, guestName, 'demo-event', passCode)
           }
           onOpenLegal={openLegalRoute}
+        />
+        {sessionTimeoutModal}
+      </>
+    );
+  }
+
+  if (route === 'camera') {
+    const camPool = activeEvents.length > 0 ? activeEvents : safePublicEvents;
+    const camTargetLower = (cameraEventId || '').toLowerCase();
+    const resolvedCamEvent =
+      camPool.find(
+        (e) => e.id.toLowerCase() === camTargetLower || e.slug.toLowerCase() === camTargetLower
+      ) ?? camPool[0];
+    return (
+      <>
+        <DisposableCameraScreen
+          mode="public"
+          events={camPool}
+          shots={safeDisposableShots}
+          rollSettings={safeRollSettings}
+          alerts={safeAlerts}
+          profile={profile}
+          initialEventId={resolvedCamEvent?.id}
+          initialGuestName={cameraGuestName}
+          initialPassCode={cameraPassCode}
+          verifiedPass={verifiedCameraPass}
+          onAddShot={handleAddShot}
+          onToggleLikeShot={handleToggleLikeShot}
+          onDeleteShot={handleDeleteShot}
+          onDevelopRoll={handleDevelopRoll}
+          onUpdateRollSettings={handleUpdateRollSettings}
+          onBack={() => {
+            setRoute(cameraReturnRoute);
+            syncBrowserPath(cameraReturnRoute === 'home' ? '/' : window.location.pathname.replace(/\/camera\/?$/i, ''));
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onOpenStudio={() => {
+            openStudioCamera(resolvedCamEvent?.id);
+          }}
         />
         {sessionTimeoutModal}
       </>
@@ -1615,7 +1850,7 @@ export default function App() {
     );
   }
 
-  // Strict Auth Gate: Sign-in is required for Creator Studio, Event Creation, Disposable Camera, and all event modules
+  // Strict Auth Gate: Sign-in is required for Creator Studio and Event Management modules
   if (route === 'signin' || !isSignedIn) {
     return (
       <SignInScreen
@@ -1625,11 +1860,7 @@ export default function App() {
         sessionTimeoutNotice={sessionTimeoutNotice}
         redirectNotice={
           pendingTarget?.label ??
-          (route === 'camera'
-            ? 'Event Disposable Camera'
-            : route === 'studio'
-              ? 'Creator Studio'
-              : undefined)
+          (route === 'studio' ? 'Creator Studio' : undefined)
         }
         onBackHome={() => {
           setPendingTarget(null);
@@ -1671,36 +1902,6 @@ export default function App() {
         }}
         onAuthenticated={handleAuthenticated}
       />
-    );
-  }
-
-  if (route === 'camera') {
-    return (
-      <>
-        <DisposableCameraScreen
-          mode="public"
-          events={activeEvents}
-          shots={safeDisposableShots}
-          rollSettings={safeRollSettings}
-          alerts={safeAlerts}
-          profile={profile}
-          initialEventId={cameraEventId || activeEvents[0]?.id}
-          initialGuestName={cameraGuestName}
-          onAddShot={handleAddShot}
-          onToggleLikeShot={handleToggleLikeShot}
-          onDeleteShot={handleDeleteShot}
-          onDevelopRoll={handleDevelopRoll}
-          onUpdateRollSettings={handleUpdateRollSettings}
-          onBack={() => {
-            setRoute(cameraReturnRoute);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
-          onOpenStudio={() => {
-            openStudioCamera(cameraEventId || activeEvents[0]?.id);
-          }}
-        />
-        {sessionTimeoutModal}
-      </>
     );
   }
 
@@ -1774,20 +1975,19 @@ export default function App() {
                       {inMemoryMode ? 'Your workspace is ready' : 'Your Supabase workspace is ready'}
                     </h2>
                     <p className="text-xs text-[#71717A] mt-0.5 leading-relaxed">
-                      Create your first event from scratch or populate your workspace with starter
-                      events, attendees, and 35mm disposable camera frames.
+                      Create your first event from scratch or open the 5-step Quick Guide to set up
+                      your custom SMS Sender ID, QR gate scanner, and standalone Gift Table.
                     </p>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <button
                     type="button"
-                    disabled={seedingStarter}
-                    onClick={handleSeedStarterData}
-                    className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] disabled:opacity-60 text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors"
+                    onClick={() => setShowWalkthrough(true)}
+                    className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors"
                   >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>{seedingStarter ? 'Loading Starter...' : 'Load Starter Data'}</span>
+                    <Compass className="w-3.5 h-3.5" />
+                    <span>Quick Guide</span>
                   </button>
                   <button
                     type="button"
@@ -1842,11 +2042,12 @@ export default function App() {
               onOpenEditModal={(evt) => setSelectedEventId(evt.id)}
               onUpdateEvent={handleUpdateEvent}
               onOpenPlans={openBillingScreen}
-              onPreviewPublicEvent={(focus?: 'top' | 'checkin') => {
+              onPreviewPublicEvent={(focus?: 'top' | 'checkin' | 'gifts') => {
                 openEventInvitation(workspaceEvent, focus ?? 'top');
               }}
               onToggleCheckIn={handleToggleCheckIn}
               onRegisterAttendee={handleStudioRegisterAttendee}
+              onRecordGiftEntry={handleStudioRecordGiftTableEntry}
               onToggleScheduleBlock={handleToggleScheduleBlock}
               onAddScheduleBlock={handleAddScheduleBlock}
               onDeleteScheduleBlock={handleDeleteScheduleBlock}
@@ -1880,6 +2081,7 @@ export default function App() {
                   onNavigateEvents={() => setActiveScreen('events')}
                   onNavigateSettings={() => setActiveScreen('settings')}
                   onOpenPlans={openBillingScreen}
+                  onOpenGuide={() => setShowWalkthrough(true)}
                   onResolveAlert={handleResolveAlert}
                 />
               )}
@@ -2024,7 +2226,7 @@ export default function App() {
                   onResolveAlert={handleResolveAlert}
                   onOpenPlans={openBillingScreen}
                   onSignOut={handleSignOut}
-                  onResetDemoData={handleSeedStarterData}
+                  onOpenGuide={() => setShowWalkthrough(true)}
                   onDeleteAccount={handleDeleteAccount}
                 />
               )}
@@ -2047,6 +2249,29 @@ export default function App() {
           onOpenAttendees={(id) => handleNavigateAttendees(id)}
         />
       )}
+
+      <OnboardingWalkthroughModal
+        open={showWalkthrough}
+        userName={profile.name || profile.firstName}
+        hasEvents={safeEvents.length > 0}
+        onClose={closeWalkthrough}
+        onCreateEvent={openCreateWizard}
+        onGoSettings={() => {
+          setWorkspaceEventId(null);
+          setStudioSubScreen(null);
+          setActiveScreen('settings');
+        }}
+        onGoScanner={() => {
+          setWorkspaceEventId(null);
+          setStudioSubScreen(null);
+          setActiveScreen('checkin');
+        }}
+        onGoCamera={() => {
+          setWorkspaceEventId(null);
+          setStudioSubScreen(null);
+          setActiveScreen('camera');
+        }}
+      />
 
       {sessionTimeoutModal}
     </div>

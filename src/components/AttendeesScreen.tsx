@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Check, Download, Gift, Plus, QrCode, Send, UserPlus, X } from 'lucide-react';
+import { AlertCircle, Check, Download, Plus, QrCode, Send, UserPlus, X } from 'lucide-react';
 import {
   Attendee,
   AttendeeTier,
@@ -17,7 +17,15 @@ interface AttendeesScreenProps {
   alerts: SystemAlert[];
   profile: OrganizerProfile;
   initialEventFilter?: string;
-  onToggleCheckIn: (attendeeId: string) => void;
+  onToggleCheckIn: (
+    attendeeId: string
+  ) =>
+    | Promise<{
+        checkInMessageSent?: boolean;
+        cameraUrl?: string;
+        dispatchedMessage?: string;
+      } | void>
+    | void;
   onRetryPayment: (attendeeId: string) => void;
   onRegisterAttendee: (eventId: string, attendee: Attendee) => void;
   onManageEvent: (event: EventItem) => void;
@@ -115,8 +123,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
         att.phone.toLowerCase().includes(q) ||
         att.organization.toLowerCase().includes(q) ||
         att.ticketCode.toLowerCase().includes(q) ||
-        (att.validationGroup?.toLowerCase().includes(q) ?? false) ||
-        (att.giftEntry?.registryItem?.toLowerCase().includes(q) ?? false);
+        (att.validationGroup?.toLowerCase().includes(q) ?? false);
       return matchesEvent && matchesTier && matchesQuery;
     });
   }, [attendees, eventFilter, tierFilter, searchQuery]);
@@ -180,7 +187,6 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
       'Production',
       'Tier',
       'PassCode',
-      'GiftPledge',
       'CustomData',
       'CheckedIn',
     ];
@@ -193,15 +199,6 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
       eventMap.get(a.eventId)?.title ?? 'Event',
       a.tier,
       a.ticketCode,
-      a.giftEntry
-        ? [
-            a.giftEntry.amount ? `${a.giftEntry.currency || 'GHS'} ${a.giftEntry.amount}` : '',
-            a.giftEntry.registryItem || '',
-            a.giftEntry.message || '',
-          ]
-            .filter(Boolean)
-            .join(' · ')
-        : '',
       a.customResponses
         ? Object.entries(a.customResponses)
             .map(([k, v]) => `${k}: ${v}`)
@@ -443,19 +440,11 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                         <p className="text-[11px] font-mono text-[#0B0B0B] mt-0.5 tabular-nums">
                           {att.phone}
                         </p>
-                        {(att.validationGroup || att.giftEntry || (att.customResponses && Object.keys(att.customResponses).length > 0)) && (
+                        {(att.validationGroup || (att.customResponses && Object.keys(att.customResponses).length > 0)) && (
                           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                             {att.validationGroup && (
                               <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[10px] font-semibold text-[#0B0B0B]">
                                 {att.validationGroup}
-                              </span>
-                            )}
-                            {att.giftEntry && (
-                              <span className="px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-[10px] font-semibold text-amber-800 inline-flex items-center gap-1">
-                                <Gift className="w-2.5 h-2.5" />
-                                {att.giftEntry.amount
-                                  ? `${att.giftEntry.currency || 'GHS'} ${att.giftEntry.amount}`
-                                  : att.giftEntry.registryItem || 'Gift Pledged'}
                               </span>
                             )}
                             {att.customResponses &&
@@ -516,7 +505,14 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                       <td className="py-3.5 px-5 text-right">
                         <button
                           type="button"
-                          onClick={() => onToggleCheckIn(att.id)}
+                          onClick={async () => {
+                            const res = await Promise.resolve(onToggleCheckIn(att.id));
+                            if (res && res.checkInMessageSent) {
+                              showToast(
+                                `Checked in ${att.name} — SMS + Disposable Camera link sent!`
+                              );
+                            }
+                          }}
                           className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                             att.checkedIn
                               ? 'bg-[#F5F5F7] text-[#0B0B0B] border border-[#E5E5EA] hover:border-[#0B0B0B]'

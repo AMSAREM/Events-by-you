@@ -13,6 +13,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
 } from '../src/types/events.ts';
@@ -638,6 +639,7 @@ export function createMemoryRouter() {
 
     try {
       const targetEvent = memoryStore.getPublicEventBySlugOrId(eventId);
+      const orgDefaults = memoryStore.getEventOrganizerDefaults(eventId);
       const requestOrigin = (process.env.APP_URL || '').trim().replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
       const resolvedMsg = targetEvent
         ? resolveEventMessage({
@@ -655,7 +657,7 @@ export function createMemoryRouter() {
           normalizedPhone,
           targetEvent?.title ?? 'Events App',
           finalCode,
-          targetEvent?.senderId,
+          targetEvent?.senderId || orgDefaults.senderId,
           resolvedMsg?.text
         ),
         isResendConfigured() && targetEvent
@@ -670,6 +672,7 @@ export function createMemoryRouter() {
               ticketCode: finalCode,
               tier: tier || 'General',
               organizerName: targetEvent.organizer,
+              replyTo: orgDefaults.replyToEmail,
               customMessage: resolvedMsg?.text,
               cameraUrl: resolvedMsg?.cameraUrl,
             })
@@ -718,9 +721,27 @@ export function createMemoryRouter() {
     }
   });
 
+  // Standalone Public Gift Table endpoint
+  router.post('/public/events/:slugOrId/gifts', (req, res) => {
+    try {
+      const result = memoryStore.recordGiftTableEntry(
+        req.params.slugOrId,
+        req.body as Partial<GiftTableEntry>,
+        'public-table'
+      );
+      return res.status(201).json(result);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({
+        error: err instanceof Error ? err.message : 'Failed to record gift table entry.',
+      });
+    }
+  });
+
   // Public Disposable Camera Routes (for guests clicking SMS/email camera link)
   router.get('/public/camera/:slugOrId', (req, res) => {
-    const roll = memoryStore.getPublicCameraRoll(req.params.slugOrId);
+    const passQuery = typeof req.query.pass === 'string' ? req.query.pass.trim() : undefined;
+    const roll = memoryStore.getPublicCameraRoll(req.params.slugOrId, passQuery);
     if (!roll) {
       return res.status(404).json({ error: 'Event disposable camera not found.' });
     }
@@ -760,12 +781,8 @@ export function createMemoryRouter() {
     }
   });
 
-  router.post('/studio/seed-starter', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
-    try {
-      return res.json(memoryStore.seedStarter(req.user!.id));
-    } catch (err) {
-      return res.status(403).json({ error: err instanceof Error ? err.message : 'Failed to seed starter data.' });
-    }
+  router.post('/studio/seed-starter', requireMemoryAuth, requireRole('creator', 'organizer'), (_req: AuthedRequest, res) => {
+    return res.status(403).json({ error: 'Demo and starter data seeding has been removed.' });
   });
 
   router.patch('/studio/profile', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
@@ -906,7 +923,7 @@ export function createMemoryRouter() {
               result.attendee.phone,
               result.event.title,
               result.attendee.ticketCode,
-              result.event.senderId,
+              result.event.senderId || req.memoryUser?.profile.senderId,
               resolvedMsg.text
             )
           : Promise.resolve('Pending' as const),
@@ -953,6 +970,22 @@ export function createMemoryRouter() {
     }
   });
 
+  router.post('/studio/events/:eventId/gifts', requireMemoryAuth, requireRole('creator', 'organizer', 'gate_staff'), (req: AuthedRequest, res) => {
+    try {
+      const result = memoryStore.recordGiftTableEntry(
+        req.params.eventId,
+        req.body as Partial<GiftTableEntry>,
+        'gift-desk'
+      );
+      return res.status(201).json(result);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({
+        error: err instanceof Error ? err.message : 'Failed to record gift desk entry.',
+      });
+    }
+  });
+
   router.patch('/studio/attendees/:id/checkin', requireMemoryAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
     try {
       const attendee = memoryStore.toggleCheckIn(req.user!.id, req.params.id);
@@ -980,7 +1013,7 @@ export function createMemoryRouter() {
                   attendee.phone,
                   evt.title,
                   attendee.ticketCode,
-                  evt.senderId,
+                  evt.senderId || req.memoryUser?.profile.senderId,
                   resolved.text
                 )
               : Promise.resolve('Pending' as const),

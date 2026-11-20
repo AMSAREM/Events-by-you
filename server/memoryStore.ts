@@ -31,6 +31,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
   SmsDispatchLogEntry,
@@ -96,7 +97,7 @@ export const platformRuntime = {
     smsMode: (process.env.ARKESEL_API_KEY || '').trim() ? 'live' : 'sandbox',
     arkeselSenderId: (process.env.ARKESEL_SENDER_ID || '').trim() || undefined,
     signupsEnabled: true,
-    starterSeedingEnabled: true,
+    starterSeedingEnabled: false,
   } as BuilderFeatureFlags,
   gatewayBalanceCredits: 0,
   gatewayBalanceLive: false,
@@ -357,7 +358,7 @@ function initDefaultAccounts(): void {
     email: creatorEmail,
     studio: 'Apps Creator Console',
     plan: 'Pro Organizer',
-    smsCredits: 1840,
+    smsCredits: 0,
     capacityAlertThreshold: 90,
     timezone: 'Africa/Accra',
     twoFactorEnabled: false,
@@ -370,93 +371,10 @@ function initDefaultAccounts(): void {
     passwordHash: creatorPassword ? hashPassword(creatorPassword) : null,
     profile: creatorProfile,
     suspended: false,
-    lastLoginAt: new Date(Date.now() - 18 * 60 * 1000).toISOString(),
-    createdAt: '2026-09-14T08:30:00.000Z',
+    lastLoginAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
   });
   db.userIdByEmail.set(creatorEmail, creatorId);
-  seedStarterForUser(creatorId, creatorProfile.name, true);
-
-  // Add one pending SMS on initial seed so failed SMS queue telemetry has actionable state if needed,
-  // and seed a second tenant for directory & unit economics realism.
-  const partnerId = 'usr-grace-chapel';
-  const partnerEmail = 'events@gracechapel.org';
-  db.users.set(partnerId, {
-    id: partnerId,
-    email: partnerEmail,
-    passwordHash: hashPassword('grace2026'),
-    profile: {
-      name: 'Pastor Daniel Adjei',
-      firstName: 'Daniel',
-      role: 'Lead Organiser',
-      appRole: 'organizer',
-      email: partnerEmail,
-      studio: 'Grace Chapel Ministry',
-      plan: 'Starter',
-      smsCredits: 14,
-      capacityAlertThreshold: 90,
-      timezone: 'Africa/Accra',
-      twoFactorEnabled: true,
-      senderId: 'GRACECH',
-    },
-    suspended: false,
-    lastLoginAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
-    createdAt: '2026-10-02T11:15:00.000Z',
-  });
-  db.userIdByEmail.set(partnerEmail, partnerId);
-
-  const enterpriseId = 'usr-meridian-corp';
-  const enterpriseEmail = 'ops@meridianbank.ng';
-  db.users.set(enterpriseId, {
-    id: enterpriseId,
-    email: enterpriseEmail,
-    passwordHash: hashPassword('meridian2026'),
-    profile: {
-      name: 'Chidi Okonkwo',
-      firstName: 'Chidi',
-      role: 'Head of Events',
-      appRole: 'organizer',
-      email: enterpriseEmail,
-      studio: 'Meridian Corporate Group',
-      plan: 'Enterprise',
-      smsCredits: 4200,
-      capacityAlertThreshold: 85,
-      timezone: 'Africa/Lagos',
-      twoFactorEnabled: true,
-      senderId: 'MERIDIAN',
-    },
-    suspended: false,
-    lastLoginAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
-    createdAt: '2026-08-21T15:40:00.000Z',
-  });
-  db.userIdByEmail.set(enterpriseEmail, enterpriseId);
-
-  // Seed initial diagnostic entries so the inspector is immediately informative
-  platformRuntime.duplicateBlocksByEvent.set('evt-tech-leaders-2026', 3);
-  platformRuntime.duplicateBlocksByEvent.set('evt-church-revival', 7);
-  platformRuntime.recordDiagnosticFailure({
-    kind: 'webhook',
-    target: 'https://hooks.accratech.gh/arkesel-dlr',
-    statusCode: 502,
-    reason: 'Upstream timeout after 5000ms awaiting partner ACK',
-    payloadPreview: JSON.stringify({
-      type: 'attendee.registered',
-      eventId: 'evt-musical-accra',
-      ticketCode: '#MUS-26-4401-VIP',
-    }),
-    expectedDiff: 'Expected HTTP 200-299 OK; received ETIMEDOUT from hooks.accratech.gh',
-  });
-  platformRuntime.recordDiagnosticFailure({
-    kind: 'qr-scan',
-    target: '/v1/checkin (Gate B Tablet)',
-    statusCode: 409,
-    reason: 'Duplicate QR token scan blocked (TLS-2026-0811 already checked in at 09:12 AM)',
-    payloadPreview: JSON.stringify({
-      eventId: 'evt-tech-leaders-2026',
-      ticketCode: 'TLS-2026-0811',
-      gate: 'Gate B',
-    }),
-    expectedDiff: 'Token checkedIn=false required; current state checkedIn=true',
-  });
 }
 
 initDefaultAccounts();
@@ -770,10 +688,30 @@ export const memoryStore = {
     return null;
   },
 
-  getPublicCameraRoll(slugOrId: string): {
+  getEventOrganizerDefaults(slugOrId: string): { replyToEmail?: string; senderId?: string } {
+    const target = slugOrId.trim().toLowerCase();
+    for (const evt of db.events.values()) {
+      if (evt.id.toLowerCase() === target || evt.slug.toLowerCase() === target) {
+        const owner = db.users.get(evt.organizerId);
+        return {
+          replyToEmail: owner?.profile.replyToEmail,
+          senderId: owner?.profile.senderId,
+        };
+      }
+    }
+    return {};
+  },
+
+  getPublicCameraRoll(slugOrId: string, passCode?: string): {
     event: EventItem;
     shots: DisposableShot[];
     rollSettings: DisposableRollSettings;
+    verifiedPass: {
+      attendeeName: string;
+      ticketCode: string;
+      checkedIn: boolean;
+      tier: string;
+    } | null;
   } | null {
     const evt =
       this.getPublicEventBySlugOrId(slugOrId) || this.getAnyEventBySlugOrId(slugOrId);
@@ -785,7 +723,79 @@ export const memoryStore = {
       exposuresLimit: 24,
       darkroomMode: false,
     };
-    return { event: evt, shots, rollSettings };
+    let verifiedPass: {
+      attendeeName: string;
+      ticketCode: string;
+      checkedIn: boolean;
+      tier: string;
+    } | null = null;
+    const cleanPass = (passCode || '').trim().toLowerCase();
+    if (cleanPass) {
+      const matched = Array.from(db.attendees.values()).find(
+        (a) => a.eventId === evt.id && a.ticketCode.trim().toLowerCase() === cleanPass
+      );
+      if (matched) {
+        verifiedPass = {
+          attendeeName: matched.name,
+          ticketCode: matched.ticketCode,
+          checkedIn: matched.checkedIn,
+          tier: matched.tier,
+        };
+      }
+    }
+    return { event: evt, shots, rollSettings, verifiedPass };
+  },
+
+  recordGiftTableEntry(
+    slugOrId: string,
+    payload: Partial<GiftTableEntry>,
+    recordedVia: 'public-table' | 'gift-desk' = 'public-table'
+  ): { gift: GiftTableEntry; event: EventItem } {
+    const evt =
+      this.getPublicEventBySlugOrId(slugOrId) || this.getAnyEventBySlugOrId(slugOrId);
+    if (!evt) {
+      throw Object.assign(new Error('Event Gift Table not found.'), { status: 404 });
+    }
+    const giverName = (payload.giverName || '').trim();
+    if (!giverName) {
+      throw Object.assign(new Error('Giver name is required.'), { status: 400 });
+    }
+    const giftType: GiftTableEntry['giftType'] =
+      payload.giftType === 'cash-momo' || payload.giftType === 'registry-item' || payload.giftType === 'blessing-only'
+        ? payload.giftType
+        : 'cash-momo';
+    const gift: GiftTableEntry = {
+      id: `gift-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+      eventId: evt.id,
+      giverName,
+      giverPhone: payload.giverPhone?.trim() ? normalizePhoneE164(payload.giverPhone.trim()) : undefined,
+      giftType,
+      currency: payload.currency === 'USD' ? 'USD' : 'GHS',
+      amount: giftType === 'cash-momo' ? Math.max(1, Number(payload.amount) || 0) : undefined,
+      registryItem:
+        giftType === 'registry-item'
+          ? payload.registryItem?.trim() || evt.extraDataConfig?.giftRegistryItems?.[0] || 'Registry Gift'
+          : undefined,
+      side: payload.side?.trim() || undefined,
+      message: payload.message?.trim() || undefined,
+      recordedVia,
+      createdAt: new Date().toISOString(),
+    };
+    const existingExtra = evt.extraDataConfig ?? { enableGiftTable: true, customFields: [] };
+    const prevLedger = Array.isArray(existingExtra.giftLedger) ? existingExtra.giftLedger : [];
+    const updatedEvt: EventItem = {
+      ...evt,
+      extraDataConfig: {
+        ...existingExtra,
+        enableGiftTable: true,
+        giftLedger: [gift, ...prevLedger],
+      },
+    };
+    const stored = db.events.get(evt.id);
+    if (stored) {
+      db.events.set(evt.id, { ...stored, extraDataConfig: updatedEvt.extraDataConfig });
+    }
+    return { gift, event: updatedEvt };
   },
 
   registerPublicAttendee(payload: {
@@ -905,17 +915,8 @@ export const memoryStore = {
     };
   },
 
-  seedStarter(userId: string) {
-    if (!platformRuntime.flags.starterSeedingEnabled) {
-      throw new Error('Starter data seeding is currently disabled by platform administrator.');
-    }
-    const user = db.users.get(userId);
-    if (!user) throw new Error('User not found.');
-    const existing = Array.from(db.events.values()).some((e) => e.organizerId === userId);
-    if (!existing) {
-      seedStarterForUser(userId, user.profile.name, false);
-    }
-    return this.loadWorkspace(userId);
+  seedStarter(_userId: string) {
+    throw new Error('Demo and starter data seeding has been removed.');
   },
 
   updateProfile(userId: string, patch: Partial<OrganizerProfile>): OrganizerProfile {
@@ -1530,8 +1531,8 @@ export const memoryStore = {
       clientId: existing.clientId,
       environment: existing.environment,
       data: {
-        eventId: existing.eventId || 'evt-tech-leaders-2026',
-        attendeeName: 'Ama Serwaa (Test Dispatch)',
+        eventId: existing.eventId || 'evt-test-webhook',
+        attendeeName: 'Test Webhook Attendee',
         ticketCode: '#EVT-TEST-2026',
         smsStatus: 'Arkesel Sent',
       },
