@@ -217,7 +217,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
     }
   };
 
-  const handleWalkInSubmit = (e: React.FormEvent) => {
+  const handleWalkInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const targetEventId = walkInEventId || events[0]?.id;
     if (!walkInName.trim() || !walkInPhone.trim() || !targetEventId) return;
@@ -228,29 +228,38 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
       hour: '2-digit',
       minute: '2-digit',
     });
+    const registeredName = walkInName.trim();
 
-    onRegisterAttendee(targetEventId, {
-      id: `att-${Date.now()}`,
-      eventId: targetEventId,
-      name: walkInName.trim(),
-      email: walkInEmail.trim() || `${walkInName.trim().toLowerCase().replace(/\s+/g, '.')}@guest.africa`,
-      phone: normalizedPhone,
-      organization: walkInOrg.trim() || 'Gate Walk-In',
-      tier: walkInTier,
-      ticketCode: code,
-      checkedIn: walkInCheckedIn,
-      checkedInAt: walkInCheckedIn ? nowTime : undefined,
-      paymentStatus: 'paid',
-      smsStatus: 'Arkesel Sent',
-      validationGroup: walkInValidationGroup || walkInCircles[0],
-    });
+    try {
+      await Promise.resolve(
+        onRegisterAttendee(targetEventId, {
+          id: `att-${Date.now()}`,
+          eventId: targetEventId,
+          name: registeredName,
+          email:
+            walkInEmail.trim() ||
+            `${registeredName.toLowerCase().replace(/\s+/g, '.')}@guest.africa`,
+          phone: normalizedPhone,
+          organization: walkInOrg.trim() || 'Gate Walk-In',
+          tier: walkInTier,
+          ticketCode: code,
+          checkedIn: walkInCheckedIn,
+          checkedInAt: walkInCheckedIn ? nowTime : undefined,
+          paymentStatus: 'paid',
+          smsStatus: 'Arkesel Sent',
+          validationGroup: walkInValidationGroup || walkInCircles[0],
+        })
+      );
 
-    setWalkInName('');
-    setWalkInPhone('');
-    setWalkInEmail('');
-    setWalkInOrg('');
-    setWalkInOpen(false);
-    showToast(`Registered ${walkInName.trim()} (${code})`);
+      setWalkInName('');
+      setWalkInPhone('');
+      setWalkInEmail('');
+      setWalkInOrg('');
+      setWalkInOpen(false);
+      showToast(`Registered ${registeredName} (${code})`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to register walk-in guest.');
+    }
   };
 
   const handleExportCsv = () => {
@@ -570,7 +579,16 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                             </span>
                             <button
                               type="button"
-                              onClick={() => onRetryPayment(att.id)}
+                              onClick={async () => {
+                                try {
+                                  await Promise.resolve(onRetryPayment(att.id));
+                                  showToast(`Payment marked settled for ${att.name}`);
+                                } catch (err) {
+                                  showToast(
+                                    err instanceof Error ? err.message : 'Failed to retry payment.'
+                                  );
+                                }
+                              }}
                               className="px-2.5 py-1 rounded-full bg-[#EF4444] text-white text-[11px] font-semibold hover:bg-red-600 transition-colors"
                             >
                               Retry
@@ -587,18 +605,24 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                         <button
                           type="button"
                           onClick={async () => {
-                            const res = await Promise.resolve(onToggleCheckIn(att.id));
-                            if (res && res.checkInSmsSent) {
+                            try {
+                              const res = await Promise.resolve(onToggleCheckIn(att.id));
+                              if (res && res.checkInSmsSent) {
+                                showToast(
+                                  `Checked in ${att.name} — SMS + Disposable Camera link sent!`
+                                );
+                              } else if (res && res.smsSkippedReason) {
+                                showToast(
+                                  `Checked in ${att.name}. SMS skipped: ${res.smsSkippedReason}`
+                                );
+                              } else if (res && res.checkInMessageSent) {
+                                showToast(
+                                  `Checked in ${att.name} — check-in welcome email + camera link sent!`
+                                );
+                              }
+                            } catch (err) {
                               showToast(
-                                `Checked in ${att.name} — SMS + Disposable Camera link sent!`
-                              );
-                            } else if (res && res.smsSkippedReason) {
-                              showToast(
-                                `Checked in ${att.name}. SMS skipped: ${res.smsSkippedReason}`
-                              );
-                            } else if (res && res.checkInMessageSent) {
-                              showToast(
-                                `Checked in ${att.name} — check-in welcome email + camera link sent!`
+                                err instanceof Error ? err.message : 'Unable to update check-in.'
                               );
                             }
                           }}

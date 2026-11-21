@@ -83,11 +83,15 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const [designTheme, setDesignTheme] = useState<DesignTheme>('obsidian-gold');
   const [brandColor, setBrandColor] = useState<string | undefined>(undefined);
   const [customFlyerUrl, setCustomFlyerUrl] = useState<string>('');
+  const [submitting, setSubmitting] = useState(false);
+  const [modalError, setModalError] = useState<string | null>(null);
   const createFlyerInputRef = useRef<HTMLInputElement | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !venue.trim()) return;
+    if (!title.trim() || !venue.trim() || submitting) return;
+    setModalError(null);
+    setSubmitting(true);
 
     const parsedDate = new Date(date + 'T00:00:00');
     const formattedDate = isNaN(parsedDate.getTime())
@@ -140,8 +144,14 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       },
       qrPassPublished: status === 'draft' ? false : publishQrPass,
     };
-    onCreate(newEvent);
-    onClose();
+    try {
+      await Promise.resolve(onCreate(newEvent));
+      onClose();
+    } catch (err) {
+      setModalError(err instanceof Error ? err.message : 'Unable to create event in Supabase.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -172,6 +182,11 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {modalError && (
+            <div className="p-3 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 text-xs font-medium text-[#0B0B0B]">
+              {modalError}
+            </div>
+          )}
           <div>
             <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5">
               Event Title
@@ -446,9 +461,10 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
             </button>
             <button
               type="submit"
-              className="px-6 py-2.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0"
+              disabled={submitting}
+              className="px-6 py-2.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 disabled:opacity-60"
             >
-              Publish Event
+              {submitting ? 'Publishing...' : 'Publish Event'}
             </button>
           </div>
         </form>
@@ -530,19 +546,27 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   const ogUrl = buildEventOgImageUrl(event.slug || event.id);
   const flyerSrc = flyerDraft || preset.flyerUrl;
 
-  const handleStatusChange = (newStatus: EventStatus) => {
+  const handleStatusChange = async (newStatus: EventStatus) => {
     if (starterActiveBlocked && isActiveEventStatus(newStatus)) return;
-    onUpdateEvent({ ...event, status: newStatus });
+    try {
+      await Promise.resolve(onUpdateEvent({ ...event, status: newStatus }));
+    } catch {
+      // Error surfaced cleanly via top-level banner
+    }
   };
 
-  const handleCapacitySave = () => {
+  const handleCapacitySave = async () => {
     const rawNext = Math.max(event.registered || 10, capacityDraft);
     const nextCap =
       entitlements.maxAttendeesPerEvent !== null
         ? Math.min(entitlements.maxAttendeesPerEvent, Math.max(event.registered || 1, rawNext))
         : rawNext;
     setCapacityDraft(nextCap);
-    onUpdateEvent({ ...event, capacity: nextCap });
+    try {
+      await Promise.resolve(onUpdateEvent({ ...event, capacity: nextCap }));
+    } catch {
+      setCapacityDraft(event.capacity);
+    }
   };
 
   const handleCopyShareLink = async () => {
@@ -595,48 +619,61 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     window.setTimeout(() => setShareFeedback(null), 2400);
   };
 
-  const handleApplyFlyer = (nextFlyerUrl: string) => {
+  const handleApplyFlyer = async (nextFlyerUrl: string) => {
+    const prevFlyer = flyerDraft;
     setFlyerDraft(nextFlyerUrl);
-    onUpdateEvent({
-      ...event,
-      designTheme: designDraft,
-      brandColor: brandColorDraft,
-      flyerUrl: nextFlyerUrl,
-      extraDataConfig: {
-        ...(event.extraDataConfig ?? preset.extraDataConfig),
-        brandColor: brandColorDraft,
-      },
-    });
-    setFlyerSavedToast(true);
-    setTimeout(() => setFlyerSavedToast(false), 2200);
+    try {
+      await Promise.resolve(
+        onUpdateEvent({
+          ...event,
+          designTheme: designDraft,
+          brandColor: brandColorDraft,
+          flyerUrl: nextFlyerUrl,
+          extraDataConfig: {
+            ...(event.extraDataConfig ?? preset.extraDataConfig),
+            brandColor: brandColorDraft,
+          },
+        })
+      );
+      setFlyerSavedToast(true);
+      setTimeout(() => setFlyerSavedToast(false), 2200);
+    } catch {
+      setFlyerDraft(prevFlyer);
+    }
   };
 
-  const handleSaveFormsAndTheme = () => {
+  const handleSaveFormsAndTheme = async () => {
     const parsedOptions = validationInput
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    onUpdateEvent({
-      ...event,
-      designTheme: designDraft,
-      brandColor: brandColorDraft,
-      flyerUrl: flyerSrc,
-      validationConfig: {
-        ...(event.validationConfig ?? preset.validationConfig),
-        enabled: true,
-        options:
-          parsedOptions.length > 0
-            ? parsedOptions
-            : preset.validationConfig.options,
-      },
-      extraDataConfig: {
-        ...(event.extraDataConfig ?? preset.extraDataConfig),
-        momoNumber: momoDraft.trim() || undefined,
-        brandColor: brandColorDraft,
-      },
-    });
-    setFlyerSavedToast(true);
-    setTimeout(() => setFlyerSavedToast(false), 2200);
+    try {
+      await Promise.resolve(
+        onUpdateEvent({
+          ...event,
+          designTheme: designDraft,
+          brandColor: brandColorDraft,
+          flyerUrl: flyerSrc,
+          validationConfig: {
+            ...(event.validationConfig ?? preset.validationConfig),
+            enabled: true,
+            options:
+              parsedOptions.length > 0
+                ? parsedOptions
+                : preset.validationConfig.options,
+          },
+          extraDataConfig: {
+            ...(event.extraDataConfig ?? preset.extraDataConfig),
+            momoNumber: momoDraft.trim() || undefined,
+            brandColor: brandColorDraft,
+          },
+        })
+      );
+      setFlyerSavedToast(true);
+      setTimeout(() => setFlyerSavedToast(false), 2200);
+    } catch {
+      // Error surfaced cleanly via top-level banner
+    }
   };
 
   return (
@@ -1059,9 +1096,13 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  onDeleteEvent(event.id);
-                  onClose();
+                onClick={async () => {
+                  try {
+                    await Promise.resolve(onDeleteEvent(event.id));
+                    onClose();
+                  } catch {
+                    setConfirmDelete(false);
+                  }
                 }}
                 className="px-4 py-2 rounded-full text-xs font-semibold bg-[#EF4444] text-white hover:bg-red-600 transition-colors whitespace-nowrap shrink-0"
               >

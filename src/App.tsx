@@ -816,12 +816,15 @@ export default function App() {
   );
 
   const handleUpdateProfile = async (nextProfile: OrganizerProfile) => {
+    const previous = profile;
     setProfile(nextProfile);
     try {
       const res = await api.studio.updateProfile(nextProfile);
       setProfile(res.profile);
     } catch (err) {
+      setProfile(previous);
       notifyError(err, 'Failed to save profile changes to Supabase.');
+      throw err;
     }
   };
 
@@ -833,10 +836,9 @@ export default function App() {
       return;
     }
     if (effectiveRole === 'gate_staff') {
-      setApiBannerError(
-        'Access denied: Only event creators can create events and publish check-in QR passes.'
-      );
-      return;
+      const msg = 'Access denied: Only event creators can create events and publish check-in QR passes.';
+      setApiBannerError(msg);
+      throw new Error(msg);
     }
     if (creatingEventRef.current) return;
     creatingEventRef.current = true;
@@ -853,6 +855,7 @@ export default function App() {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
       notifyError(err, 'Failed to create event in Supabase.');
+      throw err;
     } finally {
       creatingEventRef.current = false;
     }
@@ -971,6 +974,7 @@ export default function App() {
   };
 
   const handleToggleLikeShot = async (shotId: string) => {
+    const previous = disposableShots;
     setDisposableShots((prev) =>
       prev.map((s) =>
         s.id === shotId
@@ -988,7 +992,9 @@ export default function App() {
         : await api.public.toggleLikeCameraShot(shotId);
       setDisposableShots((prev) => prev.map((s) => (s.id === shotId ? res.shot : s)));
     } catch (err) {
+      setDisposableShots(previous);
       notifyError(err, 'Failed to update shot favorite.');
+      throw err;
     }
   };
 
@@ -1000,31 +1006,40 @@ export default function App() {
     } catch (err) {
       setDisposableShots(previous);
       notifyError(err, 'Failed to delete shot from Supabase.');
+      throw err;
     }
   };
 
   const handleDevelopRoll = async (eventId: string) => {
+    const previous = disposableShots;
     setDisposableShots((prev) =>
       prev.map((s) => (s.eventId === eventId ? { ...s, developed: true } : s))
     );
     try {
       await api.studio.developRoll(eventId);
     } catch (err) {
+      setDisposableShots(previous);
       notifyError(err, 'Failed to develop roll in Supabase.');
+      throw err;
     }
   };
 
   const handleUpdateRollSettings = async (eventId: string, next: DisposableRollSettings) => {
+    const previous = rollSettings;
     setRollSettings((prev) => ({ ...prev, [eventId]: next }));
     try {
       const res = await api.studio.updateRollSettings(eventId, next);
       setRollSettings((prev) => ({ ...prev, [eventId]: res.settings }));
     } catch (err) {
+      setRollSettings(previous);
       notifyError(err, 'Failed to save camera roll settings to Supabase.');
+      throw err;
     }
   };
 
   const handleUpdateEvent = async (updated: EventItem) => {
+    const previousEvents = events;
+    const previousPublicEvents = publicEvents;
     setEvents((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
     setPublicEvents((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
     try {
@@ -1032,16 +1047,18 @@ export default function App() {
       setEvents((prev) => prev.map((e) => (e.id === updated.id ? res.event : e)));
       setPublicEvents((prev) => prev.map((e) => (e.id === updated.id ? res.event : e)));
     } catch (err) {
+      setEvents(previousEvents);
+      setPublicEvents(previousPublicEvents);
       notifyError(err, 'Failed to update event in Supabase.');
+      throw err;
     }
   };
 
   const handleToggleQrPassPublished = async (eventId: string, published: boolean) => {
     if (effectiveRole === 'gate_staff') {
-      setApiBannerError(
-        'Access denied: Only the event creator can publish or unpublish check-in QR passes.'
-      );
-      return;
+      const msg = 'Access denied: Only the event creator can publish or unpublish check-in QR passes.';
+      setApiBannerError(msg);
+      throw new Error(msg);
     }
     try {
       const res = await api.studio.publishQrPass(eventId, published);
@@ -1050,10 +1067,15 @@ export default function App() {
       setApiBannerError(null);
     } catch (err) {
       notifyError(err, 'Only the event creator can publish check-in QR passes.');
+      throw err;
     }
   };
 
   const handleDeleteEvent = async (id: string) => {
+    const previousEvents = events;
+    const previousPublicEvents = publicEvents;
+    const previousBlocks = scheduleBlocks;
+    const previousWorkspaceId = workspaceEventId;
     setEvents((prev) => prev.filter((e) => e.id !== id));
     setPublicEvents((prev) => prev.filter((e) => e.id !== id));
     setScheduleBlocks((prev) => prev.filter((b) => b.eventId !== id));
@@ -1063,8 +1085,12 @@ export default function App() {
     try {
       await api.studio.deleteEvent(id);
     } catch (err) {
+      setEvents(previousEvents);
+      setPublicEvents(previousPublicEvents);
+      setScheduleBlocks(previousBlocks);
+      setWorkspaceEventId(previousWorkspaceId);
       notifyError(err, 'Failed to delete event from Supabase.');
-      void hydrateStudioWorkspace();
+      throw err;
     }
   };
 
@@ -1150,6 +1176,7 @@ export default function App() {
       }
     } catch (err) {
       notifyError(err, 'Failed to register attendee in Supabase.');
+      throw err;
     }
   };
 
@@ -1182,6 +1209,8 @@ export default function App() {
     smsCreditsUsed?: number;
     smsSkippedReason?: string;
   } | void> => {
+    const previousAttendees = attendees;
+    const previousEvents = events;
     const target = attendees.find((a) => a.id === attendeeId);
     const nowTime = new Date().toLocaleTimeString('en-GB', {
       hour: '2-digit',
@@ -1222,12 +1251,16 @@ export default function App() {
         smsSkippedReason: res.smsSkippedReason,
       };
     } catch (err) {
+      setAttendees(previousAttendees);
+      setEvents(previousEvents);
       notifyError(err, 'Failed to update check-in status in Supabase.');
-      void hydrateStudioWorkspace();
+      throw err;
     }
   };
 
   const handleRetryPayment = async (attendeeId: string) => {
+    const previousAttendees = attendees;
+    const previousAlerts = alerts;
     setAttendees((prev) =>
       prev.map((a) => (a.id === attendeeId ? { ...a, paymentStatus: 'paid' } : a))
     );
@@ -1238,11 +1271,15 @@ export default function App() {
       const res = await api.studio.retryPayment(attendeeId);
       setAttendees((prev) => prev.map((a) => (a.id === attendeeId ? res.attendee : a)));
     } catch (err) {
+      setAttendees(previousAttendees);
+      setAlerts(previousAlerts);
       notifyError(err, 'Failed to update payment status in Supabase.');
+      throw err;
     }
   };
 
   const handleToggleScheduleBlock = async (blockId: string) => {
+    const previous = scheduleBlocks;
     setScheduleBlocks((prev) =>
       prev.map((b) => (b.id === blockId ? { ...b, completed: !b.completed } : b))
     );
@@ -1250,7 +1287,9 @@ export default function App() {
       const res = await api.studio.toggleScheduleBlock(blockId);
       setScheduleBlocks((prev) => prev.map((b) => (b.id === blockId ? res.block : b)));
     } catch (err) {
+      setScheduleBlocks(previous);
       notifyError(err, 'Failed to update schedule block in Supabase.');
+      throw err;
     }
   };
 
@@ -1262,6 +1301,7 @@ export default function App() {
     } catch (err) {
       setScheduleBlocks((prev) => prev.filter((b) => b.id !== block.id));
       notifyError(err, 'Failed to add schedule block to Supabase.');
+      throw err;
     }
   };
 
@@ -1273,6 +1313,7 @@ export default function App() {
     } catch (err) {
       setScheduleBlocks(previous);
       notifyError(err, 'Failed to delete schedule block from Supabase.');
+      throw err;
     }
   };
 
@@ -1284,11 +1325,14 @@ export default function App() {
   };
 
   const handleResolveAlert = async (id: string) => {
+    const previous = alerts;
     setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, resolved: true } : a)));
     try {
       await api.studio.resolveAlert(id);
     } catch (err) {
+      setAlerts(previous);
       notifyError(err, 'Failed to resolve alert in Supabase.');
+      throw err;
     }
   };
 

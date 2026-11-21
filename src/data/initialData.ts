@@ -11,7 +11,7 @@ import type {
   SystemAlert,
   TimeRange,
   VelocityPoint,
-} from '../types/events';
+} from '../types/events.ts';
 
 export const EVENT_CATEGORIES = [
   'Events',

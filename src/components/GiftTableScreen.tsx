@@ -195,6 +195,8 @@ export const GiftTableScreen: React.FC<GiftTableScreenProps> = ({
       setSide('');
       setMessage('');
       triggerToast('Gift entry recorded on standalone ledger');
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message : 'Unable to record gift entry.');
     } finally {
       setSavingGift(false);
     }

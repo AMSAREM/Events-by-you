@@ -47,7 +47,7 @@ interface QrGateScannerScreenProps {
     dispatchedMessage?: string;
     smsSkippedReason?: string;
   } | void> | void;
-  onRegisterAttendee: (eventId: string, attendee: Attendee) => void;
+  onRegisterAttendee: (eventId: string, attendee: Attendee) => Promise<void> | void;
   onToggleQrPassPublished?: (eventId: string, published: boolean) => Promise<void> | void;
   onManageEvent: (event: EventItem) => void;
   onNavigateSettings: () => void;
@@ -73,6 +73,13 @@ type ScanOutcome =
   | {
       status: 'not-found';
       query: string;
+      message: string;
+      timestamp: string;
+    }
+  | {
+      status: 'rejected';
+      attendee?: Attendee;
+      eventTitle: string;
       message: string;
       timestamp: string;
     };
@@ -305,22 +312,35 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
     setScanHistory((prev) => [initialOutcome, ...prev].slice(0, 8));
     setCodeInput('');
 
-    void Promise.resolve(onToggleCheckIn(matchAny.id)).then((res) => {
-      if (!res) return;
-      const updatedMessage = res.checkInSmsSent
-        ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. Check-in welcome SMS + Disposable Camera link sent.`
-        : res.smsSkippedReason
-          ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. SMS not sent: ${res.smsSkippedReason}`
-          : res.checkInMessageSent
-            ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. Check-in email + Disposable Camera link sent.`
-            : `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in.`;
-      const enriched: ScanOutcome = {
-        ...initialOutcome,
-        cameraUrl: res.cameraUrl || initialOutcome.cameraUrl,
-        message: updatedMessage,
-      };
-      setLastOutcome(enriched);
-    });
+    void Promise.resolve(onToggleCheckIn(matchAny.id))
+      .then((res) => {
+        if (!res) return;
+        const updatedMessage = res.checkInSmsSent
+          ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. Check-in welcome SMS + Disposable Camera link sent.`
+          : res.smsSkippedReason
+            ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. SMS not sent: ${res.smsSkippedReason}`
+            : res.checkInMessageSent
+              ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. Check-in email + Disposable Camera link sent.`
+              : `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in.`;
+        const enriched: ScanOutcome = {
+          ...initialOutcome,
+          cameraUrl: res.cameraUrl || initialOutcome.cameraUrl,
+          message: updatedMessage,
+        };
+        setLastOutcome(enriched);
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : 'Unable to persist gate check-in to Supabase.';
+        const failedOutcome: ScanOutcome = {
+          status: 'rejected',
+          attendee: matchAny,
+          eventTitle: evtTitle,
+          message: `Check-in failed for ${matchAny.name}: ${msg}`,
+          timestamp: nowTime,
+        };
+        setLastOutcome(failedOutcome);
+        setScanHistory((prev) => prev.filter((item) => item !== initialOutcome));
+      });
   };
 
   useEffect(() => {
@@ -402,7 +422,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
     verifyAndProcessCode(codeInput);
   };
 
-  const handleWalkInSubmit = (e: React.FormEvent) => {
+  const handleWalkInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEvent || !walkInName.trim() || !walkInPhone.trim()) return;
 
@@ -432,30 +452,39 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       validationGroup: walkInValidationGroup || activeValidationCircles[0],
     };
 
-    onRegisterAttendee(selectedEvent.id, created);
-    setWalkInSuccess(created);
-    setWalkInName('');
-    setWalkInPhone('');
-    setWalkInEmail('');
-    setWalkInOrg('');
+    try {
+      await Promise.resolve(onRegisterAttendee(selectedEvent.id, created));
+      setWalkInSuccess(created);
+      setWalkInName('');
+      setWalkInPhone('');
+      setWalkInEmail('');
+      setWalkInOrg('');
 
-    if (walkInAutoCheckIn) {
-      const walkInCameraUrl = buildCameraLinkForOrigin(
-        selectedEvent.slug || selectedEvent.id,
-        undefined,
-        created.name,
-        created.ticketCode
-      );
-      const outcome: ScanOutcome = {
-        status: 'verified',
-        attendee: created,
+      if (walkInAutoCheckIn) {
+        const walkInCameraUrl = buildCameraLinkForOrigin(
+          selectedEvent.slug || selectedEvent.id,
+          undefined,
+          created.name,
+          created.ticketCode
+        );
+        const outcome: ScanOutcome = {
+          status: 'verified',
+          attendee: created,
+          eventTitle: selectedEvent.title,
+          message: `Walk-In Registered & Checked In — QR Pass ${code} & Disposable Camera link sent via Arkesel SMS.`,
+          cameraUrl: walkInCameraUrl,
+          timestamp: nowTime,
+        };
+        setLastOutcome(outcome);
+        setScanHistory((prev) => [outcome, ...prev].slice(0, 8));
+      }
+    } catch (err) {
+      setLastOutcome({
+        status: 'rejected',
         eventTitle: selectedEvent.title,
-        message: `Walk-In Registered & Checked In — QR Pass ${code} & Disposable Camera link sent via Arkesel SMS.`,
-        cameraUrl: walkInCameraUrl,
+        message: err instanceof Error ? err.message : 'Unable to register walk-in guest.',
         timestamp: nowTime,
-      };
-      setLastOutcome(outcome);
-      setScanHistory((prev) => [outcome, ...prev].slice(0, 8));
+      });
     }
   };
 
@@ -727,10 +756,12 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                       ? 'PASS VERIFIED — CHECKED IN'
                       : lastOutcome.status === 'duplicate'
                         ? 'DUPLICATE ENTRY BLOCKED'
-                        : 'UNRECOGNIZED PASS CODE'}
+                        : lastOutcome.status === 'rejected'
+                          ? 'SAVE FAILED — REVERTED'
+                          : 'UNRECOGNIZED PASS CODE'}
                   </p>
                   <p className="text-xs text-zinc-200 mt-0.5">{lastOutcome.message}</p>
-                  {'attendee' in lastOutcome && (
+                  {'attendee' in lastOutcome && lastOutcome.attendee && (
                     <div className="mt-1.5 space-y-1">
                       <p className="text-[11px] font-mono text-zinc-300 tabular-nums">
                         {lastOutcome.attendee.tier} · {lastOutcome.attendee.phone} ·{' '}
@@ -778,8 +809,27 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    void onToggleCheckIn(lastOutcome.attendee.id);
-                    setLastOutcome(null);
+                    const targetAttendee = lastOutcome.attendee;
+                    const evtTitle = lastOutcome.eventTitle;
+                    void Promise.resolve(onToggleCheckIn(targetAttendee.id))
+                      .then(() => {
+                        setLastOutcome(null);
+                      })
+                      .catch((err) => {
+                        setLastOutcome({
+                          status: 'rejected',
+                          attendee: targetAttendee,
+                          eventTitle: evtTitle,
+                          message:
+                            err instanceof Error
+                              ? err.message
+                              : 'Unable to undo check-in right now.',
+                          timestamp: new Date().toLocaleTimeString('en-GB', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          }),
+                        });
+                      });
                   }}
                   className="px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-[11px] font-semibold text-white inline-flex items-center gap-1 whitespace-nowrap shrink-0"
                 >
@@ -1098,7 +1148,23 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => onToggleCheckIn(att.id)}
+                      onClick={() => {
+                        void Promise.resolve(onToggleCheckIn(att.id)).catch((err) => {
+                          setLastOutcome({
+                            status: 'rejected',
+                            attendee: att,
+                            eventTitle: selectedEvent?.title ?? 'Event Gate',
+                            message:
+                              err instanceof Error
+                                ? err.message
+                                : `Unable to update check-in status for ${att.name}.`,
+                            timestamp: new Date().toLocaleTimeString('en-GB', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            }),
+                          });
+                        });
+                      }}
                       className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap ${
                         att.checkedIn
                           ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
@@ -1155,7 +1221,9 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                         ? 'Admitted'
                         : item.status === 'duplicate'
                           ? 'Duplicate Blocked'
-                          : 'Unknown Code'}
+                          : item.status === 'rejected'
+                            ? 'Save Failed'
+                            : 'Unknown Code'}
                     </span>
                     <span className="font-mono text-[#71717A] tabular-nums">{item.timestamp}</span>
                   </div>

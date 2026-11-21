@@ -272,6 +272,12 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
         .filter(Boolean);
       const preset = getCategoryPreset(category || 'Events');
 
+      const rawDateLabel = dateLabel.trim() || 'Dec 18, 2026';
+      const parsedWizardDate = new Date(rawDateLabel);
+      const resolvedIsoDate = !Number.isNaN(parsedWizardDate.getTime())
+        ? parsedWizardDate.toISOString().slice(0, 10)
+        : new Date().toISOString().slice(0, 10);
+
       const createdEvent: EventItem = {
         id: eventId,
         slug: slug.trim() || 'new-event',
@@ -279,8 +285,8 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
         subtitle: overview.trim(),
         category: category || tags[0] || 'Events',
         status: publishStatus,
-        date: dateLabel.trim() || 'Dec 18, 2026',
-        isoDate: '2026-12-18',
+        date: rawDateLabel,
+        isoDate: resolvedIsoDate,
         time: timeLabel.trim() || '09:00 GMT',
         venue: venueFormat === 'virtual' ? 'Livestream Stage' : venue.trim() || 'Main Auditorium',
         city: city.trim() || 'Accra',
@@ -346,6 +352,11 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
       }));
 
       await onCreateEvent(createdEvent, createdBlocks);
+    } catch (err) {
+      setPublishError(
+        err instanceof Error ? err.message : 'Unable to save event to Supabase. Please retry.'
+      );
+      setStep(4);
     } finally {
       setSubmitting(false);
     }
@@ -942,8 +953,22 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                           onChange={(e) => setRequireInviteCode(e.target.checked)}
                           className="w-4 h-4 accent-[#0B0B0B]"
                         />
-                        <span>Require private invitation passcode ({inviteCode || 'GUEST2026'})</span>
+                        <span>Require private invitation passcode ({inviteCode.trim() || 'GUEST2026'})</span>
                       </label>
+                      {requireInviteCode && (
+                        <div className="sm:col-span-2">
+                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                            Custom Invitation Passcode
+                          </label>
+                          <input
+                            type="text"
+                            value={inviteCode}
+                            onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                            placeholder="GUEST2026"
+                            className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B]"
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

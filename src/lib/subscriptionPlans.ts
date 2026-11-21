@@ -1,5 +1,5 @@
-import type { EventItem, OrganizerProfile } from '../types/events';
-import { getDefaultMessageConfig } from './eventMessages';
+import type { EventItem, OrganizerProfile } from '../types/events.ts';
+import { getDefaultMessageConfig } from './eventMessages.ts';
 
 export type SubscriptionPlanName = OrganizerProfile['plan'];
 export type SubscriptionPlanId = 'starter' | 'pro' | 'enterprise';

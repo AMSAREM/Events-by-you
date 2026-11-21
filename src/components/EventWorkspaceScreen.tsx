@@ -287,6 +287,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           : event.messageConfig,
       });
       triggerToast(successToast);
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message : 'Unable to save message settings.');
     } finally {
       setSavingMessages(false);
     }
@@ -300,6 +302,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
       setFlyerFailed(false);
       await onUpdateEvent({ ...event, flyerUrl: compressed });
       triggerToast('Event flyer uploaded to workspace & invitation link');
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message : 'Unable to upload flyer picture.');
     } finally {
       setUploadingFlyer(false);
     }
@@ -491,27 +495,33 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     triggerToast('Gate Check-in SVG QR downloaded');
   };
 
-  const handleAddBlockSubmit = (e: React.FormEvent) => {
+  const handleAddBlockSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBlockTitle.trim()) return;
-    onAddScheduleBlock({
-      id: `sch-${Date.now()}`,
-      eventId: event.id,
-      time: newBlockTime.trim() || '04:00 - 05:00',
-      duration: '60m',
-      title: newBlockTitle.trim(),
-      stage: newBlockStage.trim() || 'Main Hall',
-      lead: newBlockLead.trim() || profile.name,
-      completed: false,
-      day: 'Sat',
-    });
-    setNewBlockTitle('');
-    setNewBlockLead('');
-    setAddingBlock(false);
-    triggerToast('Program block added');
+    try {
+      await Promise.resolve(
+        onAddScheduleBlock({
+          id: `sch-${Date.now()}`,
+          eventId: event.id,
+          time: newBlockTime.trim() || '04:00 - 05:00',
+          duration: '60m',
+          title: newBlockTitle.trim(),
+          stage: newBlockStage.trim() || 'Main Hall',
+          lead: newBlockLead.trim() || profile.name,
+          completed: false,
+          day: 'Sat',
+        })
+      );
+      setNewBlockTitle('');
+      setNewBlockLead('');
+      setAddingBlock(false);
+      triggerToast('Program block added');
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message : 'Unable to add program block.');
+    }
   };
 
-  const handleWalkInSubmit = (e: React.FormEvent) => {
+  const handleWalkInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!onRegisterAttendee || !walkInName.trim() || !walkInPhone.trim()) return;
     const normalizedPhone = normalizePhoneE164(walkInPhone);
@@ -520,25 +530,34 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
       hour: '2-digit',
       minute: '2-digit',
     });
-    onRegisterAttendee(event.id, {
-      id: `att-${Date.now()}`,
-      eventId: event.id,
-      name: walkInName.trim(),
-      email: walkInEmail.trim() || `${walkInName.trim().toLowerCase().replace(/\s+/g, '.')}@guest.africa`,
-      phone: normalizedPhone,
-      organization: 'Gate Walk-In',
-      tier: walkInTier,
-      ticketCode: code,
-      checkedIn: true,
-      checkedInAt: nowTime,
-      paymentStatus: 'paid',
-      smsStatus: 'Arkesel Sent',
-    });
-    setWalkInName('');
-    setWalkInPhone('');
-    setWalkInEmail('');
-    setAddingWalkIn(false);
-    triggerToast(`Walk-in checked in (${code})`);
+    const guestName = walkInName.trim();
+    try {
+      await Promise.resolve(
+        onRegisterAttendee(event.id, {
+          id: `att-${Date.now()}`,
+          eventId: event.id,
+          name: guestName,
+          email:
+            walkInEmail.trim() ||
+            `${guestName.toLowerCase().replace(/\s+/g, '.')}@guest.africa`,
+          phone: normalizedPhone,
+          organization: 'Gate Walk-In',
+          tier: walkInTier,
+          ticketCode: code,
+          checkedIn: true,
+          checkedInAt: nowTime,
+          paymentStatus: 'paid',
+          smsStatus: 'Arkesel Sent',
+        })
+      );
+      setWalkInName('');
+      setWalkInPhone('');
+      setWalkInEmail('');
+      setAddingWalkIn(false);
+      triggerToast(`Walk-in checked in (${code})`);
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message : 'Unable to check in walk-in guest.');
+    }
   };
 
   const smsSegments = Math.max(1, Math.ceil(confirmationTemplate.length / 160));
@@ -926,22 +945,38 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   <ThemeColorPicker
                     designTheme={event.designTheme || getCategoryPreset(event.category).designTheme}
                     brandColor={event.brandColor ?? event.extraDataConfig?.brandColor}
-                    onChangeTheme={(nextTheme) => {
-                      void onUpdateEvent({
-                        ...event,
-                        designTheme: nextTheme,
-                      });
+                    onChangeTheme={async (nextTheme) => {
+                      try {
+                        await Promise.resolve(
+                          onUpdateEvent({
+                            ...event,
+                            designTheme: nextTheme,
+                          })
+                        );
+                        triggerToast('Event theme updated');
+                      } catch (err) {
+                        triggerToast(err instanceof Error ? err.message : 'Unable to save theme.');
+                      }
                     }}
-                    onChangeBrandColor={(nextColor) => {
+                    onChangeBrandColor={async (nextColor) => {
                       const presetCfg = getCategoryPreset(event.category).extraDataConfig;
-                      void onUpdateEvent({
-                        ...event,
-                        brandColor: nextColor,
-                        extraDataConfig: {
-                          ...(event.extraDataConfig ?? presetCfg),
-                          brandColor: nextColor,
-                        },
-                      });
+                      try {
+                        await Promise.resolve(
+                          onUpdateEvent({
+                            ...event,
+                            brandColor: nextColor,
+                            extraDataConfig: {
+                              ...(event.extraDataConfig ?? presetCfg),
+                              brandColor: nextColor,
+                            },
+                          })
+                        );
+                        triggerToast('Brand color saved');
+                      } catch (err) {
+                        triggerToast(
+                          err instanceof Error ? err.message : 'Unable to save brand color.'
+                        );
+                      }
                     }}
                     title="Live Event Theme & Brand Color"
                   />
@@ -1094,7 +1129,13 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       <div className="flex items-center justify-end gap-2 shrink-0">
                         <button
                           type="button"
-                          onClick={() => onToggleScheduleBlock(block.id)}
+                          onClick={() => {
+                            void Promise.resolve(onToggleScheduleBlock(block.id)).catch((err) =>
+                              triggerToast(
+                                err instanceof Error ? err.message : 'Unable to update schedule block.'
+                              )
+                            );
+                          }}
                           title={block.completed ? 'Mark upcoming' : 'Mark complete'}
                           className={`px-3 py-1.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 transition-colors ${
                             block.completed
@@ -1108,7 +1149,13 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                         {onDeleteScheduleBlock && (
                           <button
                             type="button"
-                            onClick={() => onDeleteScheduleBlock(block.id)}
+                            onClick={() => {
+                              void Promise.resolve(onDeleteScheduleBlock(block.id)).catch((err) =>
+                                triggerToast(
+                                  err instanceof Error ? err.message : 'Unable to delete block.'
+                                )
+                              );
+                            }}
                             aria-label="Delete session"
                             className="w-8 h-8 rounded-full bg-[#F5F5F7] flex items-center justify-center hover:bg-[#EF4444]/10 hover:text-[#EF4444] text-[#71717A] transition-colors"
                           >

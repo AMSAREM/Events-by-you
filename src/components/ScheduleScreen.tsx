@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Clock, Plus, Trash2 } from 'lucide-react';
 import { EventItem, OrganizerProfile, ScheduleBlock, SystemAlert } from '../types/events';
 import { TopUtilityBar } from './TopUtilityBar';
@@ -43,6 +43,12 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   const [newDay, setNewDay] = useState<ScheduleBlock['day']>('Wed');
   const [newEventId, setNewEventId] = useState(events[0]?.id ?? '');
 
+  useEffect(() => {
+    if (events.length > 0 && (!newEventId || !events.some((e) => e.id === newEventId))) {
+      setNewEventId(events[0].id);
+    }
+  }, [events, newEventId]);
+
   const eventMap = useMemo(() => {
     const map = new Map<string, EventItem>();
     events.forEach((e) => map.set(e.id, e));
@@ -69,22 +75,28 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
 
   const completedCount = filteredBlocks.filter((b) => b.completed).length;
 
-  const handleCreateCue = (e: React.FormEvent) => {
+  const handleCreateCue = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim() || !newEventId) return;
-    onAddBlock({
-      id: `sch-${Date.now()}`,
-      eventId: newEventId,
-      time: newTime,
-      duration: newDuration,
-      title: newTitle.trim(),
-      stage: newStage.trim() || 'Main Stage',
-      lead: newLead.trim() || profile.name,
-      completed: false,
-      day: newDay,
-    });
-    setNewTitle('');
-    setShowAddForm(false);
+    try {
+      await Promise.resolve(
+        onAddBlock({
+          id: `sch-${Date.now()}`,
+          eventId: newEventId,
+          time: newTime,
+          duration: newDuration,
+          title: newTitle.trim(),
+          stage: newStage.trim() || 'Main Stage',
+          lead: newLead.trim() || profile.name,
+          completed: false,
+          day: newDay,
+        })
+      );
+      setNewTitle('');
+      setShowAddForm(false);
+    } catch {
+      // Error surfaced via top-level banner
+    }
   };
 
   return (
@@ -258,7 +270,9 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                 <div className="flex items-start sm:items-center gap-4 min-w-0">
                   <button
                     type="button"
-                    onClick={() => onToggleBlock(block.id)}
+                    onClick={() => {
+                      void Promise.resolve(onToggleBlock(block.id)).catch(() => {});
+                    }}
                     aria-label={block.completed ? 'Mark cue pending' : 'Mark cue ready'}
                     className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 transition-colors ${
                       block.completed
@@ -307,7 +321,9 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                 <div className="flex items-center justify-end gap-2.5 shrink-0">
                   <button
                     type="button"
-                    onClick={() => onToggleBlock(block.id)}
+                    onClick={() => {
+                      void Promise.resolve(onToggleBlock(block.id)).catch(() => {});
+                    }}
                     className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
                       block.completed
                         ? 'bg-white border border-[#E5E5EA] text-[#71717A] hover:text-[#0B0B0B]'
@@ -319,7 +335,9 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                   {onDeleteBlock && (
                     <button
                       type="button"
-                      onClick={() => onDeleteBlock(block.id)}
+                      onClick={() => {
+                        void Promise.resolve(onDeleteBlock(block.id)).catch(() => {});
+                      }}
                       aria-label="Delete cue"
                       className="w-8 h-8 rounded-full bg-white border border-[#E5E5EA] flex items-center justify-center text-[#71717A] hover:text-[#EF4444] hover:border-[#EF4444] transition-colors"
                     >

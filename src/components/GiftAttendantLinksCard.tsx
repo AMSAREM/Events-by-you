@@ -92,6 +92,7 @@ export const GiftAttendantLinksCard: React.FC<GiftAttendantLinksCardProps> = ({
 
   const handleToggle = async (link: GiftTableAttendantLink) => {
     setBusyLinkId(link.id);
+    setFormError(null);
     try {
       await onToggleLink(event.id, link.id, !link.active);
       notify(
@@ -99,6 +100,8 @@ export const GiftAttendantLinksCard: React.FC<GiftAttendantLinksCardProps> = ({
           ? `Resumed Gift Desk link for ${link.attendantName}`
           : `Paused Gift Desk link for ${link.attendantName}`
       );
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Unable to update attendant link.');
     } finally {
       setBusyLinkId(null);
     }
@@ -106,10 +109,13 @@ export const GiftAttendantLinksCard: React.FC<GiftAttendantLinksCardProps> = ({
 
   const handleDelete = async (link: GiftTableAttendantLink) => {
     setBusyLinkId(link.id);
+    setFormError(null);
     try {
       await onDeleteLink(event.id, link.id);
       if (expandedQrId === link.id) setExpandedQrId(null);
       notify(`Removed Gift Desk link for ${link.attendantName}`);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Unable to delete attendant link.');
     } finally {
       setBusyLinkId(null);
     }

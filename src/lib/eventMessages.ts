@@ -1,4 +1,4 @@
-import type { EventItem, EventMessageConfig } from '../types/events';
+import type { EventItem, EventMessageConfig } from '../types/events.ts';
 
 export const MAX_SHOTS_PER_USER = 5;
 

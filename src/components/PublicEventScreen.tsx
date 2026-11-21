@@ -270,6 +270,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const [checkinSubMode, setCheckinSubMode] = useState<'register' | 'lookup'>('register');
   const [lookupQuery, setLookupQuery] = useState('');
   const [lookupError, setLookupError] = useState<string | null>(null);
+  const [lookingUpPass, setLookingUpPass] = useState(false);
 
   useEffect(() => {
     setHeroFailed(false);
@@ -523,9 +524,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     setTimeout(() => setShareToast(null), 2200);
   };
 
-  const handleLookupExistingPass = (e: React.FormEvent) => {
+  const handleLookupExistingPass = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedEvent) return;
+    if (!selectedEvent || lookingUpPass) return;
     const raw = lookupQuery.trim();
     if (!raw) {
       setLookupError('Enter your pass code (e.g. #TSL-2026-8801), phone number, or email.');
@@ -536,7 +537,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     const digitsOnly = raw.replace(/\D/g, '');
     const normalizedLookupPhone = digitsOnly.length >= 9 ? normalizePhoneE164(raw) : '';
 
-    const match = attendees.find((att) => {
+    let match = attendees.find((att) => {
       if (att.eventId !== selectedEvent.id) return false;
       const attCode = att.ticketCode.toLowerCase().replace(/^#/, '');
       const attPhone = att.phone.replace(/\s+/g, '');
@@ -550,10 +551,21 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     });
 
     if (!match) {
-      setLookupError(
-        `No registered pass found for "${raw}". Use New Guest Check-In to validate your circle and generate a QR pass.`
-      );
-      return;
+      setLookingUpPass(true);
+      setLookupError(null);
+      try {
+        const res = await api.public.lookupPass(selectedEvent.id, raw);
+        match = res.attendee;
+      } catch (err) {
+        setLookupError(
+          err instanceof Error
+            ? err.message
+            : `No registered pass found for "${raw}". Use New Guest Check-In to validate your circle and generate a QR pass.`
+        );
+        return;
+      } finally {
+        setLookingUpPass(false);
+      }
     }
 
     setLookupError(null);
@@ -913,10 +925,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               </div>
               <button
                 type="submit"
-                className="w-full h-13 bg-[#0B0B0B] hover:opacity-90 text-white text-sm font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
+                disabled={lookingUpPass}
+                className="w-full h-13 bg-[#0B0B0B] hover:opacity-90 disabled:opacity-60 text-white text-sm font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
               >
                 <QrCode className="w-4 h-4" />
-                <span>Open My Check-In QR Pass</span>
+                <span>{lookingUpPass ? 'Searching Supabase Passes...' : 'Open My Check-In QR Pass'}</span>
               </button>
             </form>
           ) : (

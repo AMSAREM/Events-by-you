@@ -54,10 +54,10 @@ interface DisposableCameraScreenProps {
     tier: string;
   } | null;
   onAddShot: (shot: DisposableShot) => Promise<{ ok: boolean; error?: string } | void> | void;
-  onToggleLikeShot: (shotId: string) => void;
-  onDeleteShot: (shotId: string) => void;
-  onDevelopRoll: (eventId: string) => void;
-  onUpdateRollSettings: (eventId: string, next: DisposableRollSettings) => void;
+  onToggleLikeShot: (shotId: string) => Promise<void> | void;
+  onDeleteShot: (shotId: string) => Promise<void> | void;
+  onDevelopRoll: (eventId: string) => Promise<void> | void;
+  onUpdateRollSettings: (eventId: string, next: DisposableRollSettings) => Promise<void> | void;
   onManageEvent?: (event: EventItem) => void;
   onNavigateSettings?: () => void;
   onResolveAlert?: (id: string) => void;
@@ -1618,8 +1618,18 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        onDevelopRoll(selectedEvent.id);
-                        showToast(`Developed ${sealedCount} film negatives!`);
+                        void (async () => {
+                          try {
+                            await Promise.resolve(onDevelopRoll(selectedEvent.id));
+                            showToast(`Developed ${sealedCount} film negatives!`);
+                          } catch (err) {
+                            showToast(
+                              err instanceof Error
+                                ? err.message
+                                : 'Unable to develop negatives right now.'
+                            );
+                          }
+                        })();
                       }}
                       className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white hover:bg-neutral-800 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
                     >
@@ -1662,12 +1672,20 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
-                      onClick={() =>
-                        onUpdateRollSettings(selectedEvent.id, {
-                          ...currentRollConfig,
-                          darkroomMode: !currentRollConfig.darkroomMode,
-                        })
-                      }
+                      onClick={() => {
+                        void Promise.resolve(
+                          onUpdateRollSettings(selectedEvent.id, {
+                            ...currentRollConfig,
+                            darkroomMode: !currentRollConfig.darkroomMode,
+                          })
+                        ).catch((err) => {
+                          showToast(
+                            err instanceof Error
+                              ? err.message
+                              : 'Unable to update darkroom mode.'
+                          );
+                        });
+                      }}
                       className={`px-3 py-1.5 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1.5 transition-colors whitespace-nowrap ${
                         currentRollConfig.darkroomMode
                           ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
@@ -1693,12 +1711,20 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                         <button
                           key={limit}
                           type="button"
-                          onClick={() =>
-                            onUpdateRollSettings(selectedEvent.id, {
-                              ...currentRollConfig,
-                              exposuresLimit: limit,
-                            })
-                          }
+                          onClick={() => {
+                            void Promise.resolve(
+                              onUpdateRollSettings(selectedEvent.id, {
+                                ...currentRollConfig,
+                                exposuresLimit: limit,
+                              })
+                            ).catch((err) => {
+                              showToast(
+                                err instanceof Error
+                                  ? err.message
+                                  : 'Unable to update roll exposure limit.'
+                              );
+                            });
+                          }}
                           className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-semibold transition-colors ${
                             currentRollConfig.exposuresLimit === limit
                               ? 'bg-[#0B0B0B] text-white'
@@ -1807,7 +1833,15 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                           <div className="flex items-center gap-1.5 shrink-0">
                             <button
                               type="button"
-                              onClick={() => onToggleLikeShot(shot.id)}
+                              onClick={() => {
+                                void Promise.resolve(onToggleLikeShot(shot.id)).catch((err) => {
+                                  showToast(
+                                    err instanceof Error
+                                      ? err.message
+                                      : 'Unable to update favorite right now.'
+                                  );
+                                });
+                              }}
                               aria-label={`Favorite frame ${frameCode}`}
                               className={`h-8 px-2.5 rounded-full text-[11px] font-mono font-semibold inline-flex items-center gap-1 transition-colors tabular-nums ${
                                 shot.liked
@@ -1890,7 +1924,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    onToggleLikeShot(lightboxShot.id);
+                    const snapshot = lightboxShot;
                     setLightboxShot((prev) =>
                       prev
                         ? {
@@ -1900,6 +1934,14 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                           }
                         : null
                     );
+                    void Promise.resolve(onToggleLikeShot(snapshot.id)).catch((err) => {
+                      setLightboxShot((curr) => (curr?.id === snapshot.id ? snapshot : curr));
+                      showToast(
+                        err instanceof Error
+                          ? err.message
+                          : 'Unable to update favorite right now.'
+                      );
+                    });
                   }}
                   className="px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/20 text-xs font-semibold inline-flex items-center gap-1.5 tabular-nums"
                 >
@@ -1918,9 +1960,20 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      onDeleteShot(lightboxShot.id);
-                      setLightboxShot(null);
-                      showToast('Frame removed from roll');
+                      const targetId = lightboxShot.id;
+                      void (async () => {
+                        try {
+                          await Promise.resolve(onDeleteShot(targetId));
+                          setLightboxShot(null);
+                          showToast('Frame removed from roll');
+                        } catch (err) {
+                          showToast(
+                            err instanceof Error
+                              ? err.message
+                              : 'Unable to delete frame right now.'
+                          );
+                        }
+                      })();
                     }}
                     aria-label="Delete frame"
                     className="w-9 h-9 rounded-full bg-[#EF4444]/20 hover:bg-[#EF4444]/35 text-[#EF4444] flex items-center justify-center"

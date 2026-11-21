@@ -122,6 +122,8 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
       setTimeout(() => {
         setSavedBannerEventId((curr) => (curr === targetEvent.id ? null : curr));
       }, 2600);
+    } catch {
+      // Top-level App banner surfaces persistence error and rolls back state.
     } finally {
       setUploadingEventId(null);
     }

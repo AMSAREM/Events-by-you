@@ -1203,7 +1203,10 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       }
 
       const userClient = createUserSupabaseClient(data.session.access_token);
-      const profile = await ensureProfileRow(userClient, data.user);
+      const profile = await ensureProfileRow(userClient, data.user).catch((err) => {
+        if (svc) return ensureProfileRow(svc, data.user!);
+        throw err;
+      });
       const contacts = svc
         ? await resolveSupabaseUserContacts(svc, data.user)
         : {
@@ -1587,7 +1590,10 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         }
 
         const userClient = createUserSupabaseClient(sessionRes.data.session.access_token);
-        const profile = await ensureProfileRow(userClient, sessionRes.data.user);
+        const profile = await ensureProfileRow(userClient, sessionRes.data.user).catch((err) => {
+          if (svc) return ensureProfileRow(svc, sessionRes.data.user!);
+          throw err;
+        });
         return res.json({
           session: {
             accessToken: sessionRes.data.session.access_token,
@@ -1637,7 +1643,10 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       }
 
       const userClient = createUserSupabaseClient(result.data.session.access_token);
-      const profile = await ensureProfileRow(userClient, result.data.user);
+      const profile = await ensureProfileRow(userClient, result.data.user).catch((err) => {
+        if (svc) return ensureProfileRow(svc, result.data.user!);
+        throw err;
+      });
       return res.json({
         session: {
           accessToken: result.data.session.access_token,
@@ -2009,7 +2018,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         return res.status(401).json({ error: error?.message || 'Could not refresh session.' });
       }
       const userClient = createUserSupabaseClient(data.session.access_token);
-      const profile = await ensureProfileRow(userClient, data.user);
+      const svcFallback = createServiceSupabaseClient();
+      const profile = await ensureProfileRow(userClient, data.user).catch((err) => {
+        if (svcFallback) return ensureProfileRow(svcFallback, data.user!);
+        throw err;
+      });
       return res.json({
         session: {
           accessToken: data.session.access_token,
@@ -2039,7 +2052,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
 
   app.get('/api/auth/session', requireSupabaseAuth, async (req: AuthedRequest, res) => {
     try {
-      const profile = await ensureProfileRow(req.supabase!, req.user!);
+      const svcFallback = createServiceSupabaseClient();
+      const profile = await ensureProfileRow(req.supabase!, req.user!).catch((err) => {
+        if (svcFallback) return ensureProfileRow(svcFallback, req.user!);
+        throw err;
+      });
       return res.json({ profile });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load profile.';

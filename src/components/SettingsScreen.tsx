@@ -126,7 +126,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     setTimeout(() => setToastMsg(null), 3000);
   };
 
-  const handleSave = (e?: React.FormEvent) => {
+  const handleSave = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!name.trim() || name.trim().length < 2) {
       showToast('Full legal name must be at least 2 characters.');
@@ -141,7 +141,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       }
       normalizedEmail = emailCheck.normalized;
     }
-    let normalizedPhone = profile.phone;
+    let normalizedPhone = '';
     if (phone.trim()) {
       const phoneCheck = validateStrictPhoneE164(phone, 'GH');
       if (!phoneCheck.ok) {
@@ -163,26 +163,32 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     setSenderId(cleanSender);
 
     const firstName = name.trim().split(' ')[0] || profile.firstName;
-    onUpdateProfile({
-      ...profile,
-      name: name.trim() || profile.name,
-      firstName,
-      role: role.trim() || profile.role,
-      studio: studio.trim() || profile.studio,
-      email: normalizedEmail,
-      phone: normalizedPhone,
-      replyToEmail: replyToEmail.trim() || normalizedEmail || '',
-      timezone,
-      capacityAlertThreshold: threshold,
-      avatarUrl: avatarUrl ?? '',
-      twoFactorEnabled,
-      senderId: cleanSender,
-    });
-    showToast(
-      entitlements.allowCustomSenderId
-        ? 'Organiser profile & Sender ID configurations saved.'
-        : 'Organiser profile saved (Sender ID remains EVENTSAPP on Starter).'
-    );
+    try {
+      await Promise.resolve(
+        onUpdateProfile({
+          ...profile,
+          name: name.trim() || profile.name,
+          firstName,
+          role: role.trim() || profile.role,
+          studio: studio.trim() || profile.studio,
+          email: normalizedEmail,
+          phone: normalizedPhone,
+          replyToEmail: replyToEmail.trim() || normalizedEmail || '',
+          timezone,
+          capacityAlertThreshold: threshold,
+          avatarUrl: avatarUrl ?? '',
+          twoFactorEnabled,
+          senderId: cleanSender,
+        })
+      );
+      showToast(
+        entitlements.allowCustomSenderId
+          ? 'Organiser profile & Sender ID configurations saved.'
+          : 'Organiser profile saved (Sender ID remains EVENTSAPP on Starter).'
+      );
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to save profile changes.');
+    }
   };
 
   const handleDiscard = () => {
@@ -254,7 +260,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         if (onSyncProfile) {
           onSyncProfile(nextProfile);
         } else {
-          onUpdateProfile(nextProfile);
+          await Promise.resolve(onUpdateProfile(nextProfile)).catch(() => {});
         }
       }
       showToast(`Test SMS processed via ${res.senderId}`);
@@ -846,10 +852,24 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                   type="button"
                   role="switch"
                   aria-checked={twoFactorEnabled}
-                  onClick={() => {
-                    const next = !twoFactorEnabled;
+                  onClick={async () => {
+                    const prev = twoFactorEnabled;
+                    const next = !prev;
                     setTwoFactorEnabled(next);
-                    showToast(next ? '2FA TOTP enabled.' : '2FA TOTP disabled.');
+                    try {
+                      await Promise.resolve(
+                        onUpdateProfile({
+                          ...profile,
+                          twoFactorEnabled: next,
+                        })
+                      );
+                      showToast(next ? '2FA TOTP enabled.' : '2FA TOTP disabled.');
+                    } catch (err) {
+                      setTwoFactorEnabled(prev);
+                      showToast(
+                        err instanceof Error ? err.message : 'Unable to save 2FA setting.'
+                      );
+                    }
                   }}
                   className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
                     twoFactorEnabled ? 'bg-[#0B0B0B]' : 'bg-[#D9DADC]'
