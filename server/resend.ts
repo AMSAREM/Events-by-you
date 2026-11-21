@@ -5,8 +5,8 @@ import type { EmailDeliverabilityDiagnostics } from '../src/types/events.ts';
 export const DEFAULT_APP_URL = (
   process.env.APP_URL || 'https://www.eventsbyyou.xyz'
 ).replace(/\/+$/, '');
-export const DEFAULT_DOMAIN_FROM = 'Events App <hello@eventsbyyou.xyz>';
-export const DEFAULT_RESEND_FROM = 'Events App <onboarding@resend.dev>';
+export const DEFAULT_DOMAIN_FROM = 'Events By You <hello@eventsbyyou.xyz>';
+export const DEFAULT_RESEND_FROM = 'Events By You <onboarding@resend.dev>';
 
 const FREE_WEBMAIL_DOMAINS = new Set([
   'gmail.com',
@@ -189,7 +189,7 @@ async function resolveOptimalVerifiedFrom(config: ResendConfig): Promise<{
   if (verifiedDomains.length > 0) {
     const chosenDomain = verifiedDomains[0];
     return {
-      fromEmail: `Events App <hello@${chosenDomain}>`,
+      fromEmail: `Events By You <hello@${chosenDomain}>`,
       verifiedDomains,
       domainVerified: true,
       usingSharedSandboxSender: false,
@@ -239,7 +239,7 @@ export async function getEmailDeliverabilityDiagnostics(
   const activeFrom = verifiedDomains.includes(configuredDomain)
     ? cfg.fromEmail
     : verifiedDomains[0]
-      ? `Events App <hello@${verifiedDomains[0]}>`
+      ? `Events By You <hello@${verifiedDomains[0]}>`
       : DEFAULT_RESEND_FROM;
 
   let recommendation = 'Custom domain SPF + DKIM verified in Resend with transactional headers active.';
@@ -480,33 +480,33 @@ export async function sendAuthOtpEmail(params: {
   const recipientName = params.name?.trim() ? `Hi ${escapeHtml(params.name.trim())},` : 'Hello,';
   const heading =
     params.purpose === 'signup'
-      ? 'Verify your Events App account'
+      ? 'Verify your Events By You account'
       : params.purpose === 'recovery'
-        ? 'Reset your Events App password'
-        : 'Your Events App sign-in code';
+        ? 'Reset your Events By You password'
+        : 'Your Events By You sign-in code';
 
   const subject =
     params.purpose === 'signup'
-      ? 'Verify your Events App account'
+      ? 'Verify your Events By You account'
       : params.purpose === 'recovery'
-        ? 'Reset your Events App password'
-        : 'Your Events App sign-in code';
+        ? 'Reset your Events By You password'
+        : 'Your Events By You sign-in code';
 
   const intro =
     params.purpose === 'signup'
       ? params.dualChannelSms
-        ? 'Use the 6-digit verification code below (also sent to your mobile phone via SMS) to confirm your Events App account.'
-        : 'Use the 6-digit verification code below to confirm your Events App account.'
+        ? 'Use the 6-digit verification code below (also sent to your mobile phone via SMS) to confirm your Events By You account.'
+        : 'Use the 6-digit verification code below to confirm your Events By You account.'
       : params.purpose === 'recovery'
         ? params.dualChannelSms
-          ? 'Use the 6-digit recovery code below (also sent via SMS) or your recovery link to regain access to your Events App account.'
-          : 'Use the recovery link or 6-digit verification code below to regain access to your Events App account.'
+          ? 'Use the 6-digit recovery code below (also sent via SMS) or your recovery link to regain access to your Events By You account.'
+          : 'Use the recovery link or 6-digit verification code below to regain access to your Events By You account.'
         : params.dualChannelSms
-          ? 'Enter this 6-digit verification code (also sent to your mobile phone via SMS) to sign in to Events App.'
-          : 'Enter this 6-digit verification code to sign in to Events App.';
+          ? 'Enter this 6-digit verification code (also sent to your mobile phone via SMS) to sign in to Events By You.'
+          : 'Enter this 6-digit verification code to sign in to Events By You.';
 
   const preheaderText = params.code
-    ? `Your Events App 6-digit code is ${params.code}. It expires in 10 minutes.`
+    ? `Your Events By You 6-digit code is ${params.code}. It expires in 10 minutes.`
     : heading;
 
   const codeBlockHtml = params.code
@@ -544,8 +544,8 @@ export async function sendAuthOtpEmail(params: {
         : '';
 
     const footerLine = includeBrandUrl
-      ? `This code expires in 10 minutes. If you did not request this email, you can safely ignore it. Sent by Events App (<a href="${escapeHtml(DEFAULT_APP_URL)}" style="color:#0B0B0B;text-decoration:underline;">${escapeHtml(appHost)}</a>).`
-      : 'This code expires in 10 minutes. If you did not request this email, you can safely ignore it. Sent by Events App.';
+      ? `This code expires in 10 minutes. If you did not request this email, you can safely ignore it. Sent by Events By You (<a href="${escapeHtml(DEFAULT_APP_URL)}" style="color:#0B0B0B;text-decoration:underline;">${escapeHtml(appHost)}</a>).`
+      : 'This code expires in 10 minutes. If you did not request this email, you can safely ignore it. Sent by Events By You.';
 
     const html = `
 <!doctype html>
@@ -559,8 +559,8 @@ export async function sendAuthOtpEmail(params: {
     <span style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">${escapeHtml(preheaderText)}</span>
     <div style="max-width:520px;margin:0 auto;background:#FFFFFF;border-radius:24px;padding:32px;border:1px solid #E5E5EA;">
       <div style="margin-bottom:20px;">
-        <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#0B0B0B;color:#FFFFFF;border-radius:9999px;font-weight:700;font-size:13px;vertical-align:middle;">E</span>
-        <span style="margin-left:8px;font-weight:700;font-size:15px;vertical-align:middle;color:#0B0B0B;">Events App</span>
+        <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#7BF66E;color:#0D3822;border-radius:8px;font-weight:800;font-size:13px;vertical-align:middle;">E</span>
+        <span style="margin-left:8px;font-weight:700;font-size:15px;vertical-align:middle;color:#0D3822;">Events By You</span>
       </div>
       <h1 style="margin:0 0 12px 0;font-size:22px;line-height:1.25;font-weight:700;color:#0B0B0B;">${heading}</h1>
       <p style="margin:0 0 8px 0;font-size:14px;line-height:1.6;color:#444748;">${recipientName}</p>
@@ -582,7 +582,7 @@ export async function sendAuthOtpEmail(params: {
       '\nThis code expires in 10 minutes.',
       params.actionLink && includeBrandUrl ? `\nDirect link: ${params.actionLink}` : '',
       `\nIf you did not request this code, please ignore this email.`,
-      includeBrandUrl ? `Events App · ${DEFAULT_APP_URL}` : 'Events App',
+      includeBrandUrl ? `Events By You · ${DEFAULT_APP_URL}` : 'Events By You',
     ].filter(Boolean);
 
     return { html, text: textParts.join('\n') };
@@ -623,8 +623,8 @@ export async function sendEventPassEmail(params: {
     const includeBrandUrl = shouldIncludeAppUrlLink(effectiveFrom);
     const appHost = getHostnameFromUrl(DEFAULT_APP_URL) || 'eventsbyyou.xyz';
     const poweredByHtml = includeBrandUrl
-      ? ` · Events App (<a href="${escapeHtml(DEFAULT_APP_URL)}" style="color:#0B0B0B;text-decoration:underline;">${escapeHtml(appHost)}</a>)`
-      : ' · Events App';
+      ? ` · Events By You (<a href="${escapeHtml(DEFAULT_APP_URL)}" style="color:#0B0B0B;text-decoration:underline;">${escapeHtml(appHost)}</a>)`
+      : ' · Events By You';
 
     const cameraBlockHtml = params.cameraUrl
       ? `
@@ -653,8 +653,8 @@ export async function sendEventPassEmail(params: {
     <span style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">${escapeHtml(preheaderText)}</span>
     <div style="max-width:540px;margin:0 auto;background:#FFFFFF;border-radius:24px;padding:32px;border:1px solid #E5E5EA;">
       <div style="margin-bottom:20px;">
-        <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#0B0B0B;color:#FFFFFF;border-radius:9999px;font-weight:700;font-size:13px;vertical-align:middle;">E</span>
-        <span style="margin-left:8px;font-weight:700;font-size:15px;vertical-align:middle;color:#0B0B0B;">Events App · Digital Pass</span>
+        <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#7BF66E;color:#0D3822;border-radius:8px;font-weight:800;font-size:13px;vertical-align:middle;">E</span>
+        <span style="margin-left:8px;font-weight:700;font-size:15px;vertical-align:middle;color:#0D3822;">Events By You · Digital Pass</span>
       </div>
       <h1 style="margin:0 0 8px 0;font-size:22px;line-height:1.25;font-weight:700;color:#0B0B0B;">
         You&apos;re confirmed for ${escapeHtml(params.eventTitle)}
@@ -694,7 +694,7 @@ export async function sendEventPassEmail(params: {
       `Hosted by: ${params.organizerName}`,
       params.cameraUrl ? `\nDisposable Camera (5 photos + collage): ${params.cameraUrl}` : '',
       ``,
-      includeBrandUrl ? `Events App · ${DEFAULT_APP_URL}` : 'Events App',
+      includeBrandUrl ? `Events By You · ${DEFAULT_APP_URL}` : 'Events By You',
     ]
       .filter(Boolean)
       .join('\n');
@@ -736,8 +736,8 @@ export async function sendCheckInWelcomeEmail(params: {
     const includeBrandUrl = shouldIncludeAppUrlLink(effectiveFrom);
     const appHost = getHostnameFromUrl(DEFAULT_APP_URL) || 'eventsbyyou.xyz';
     const poweredByHtml = includeBrandUrl
-      ? ` · Events App (<a href="${escapeHtml(DEFAULT_APP_URL)}" style="color:#0B0B0B;text-decoration:underline;">${escapeHtml(appHost)}</a>)`
-      : ' · Events App';
+      ? ` · Events By You (<a href="${escapeHtml(DEFAULT_APP_URL)}" style="color:#0B0B0B;text-decoration:underline;">${escapeHtml(appHost)}</a>)`
+      : ' · Events By You';
 
     const html = `
 <!doctype html>
@@ -751,8 +751,8 @@ export async function sendCheckInWelcomeEmail(params: {
     <span style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">${escapeHtml(preheaderText)}</span>
     <div style="max-width:540px;margin:0 auto;background:#FFFFFF;border-radius:24px;padding:32px;border:1px solid #E5E5EA;">
       <div style="margin-bottom:20px;">
-        <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#0B0B0B;color:#FFFFFF;border-radius:9999px;font-weight:700;font-size:13px;vertical-align:middle;">E</span>
-        <span style="margin-left:8px;font-weight:700;font-size:15px;vertical-align:middle;color:#0B0B0B;">Events App · Gate Check-In</span>
+        <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#7BF66E;color:#0D3822;border-radius:8px;font-weight:800;font-size:13px;vertical-align:middle;">E</span>
+        <span style="margin-left:8px;font-weight:700;font-size:15px;vertical-align:middle;color:#0D3822;">Events By You · Gate Check-In</span>
       </div>
       <h1 style="margin:0 0 10px 0;font-size:22px;line-height:1.25;font-weight:700;color:#0B0B0B;">
         Welcome to ${escapeHtml(params.eventTitle)}, ${escapeHtml(params.attendeeName)}!
@@ -790,7 +790,7 @@ export async function sendCheckInWelcomeEmail(params: {
       `Open Disposable Camera (5 shots + collage): ${params.cameraUrl}`,
       `Pass Code: ${params.ticketCode}`,
       `Venue: ${params.eventVenue}, ${params.eventCity} · ${params.eventDate}`,
-      includeBrandUrl ? `Events App · ${DEFAULT_APP_URL}` : 'Events App',
+      includeBrandUrl ? `Events By You · ${DEFAULT_APP_URL}` : 'Events By You',
     ].join('\n');
 
     return { html, text };

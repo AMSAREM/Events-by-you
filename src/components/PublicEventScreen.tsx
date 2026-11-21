@@ -578,7 +578,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     const ics = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
-      'PRODID:-//Events App//Event Registration & SMS Ticketing//EN',
+      'PRODID:-//Events By You//Event Registration & SMS Ticketing//EN',
       'BEGIN:VEVENT',
       `UID:${issuedPass?.ticketCode ?? selectedEvent.slug}@eventsbyyou.xyz`,
       `SUMMARY:${selectedEvent.title}`,
@@ -2801,7 +2801,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   Free Public Tier
                 </span>
                 <span className="text-[11px] text-[#71717A]">
-                  Powered by <strong className="text-[#0B0B0B] font-semibold">Events App</strong>
+                  Powered by <strong className="text-[#0B0B0B] font-semibold">Events By You</strong>
                 </span>
               </>
             )}

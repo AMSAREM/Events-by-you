@@ -1918,7 +1918,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
 
             <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-white/10">
               <p className="text-xs text-zinc-300">
-                {lightboxShot.caption || 'Captured on Events App 35mm Disposable Camera'}
+                {lightboxShot.caption || 'Captured on Events By You 35mm Disposable Camera'}
               </p>
               <div className="flex items-center gap-2 shrink-0">
                 <button

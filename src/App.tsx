@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { Clock, Compass, Database, Loader2, LogOut, ShieldCheck, X } from 'lucide-react';
 import { INITIAL_PROFILE } from './data/initialData';
 import type {
@@ -32,30 +32,77 @@ import {
   saveStoredSession,
   type StoredAuthSession,
 } from './lib/api';
-import { LandingScreen } from './components/LandingScreen';
-import { SignInScreen } from './components/SignInScreen';
-import { SignUpScreen } from './components/SignUpScreen';
-import { ResetPasswordScreen } from './components/ResetPasswordScreen';
-import { VerifyOtpScreen } from './components/VerifyOtpScreen';
-import { PublicEventScreen } from './components/PublicEventScreen';
 import { NavigationRail } from './components/NavigationRail';
-import { OverviewScreen } from './components/OverviewScreen';
-import { EventsScreen } from './components/EventsScreen';
-import { EventWorkspaceScreen } from './components/EventWorkspaceScreen';
-import { ScheduleScreen } from './components/ScheduleScreen';
-import { AttendeesScreen } from './components/AttendeesScreen';
-import { AnalyticsScreen } from './components/AnalyticsScreen';
-import { BillingScreen } from './components/BillingScreen';
-import { CsvExportScreen } from './components/CsvExportScreen';
-import { CreateEventWizardScreen } from './components/CreateEventWizardScreen';
-import { SettingsScreen } from './components/SettingsScreen';
-import { QrGateScannerScreen } from './components/QrGateScannerScreen';
-import { DisposableCameraScreen } from './components/DisposableCameraScreen';
-import { GiftTableScreen } from './components/GiftTableScreen';
-import { AppsCreatorConsoleScreen } from './components/AppsCreatorConsoleScreen';
-import { LegalScreen } from './components/LegalScreen';
-import { EventDetailModal } from './components/EventModals';
-import { OnboardingWalkthroughModal } from './components/OnboardingWalkthroughModal';
+
+const LandingScreen = lazy(() =>
+  import('./components/LandingScreen').then((m) => ({ default: m.LandingScreen }))
+);
+const SignInScreen = lazy(() =>
+  import('./components/SignInScreen').then((m) => ({ default: m.SignInScreen }))
+);
+const SignUpScreen = lazy(() =>
+  import('./components/SignUpScreen').then((m) => ({ default: m.SignUpScreen }))
+);
+const ResetPasswordScreen = lazy(() =>
+  import('./components/ResetPasswordScreen').then((m) => ({ default: m.ResetPasswordScreen }))
+);
+const VerifyOtpScreen = lazy(() =>
+  import('./components/VerifyOtpScreen').then((m) => ({ default: m.VerifyOtpScreen }))
+);
+const PublicEventScreen = lazy(() =>
+  import('./components/PublicEventScreen').then((m) => ({ default: m.PublicEventScreen }))
+);
+const OverviewScreen = lazy(() =>
+  import('./components/OverviewScreen').then((m) => ({ default: m.OverviewScreen }))
+);
+const EventsScreen = lazy(() =>
+  import('./components/EventsScreen').then((m) => ({ default: m.EventsScreen }))
+);
+const EventWorkspaceScreen = lazy(() =>
+  import('./components/EventWorkspaceScreen').then((m) => ({ default: m.EventWorkspaceScreen }))
+);
+const ScheduleScreen = lazy(() =>
+  import('./components/ScheduleScreen').then((m) => ({ default: m.ScheduleScreen }))
+);
+const AttendeesScreen = lazy(() =>
+  import('./components/AttendeesScreen').then((m) => ({ default: m.AttendeesScreen }))
+);
+const AnalyticsScreen = lazy(() =>
+  import('./components/AnalyticsScreen').then((m) => ({ default: m.AnalyticsScreen }))
+);
+const BillingScreen = lazy(() =>
+  import('./components/BillingScreen').then((m) => ({ default: m.BillingScreen }))
+);
+const CsvExportScreen = lazy(() =>
+  import('./components/CsvExportScreen').then((m) => ({ default: m.CsvExportScreen }))
+);
+const CreateEventWizardScreen = lazy(() =>
+  import('./components/CreateEventWizardScreen').then((m) => ({ default: m.CreateEventWizardScreen }))
+);
+const SettingsScreen = lazy(() =>
+  import('./components/SettingsScreen').then((m) => ({ default: m.SettingsScreen }))
+);
+const QrGateScannerScreen = lazy(() =>
+  import('./components/QrGateScannerScreen').then((m) => ({ default: m.QrGateScannerScreen }))
+);
+const DisposableCameraScreen = lazy(() =>
+  import('./components/DisposableCameraScreen').then((m) => ({ default: m.DisposableCameraScreen }))
+);
+const GiftTableScreen = lazy(() =>
+  import('./components/GiftTableScreen').then((m) => ({ default: m.GiftTableScreen }))
+);
+const AppsCreatorConsoleScreen = lazy(() =>
+  import('./components/AppsCreatorConsoleScreen').then((m) => ({ default: m.AppsCreatorConsoleScreen }))
+);
+const LegalScreen = lazy(() =>
+  import('./components/LegalScreen').then((m) => ({ default: m.LegalScreen }))
+);
+const EventDetailModal = lazy(() =>
+  import('./components/EventModals').then((m) => ({ default: m.EventDetailModal }))
+);
+const OnboardingWalkthroughModal = lazy(() =>
+  import('./components/OnboardingWalkthroughModal').then((m) => ({ default: m.OnboardingWalkthroughModal }))
+);
 
 const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_WARNING_MS = 60 * 1000;
@@ -1576,7 +1623,7 @@ export default function App() {
         const ogPath = `/api/og/event/${cleanSlug}`;
         const resolvedOg = resolveApiUrl(ogPath);
         const ogImg = /^https?:\/\//i.test(resolvedOg) ? resolvedOg : `${origin}${resolvedOg}`;
-        const title = `${active.title} — ${active.date} · ${active.city} | Events App`;
+        const title = `${active.title} — ${active.date} · ${active.city} | Events By You`;
         const desc = `${active.organizer} invites you to ${active.title} on ${active.date} at ${active.venue}, ${active.city}.`;
         document.title = title;
         setMeta('name', 'description', desc);
@@ -1591,7 +1638,7 @@ export default function App() {
       }
     }
 
-    document.title = 'Events App — Event Registration & SMS Ticketing';
+    document.title = 'Events By You — Event Registration & SMS Ticketing';
     if (featuredEvent) {
       const defaultOgPath = `/api/og/event/${encodeURIComponent(
         featuredEvent.slug || featuredEvent.id
@@ -1663,28 +1710,44 @@ export default function App() {
       </div>
     ) : null;
 
+  const routeLoadingFallback = (
+    <div className="min-h-dvh w-full bg-[#F5F5F7] text-[#0B0B0B] flex flex-col items-center justify-center gap-3 px-4">
+      <Loader2 className="w-6 h-6 animate-spin text-[#0B0B0B]" />
+      <p className="text-xs font-medium text-[#71717A]">Loading Events By You...</p>
+    </div>
+  );
+
+  const studioLoadingFallback = (
+    <div className="min-h-[55vh] w-full rounded-[24px] bg-[#F5F5F7] border border-[#E5E5EA] flex flex-col items-center justify-center gap-2.5 px-4">
+      <Loader2 className="w-5 h-5 animate-spin text-[#0B0B0B]" />
+      <p className="text-xs font-medium text-[#71717A]">Loading view...</p>
+    </div>
+  );
+
   if (route === 'terms' || route === 'privacy') {
     return (
       <>
-        <LegalScreen
-          doc={route}
-          isSignedIn={isSignedIn}
-          onSwitchDoc={openLegalRoute}
-          onBackHome={navigateHome}
-          onNavigateSignIn={() => {
-            setSessionTimeoutNotice(null);
-            setRoute('signin');
-            syncBrowserPath('/signin');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
-          onNavigateStudio={() =>
-            requireSignedIn({
-              route: 'studio',
-              screen: 'overview',
-              label: 'Creator Studio',
-            })
-          }
-        />
+        <Suspense fallback={routeLoadingFallback}>
+          <LegalScreen
+            doc={route}
+            isSignedIn={isSignedIn}
+            onSwitchDoc={openLegalRoute}
+            onBackHome={navigateHome}
+            onNavigateSignIn={() => {
+              setSessionTimeoutNotice(null);
+              setRoute('signin');
+              syncBrowserPath('/signin');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            onNavigateStudio={() =>
+              requireSignedIn({
+                route: 'studio',
+                screen: 'overview',
+                label: 'Creator Studio',
+              })
+            }
+          />
+        </Suspense>
         {sessionTimeoutModal}
       </>
     );
@@ -1693,7 +1756,8 @@ export default function App() {
   if (route === 'home') {
     return (
       <>
-        <LandingScreen
+        <Suspense fallback={routeLoadingFallback}>
+          <LandingScreen
           featuredEvent={featuredEvent}
           allEvents={landingEvents}
           recentAttendees={safeAttendees}
@@ -1781,6 +1845,7 @@ export default function App() {
           }}
           onOpenLegal={openLegalRoute}
         />
+        </Suspense>
         {sessionTimeoutModal}
       </>
     );
@@ -1788,7 +1853,8 @@ export default function App() {
 
   if (route === 'signup') {
     return (
-      <SignUpScreen
+      <Suspense fallback={routeLoadingFallback}>
+        <SignUpScreen
         initialEmail={prefillEmail}
         initialPhone={prefillPhone}
         redirectNotice={pendingTarget?.label}
@@ -1818,12 +1884,14 @@ export default function App() {
         }}
         onAuthenticated={handleAuthenticated}
       />
+      </Suspense>
     );
   }
 
   if (route === 'reset-password') {
     return (
-      <ResetPasswordScreen
+      <Suspense fallback={routeLoadingFallback}>
+        <ResetPasswordScreen
         initialEmail={authEmail || prefillEmail || profile.email}
         initialPhone={authPhone || prefillPhone || profile.phone || ''}
         initialCountryGateway={authCountryGateway}
@@ -1852,12 +1920,14 @@ export default function App() {
         }}
         onOpenLegal={openLegalRoute}
       />
+      </Suspense>
     );
   }
 
   if (route === 'verify-otp') {
     return (
-      <VerifyOtpScreen
+      <Suspense fallback={routeLoadingFallback}>
+        <VerifyOtpScreen
         phone={authPhone || prefillPhone || profile.phone || ''}
         email={authEmail || prefillEmail || profile.email}
         countryGateway={authCountryGateway}
@@ -1880,6 +1950,7 @@ export default function App() {
         }}
         onOpenLegal={openLegalRoute}
       />
+      </Suspense>
     );
   }
 
@@ -1892,7 +1963,8 @@ export default function App() {
           : safeEvents;
     return (
       <>
-        <PublicEventScreen
+        <Suspense fallback={routeLoadingFallback}>
+          <PublicEventScreen
           events={demoEventsPool}
           attendees={safeAttendees}
           scheduleBlocks={safeScheduleBlocks}
@@ -1980,6 +2052,7 @@ export default function App() {
           }
           onOpenLegal={openLegalRoute}
         />
+        </Suspense>
         {sessionTimeoutModal}
       </>
     );
@@ -1994,7 +2067,8 @@ export default function App() {
       ) ?? camPool[0];
     return (
       <>
-        <DisposableCameraScreen
+        <Suspense fallback={routeLoadingFallback}>
+          <DisposableCameraScreen
           mode="public"
           events={camPool}
           shots={safeDisposableShots}
@@ -2019,6 +2093,7 @@ export default function App() {
             openStudioCamera(resolvedCamEvent?.id);
           }}
         />
+        </Suspense>
         {sessionTimeoutModal}
       </>
     );
@@ -2038,7 +2113,8 @@ export default function App() {
   // Strict Auth Gate: Sign-in is required for Creator Studio and Event Management modules
   if (route === 'signin' || !isSignedIn) {
     return (
-      <SignInScreen
+      <Suspense fallback={routeLoadingFallback}>
+        <SignInScreen
         initialEmail={prefillEmail}
         initialPhone={prefillPhone}
         creatorEmail={creatorEmail}
@@ -2087,6 +2163,7 @@ export default function App() {
         }}
         onAuthenticated={handleAuthenticated}
       />
+      </Suspense>
     );
   }
 
@@ -2185,6 +2262,7 @@ export default function App() {
               </div>
             )}
 
+          <Suspense fallback={studioLoadingFallback}>
           {studioSubScreen === 'create-event' ? (
             <CreateEventWizardScreen
               profile={profile}
@@ -2461,52 +2539,57 @@ export default function App() {
               )}
             </>
           )}
+          </Suspense>
         </main>
       </div>
 
       {/* Edit Event Modal */}
       {selectedEvent && (
-        <EventDetailModal
-          event={selectedEvent}
-          events={safeEvents}
-          profile={profile}
-          scheduleBlocks={safeScheduleBlocks}
-          capacityThreshold={profile.capacityAlertThreshold}
-          canPublishQrPass={effectiveRole !== 'gate_staff'}
-          onToggleQrPassPublished={handleToggleQrPassPublished}
-          onClose={() => setSelectedEventId(null)}
-          onUpdateEvent={handleUpdateEvent}
-          onDeleteEvent={handleDeleteEvent}
-          onOpenAttendees={(id) => handleNavigateAttendees(id)}
-          onOpenBilling={() => {
-            setSelectedEventId(null);
-            openBillingScreen();
-          }}
-        />
+        <Suspense fallback={null}>
+          <EventDetailModal
+            event={selectedEvent}
+            events={safeEvents}
+            profile={profile}
+            scheduleBlocks={safeScheduleBlocks}
+            capacityThreshold={profile.capacityAlertThreshold}
+            canPublishQrPass={effectiveRole !== 'gate_staff'}
+            onToggleQrPassPublished={handleToggleQrPassPublished}
+            onClose={() => setSelectedEventId(null)}
+            onUpdateEvent={handleUpdateEvent}
+            onDeleteEvent={handleDeleteEvent}
+            onOpenAttendees={(id) => handleNavigateAttendees(id)}
+            onOpenBilling={() => {
+              setSelectedEventId(null);
+              openBillingScreen();
+            }}
+          />
+        </Suspense>
       )}
 
-      <OnboardingWalkthroughModal
-        open={showWalkthrough}
-        userName={profile.name || profile.firstName}
-        hasEvents={safeEvents.length > 0}
-        onClose={closeWalkthrough}
-        onCreateEvent={openCreateWizard}
-        onGoSettings={() => {
-          setWorkspaceEventId(null);
-          setStudioSubScreen(null);
-          setActiveScreen('settings');
-        }}
-        onGoScanner={() => {
-          setWorkspaceEventId(null);
-          setStudioSubScreen(null);
-          setActiveScreen('checkin');
-        }}
-        onGoCamera={() => {
-          setWorkspaceEventId(null);
-          setStudioSubScreen(null);
-          setActiveScreen('camera');
-        }}
-      />
+      <Suspense fallback={null}>
+        <OnboardingWalkthroughModal
+          open={showWalkthrough}
+          userName={profile.name || profile.firstName}
+          hasEvents={safeEvents.length > 0}
+          onClose={closeWalkthrough}
+          onCreateEvent={openCreateWizard}
+          onGoSettings={() => {
+            setWorkspaceEventId(null);
+            setStudioSubScreen(null);
+            setActiveScreen('settings');
+          }}
+          onGoScanner={() => {
+            setWorkspaceEventId(null);
+            setStudioSubScreen(null);
+            setActiveScreen('checkin');
+          }}
+          onGoCamera={() => {
+            setWorkspaceEventId(null);
+            setStudioSubScreen(null);
+            setActiveScreen('camera');
+          }}
+        />
+      </Suspense>
 
       {sessionTimeoutModal}
     </div>

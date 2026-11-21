@@ -471,7 +471,7 @@ export function createBuilderRouter() {
         const evtInfo = rec.events as Record<string, unknown> | null;
         const status = await dispatchOptionalArkeselSms(
           String(rec.phone),
-          String(evtInfo?.title ?? 'Events App'),
+          String(evtInfo?.title ?? 'Events By You'),
           String(rec.ticket_code),
           evtInfo?.sender_id ? String(evtInfo.sender_id) : undefined
         );

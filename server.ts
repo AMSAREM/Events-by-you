@@ -898,9 +898,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
   app.get('/api/og/event/:slugOrId', async (req, res) => {
     const baseUrl = resolveBaseUrl(req);
     const evt = (await resolveEventForPublicOrOg(req.params.slugOrId)) ?? {
-      id: 'events-app',
-      slug: 'events-app',
-      title: 'Events App',
+      id: 'events-by-you',
+      slug: 'events-by-you',
+      title: 'Events By You',
       subtitle: 'Event Invitations, SMS Passes & Gate Check-In',
       category: 'Events',
       status: 'live' as const,
@@ -915,7 +915,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       smsDispatched: 0,
       ticketPrice: 0,
       revenue: 0,
-      organizer: 'Events App',
+      organizer: 'Events By You',
       artwork: 'architecture' as const,
     };
     const svg = buildEventOgSvg(evt, baseUrl);
@@ -5622,11 +5622,11 @@ if (!isServerlessRuntime) {
         ? 'Supabase single source of truth'
         : 'In-memory store (Supabase env vars not set)';
       httpServer.listen(PORT, '0.0.0.0', () => {
-        console.log(`Events App server listening on http://0.0.0.0:${PORT} (${modeLabel})`);
+        console.log(`Events By You server listening on http://0.0.0.0:${PORT} (${modeLabel})`);
       });
     })
     .catch((err) => {
-      console.error('Failed to start Events App server:', err);
+      console.error('Failed to start Events By You server:', err);
       process.exit(1);
     });
 }

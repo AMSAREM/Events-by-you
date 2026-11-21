@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Check, Download, Share, Smartphone, X } from 'lucide-react';
+import { Check, Download, Share, X } from 'lucide-react';
 import { useOnlineStatus, usePWAInstall } from '../hooks/usePWAInstall';
+import { BrandMark } from './BrandLogo';
 
 type InstallButtonVariant =
   | 'header-dark'
@@ -54,7 +55,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
           onClick={() => void handleInstallClick()}
           disabled={isInstalling}
           aria-label={label}
-          title={isInstallable ? 'Install Events App on device' : 'How to install Events App'}
+          title={isInstallable ? 'Install Events By You on device' : 'How to install Events By You'}
           className={`w-9 h-9 lg:w-10 lg:h-10 xl:w-11 xl:h-11 rounded-full flex items-center justify-center bg-white/12 text-white hover:bg-white hover:text-[#0B0B0B] transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-60 ${className}`}
         >
           {justInstalled ? (
@@ -121,7 +122,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
           type="button"
           onClick={() => void handleInstallClick()}
           disabled={isInstalling}
-          title={isInstallable ? 'Install Events App instantly' : 'Install Events App'}
+          title={isInstallable ? 'Install Events By You instantly' : 'Install Events By You'}
           className={`inline-flex items-center justify-center gap-1.5 h-9 px-3 sm:px-3.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-xs font-semibold transition-colors whitespace-nowrap shrink-0 disabled:opacity-60 ${className}`}
         >
           <Download className="w-3.5 h-3.5" />
@@ -135,7 +136,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
         type="button"
         onClick={() => void handleInstallClick()}
         disabled={isInstalling}
-        title={isInstallable ? 'Install Events App instantly' : 'Install Events App'}
+        title={isInstallable ? 'Install Events By You instantly' : 'Install Events By You'}
         className={`inline-flex items-center justify-center gap-1.5 bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-xs font-semibold px-3 sm:px-3.5 py-2 rounded-full transition-colors whitespace-nowrap shrink-0 disabled:opacity-60 ${className}`}
       >
         <Download className="w-3.5 h-3.5" />
@@ -159,12 +160,10 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
           <div className="w-full max-w-sm rounded-3xl bg-white border border-[#E5E5EA] p-6 shadow-2xl text-[#0B0B0B]">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
-                  <Smartphone className="w-5 h-5" />
-                </div>
+                <BrandMark size={40} className="shadow-sm" />
                 <div>
                   <h3 id="pwa-install-guide-title" className="text-base font-bold tracking-tight">
-                    Install Events App
+                    Install Events By You
                   </h3>
                   <p className="text-[11px] text-[#71717A]">
                     Offline-ready gate scanner &amp; studio shortcut
@@ -221,7 +220,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
                   </span>
                   <span>
                     Click the <strong className="text-[#0B0B0B]">Install App</strong> icon in the
-                    address bar or browser menu (<strong className="text-[#0B0B0B]">⋮ → Install Events App</strong>).
+                    address bar or browser menu (<strong className="text-[#0B0B0B]">⋮ → Install Events By You</strong>).
                   </span>
                 </li>
               </ol>

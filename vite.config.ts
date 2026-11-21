@@ -21,11 +21,11 @@ export default defineConfig(() => {
         ],
         manifest: {
           id: '/',
-          name: 'Events App — Registration & Check-In',
-          short_name: 'Events App',
+          name: 'Events By You — Registration & Check-In',
+          short_name: 'EventsByYou',
           description:
             'Event registration, Arkesel SMS ticketing, disposable camera, standalone gift table, and offline-ready QR gate check-in.',
-          theme_color: '#0B0B0B',
+          theme_color: '#0D3822',
           background_color: '#FFFFFF',
           display: 'standalone',
           start_url: '/',
@@ -129,6 +129,41 @@ export default defineConfig(() => {
     resolve: {
       alias: {
         '@': path.resolve(import.meta.dirname, '.'),
+      },
+    },
+    build: {
+      rolldownOptions: {
+        output: {
+          codeSplitting: {
+            groups: [
+              {
+                name: 'vendor-react',
+                test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+                priority: 30,
+              },
+              {
+                name: 'vendor-motion',
+                test: /node_modules[\\/](motion|framer-motion)[\\/]/,
+                priority: 25,
+              },
+              {
+                name: 'vendor-supabase',
+                test: /node_modules[\\/]@supabase[\\/]/,
+                priority: 20,
+              },
+              {
+                name: 'vendor-icons',
+                test: /node_modules[\\/]lucide-react[\\/]/,
+                priority: 15,
+              },
+              {
+                name: 'vendor',
+                test: /node_modules[\\/]/,
+                priority: 10,
+              },
+            ],
+          },
+        },
       },
     },
     server: {

@@ -8,9 +8,9 @@ import {
   Plus,
   QrCode,
   Radio,
-  Sparkles,
   X,
 } from 'lucide-react';
+import { BrandLogo, BrandMark } from './BrandLogo';
 
 interface OnboardingWalkthroughModalProps {
   open: boolean;
@@ -175,26 +175,29 @@ export const OnboardingWalkthroughModal: React.FC<OnboardingWalkthroughModalProp
       <div className="w-full max-w-2xl rounded-[28px] bg-white border border-[#E5E5EA] shadow-2xl overflow-hidden">
         {/* Top bar */}
         <div className="px-6 pt-5 pb-4 border-b border-[#E5E5EA] flex items-center justify-between gap-3 bg-[#F5F5F7]">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
-              <Sparkles className="w-4 h-4" />
-            </div>
+          <div className="flex items-center gap-3 min-w-0">
+            <BrandMark size={36} className="shadow-sm" />
             <div className="min-w-0">
-              <p className="text-[11px] font-mono font-semibold uppercase tracking-wider text-[#71717A]">
-                Quick Start Walkthrough
-              </p>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-mono font-semibold uppercase tracking-wider text-[#0D3822]">
+                  Events By You · Quick Start
+                </span>
+              </div>
               <p className="text-xs font-semibold text-[#0B0B0B] truncate">{active.badge}</p>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => onClose(true)}
-            aria-label="Close quick guide"
-            className="w-8 h-8 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] flex items-center justify-center transition-colors shrink-0"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <BrandLogo variant="light" size="sm" className="hidden sm:inline-flex" />
+            <button
+              type="button"
+              onClick={() => onClose(true)}
+              aria-label="Close quick guide"
+              className="w-8 h-8 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] flex items-center justify-center transition-colors shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Interactive step selector */}

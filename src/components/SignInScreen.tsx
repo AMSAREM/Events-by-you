@@ -22,6 +22,7 @@ import {
   type StoredAuthSession,
 } from '../lib/api';
 import type { OrganizerProfile } from '../types/events';
+import { BrandLogo } from './BrandLogo';
 
 interface SignInScreenProps {
   initialEmail?: string;
@@ -221,14 +222,10 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
           <button
             type="button"
             onClick={onBackHome}
-            className="flex items-center gap-2"
+            className="flex items-center"
+            aria-label="Events By You Home"
           >
-            <div className="w-7 h-7 rounded-full bg-[#0B0B0B] flex items-center justify-center">
-              <span className="w-2 h-2 rounded-full bg-white" />
-            </div>
-            <span className="font-display text-base text-[#1A1C1D] tracking-tight font-bold">
-              Events
-            </span>
+            <BrandLogo variant="light" size="sm" />
           </button>
 
           <nav className="flex items-center gap-4">
@@ -272,7 +269,7 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
               <div>
                 <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-[11px] font-medium mb-4">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#0B0B0B]" />
-                  <span className="tracking-wide uppercase">Events App Workspace Access</span>
+                  <span className="tracking-wide uppercase">Events By You Workspace Access</span>
                 </div>
 
                 {sessionTimeoutNotice && (
@@ -705,7 +702,7 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
                   ))}
                 </div>
                 <blockquote className="text-sm text-[#0B0B0B] italic mb-4 leading-relaxed">
-                  “Events App helped us register 420 tech leaders across Accra in under 2 hours
+                  “Events By You helped us register 420 tech leaders across Accra in under 2 hours
                   without gate queues.”
                 </blockquote>
                 <div className="flex items-center gap-2.5">
@@ -727,7 +724,7 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
 
       <footer className="w-full bg-[#F5F5F7] py-5 border-t border-[#E5E5EA]/60">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-[#71717A]">
-          <span>© 2026 Events App Inc. All rights reserved.</span>
+          <span>© 2026 Events By You Inc. All rights reserved.</span>
           <div className="flex items-center gap-6">
             <button
               type="button"

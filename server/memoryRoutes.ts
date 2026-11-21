@@ -681,7 +681,7 @@ export function createMemoryRouter() {
         hasCredits
           ? dispatchOptionalArkeselSms(
               normalizedPhone,
-              targetEvent?.title ?? 'Events App',
+              targetEvent?.title ?? 'Events By You',
               finalCode,
               orgDefaults.allowCustomSenderId
                 ? targetEvent?.senderId || orgDefaults.senderId

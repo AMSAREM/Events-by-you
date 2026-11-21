@@ -98,7 +98,7 @@ const SPEC_ROWS = [
   },
   {
     capability: 'Public Registration Page Branding',
-    free: 'Events App Footer Badge',
+    free: 'Events By You Footer Badge',
     pro: 'Zero Branding / White-label',
     layer: 'SSR Template Renderer',
   },

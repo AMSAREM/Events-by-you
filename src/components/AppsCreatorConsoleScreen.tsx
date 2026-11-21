@@ -735,7 +735,7 @@ export const AppsCreatorConsoleScreen: React.FC<AppsCreatorConsoleScreenProps> =
     if (!selectedApp) return '';
     const evtId = scopedEventObj?.id || 'evt-tech-leaders-2026';
     if (snippetLang === 'typescript') {
-      return `// Events App SDK — ${selectedApp.name}
+      return `// Events By You SDK — ${selectedApp.name}
 const client = {
   clientId: '${selectedApp.clientId}',
   environment: '${selectedApp.environment}',

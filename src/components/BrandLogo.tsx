@@ -55,6 +55,21 @@ interface BrandLogoProps {
   className?: string;
 }
 
+export const OFFICIAL_BRAND_LOGO_SRC =
+  '/assets/aistudio/WhatsApp_Image_2026-11-21_at_18.27.46_55a48938.jpeg';
+
+export const BrandOfficialBadge: React.FC<{ className?: string }> = ({ className = '' }) => (
+  <div
+    className={`relative overflow-hidden rounded-2xl bg-[#133A25] border border-[#24593C] shadow-sm aspect-[16/5] ${className}`}
+  >
+    <img
+      src={OFFICIAL_BRAND_LOGO_SRC}
+      alt="Events By You (eventsbyyou.xyz) official brand logo"
+      className="w-full h-full object-cover object-center scale-[1.24]"
+    />
+  </div>
+);
+
 export const BrandLogo: React.FC<BrandLogoProps> = ({
   variant = 'light',
   size = 'md',

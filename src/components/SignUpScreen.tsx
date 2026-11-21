@@ -26,6 +26,7 @@ import {
 } from '../data/initialData';
 import { api, saveStoredSession, type StoredAuthSession } from '../lib/api';
 import type { AppRole, OrganizerProfile } from '../types/events';
+import { BrandLogo } from './BrandLogo';
 
 interface SignUpScreenProps {
   initialEmail?: string;
@@ -217,14 +218,10 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
           <button
             type="button"
             onClick={onBackHome}
-            className="flex items-center gap-2"
+            className="flex items-center"
+            aria-label="Events By You Home"
           >
-            <div className="w-7 h-7 rounded-full bg-[#0B0B0B] flex items-center justify-center">
-              <span className="w-2 h-2 rounded-full bg-white" />
-            </div>
-            <span className="font-display text-base text-[#1A1C1D] tracking-tight font-bold">
-              Events
-            </span>
+            <BrandLogo variant="light" size="sm" />
           </button>
 
           <nav className="flex items-center gap-4">
@@ -767,7 +764,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                 </div>
 
                 <blockquote className="text-sm text-[#1A1C1D] italic leading-relaxed">
-                  “Events App made attendee check-in effortless. We sent 420 gate pass SMS alerts
+                  “Events By You made attendee check-in effortless. We sent 420 gate pass SMS alerts
                   without a single duplicate number and checked in 380 attendees without any
                   bottleneck.”
                 </blockquote>
@@ -811,7 +808,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
 
       <footer className="w-full bg-[#F5F5F7] py-5 border-t border-[#E5E5EA]/60">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-[#71717A]">
-          <span>© 2026 Events App Inc. All rights reserved.</span>
+          <span>© 2026 Events By You Inc. All rights reserved.</span>
           <div className="flex items-center gap-6">
             <button
               type="button"

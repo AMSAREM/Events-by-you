@@ -617,8 +617,8 @@ export async function sendArkeselSmsOtp(params: {
 
   const message =
     params.purpose === 'test'
-      ? `Events App gateway test (${sender}). Confirmation code: ${params.code}.`
-      : `Your Events App ${purposeText} code is ${params.code}. Valid for 10 minutes.`;
+      ? `Events By You gateway test (${sender}). Confirmation code: ${params.code}.`
+      : `Your Events By You ${purposeText} code is ${params.code}. Valid for 10 minutes.`;
 
   const callbackUrl = resolveArkeselCallbackUrl();
   const payload: Record<string, unknown> = {

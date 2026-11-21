@@ -1,5 +1,6 @@
 import React from 'react';
-import { ArrowLeft, ArrowRight, FileText, Layers, Lock, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, ArrowRight, FileText, Lock, ShieldCheck } from 'lucide-react';
+import { BrandLogo } from './BrandLogo';
 
 interface LegalScreenProps {
   doc: 'terms' | 'privacy';
@@ -33,12 +34,7 @@ export const LegalScreen: React.FC<LegalScreenProps> = ({
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Back</span>
             </button>
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
-                <Layers className="w-3.5 h-3.5" />
-              </div>
-              <span className="font-display text-sm font-bold tracking-tight">Events App</span>
-            </div>
+            <BrandLogo variant="light" size="sm" />
           </div>
 
           <div className="flex items-center gap-2">
@@ -86,7 +82,7 @@ export const LegalScreen: React.FC<LegalScreenProps> = ({
               {isTerms ? 'Terms & Conditions of Service' : 'Privacy & Data Protection Policy'}
             </h1>
             <p className="text-xs font-mono text-[#71717A]">
-              Effective Date: November 18, 2026 · Events App Inc. (Accra &amp; Lagos Infrastructure)
+              Effective Date: November 18, 2026 · Events By You Inc. (Accra &amp; Lagos Infrastructure)
             </p>
           </header>
 
@@ -97,7 +93,7 @@ export const LegalScreen: React.FC<LegalScreenProps> = ({
                   1. Account Authentication &amp; Event Creation Access
                 </h2>
                 <p>
-                  Creating, publishing, or managing events on Events App requires an authenticated
+                  Creating, publishing, or managing events on Events By You requires an authenticated
                   organiser or creator account. Unauthenticated visitors may browse published event
                   pages and submit public RSVP registrations, while Studio modules, SMS broadcasts,
                   and event creation are gated behind verified sign-in credentials.

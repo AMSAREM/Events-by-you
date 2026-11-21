@@ -99,7 +99,7 @@ export function buildEventOgSvg(event: EventItem, baseUrl: string): string {
     : basePalette;
 
   const titleLines = wrapLines(event.title, 30, 3);
-  const subtitleLines = wrapLines(event.subtitle || 'Hosted with Events App', 58, 2);
+  const subtitleLines = wrapLines(event.subtitle || 'Hosted with Events By You', 58, 2);
   const inviteShort = `${baseUrl.replace(/^https?:\/\//, '')}/e/${event.slug || event.id}`;
   const priceLabel = event.ticketPrice > 0 ? `$${event.ticketPrice} PASS` : 'FREE RSVP PASS';
   const extraFeatureLabel =
@@ -173,7 +173,7 @@ export function buildEventOgSvg(event: EventItem, baseUrl: string): string {
   </g>
 
   <!-- Left Content Column -->
-  <text x="84" y="168" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="600" letter-spacing="3" fill="${palette.textMuted}">${escapeXml((event.organizer || 'EVENTS APP').toUpperCase())} PRESENTS</text>
+  <text x="84" y="168" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="600" letter-spacing="3" fill="${palette.textMuted}">${escapeXml((event.organizer || 'EVENTS BY YOU').toUpperCase())} PRESENTS</text>
 
   ${titleLines
     .map(
@@ -218,7 +218,7 @@ export function injectEventMetaTags(html: string, event: EventItem, baseUrl: str
   const cleanSlug = encodeURIComponent(event.slug || event.id);
   const inviteUrl = `${baseUrl}/e/${cleanSlug}`;
   const ogImageUrl = `${baseUrl}/api/og/event/${cleanSlug}`;
-  const title = `${event.title} — ${event.date} · ${event.city} | Events App`;
+  const title = `${event.title} — ${event.date} · ${event.city} | Events By You`;
   const description =
     `${event.organizer} invites you to ${event.title} on ${event.date} (${event.time}) at ${event.venue}, ${event.city}. ` +
     (event.subtitle || 'Validate your invitation and claim your QR Gate Pass.');
@@ -253,7 +253,7 @@ export function injectEventMetaTags(html: string, event: EventItem, baseUrl: str
     `    <meta property="og:description" content="${safeDesc}" />`,
     `    <meta property="og:type" content="website" />`,
     `    <meta property="og:url" content="${safeUrl}" />`,
-    `    <meta property="og:site_name" content="Events App" />`,
+    `    <meta property="og:site_name" content="Events By You" />`,
     `    <meta property="og:image" content="${safeImg}" />`,
     `    <meta property="og:image:type" content="image/svg+xml" />`,
     `    <meta property="og:image:width" content="1200" />`,

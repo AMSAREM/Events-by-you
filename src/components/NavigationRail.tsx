@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { AppRole, NavScreen } from '../types/events';
+import { BrandMark } from './BrandLogo';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface NavigationRailProps {
@@ -101,15 +102,15 @@ export const NavigationRail: React.FC<NavigationRailProps> = ({
         aria-label="Primary Navigation"
         className="hidden md:flex flex-col items-center justify-between w-[66px] lg:w-[74px] shrink-0 bg-[#0B0B0B] text-white rounded-[26px] lg:rounded-[32px] py-3 lg:py-5 px-2 lg:px-2.5 capsule-shadow sticky top-3 lg:top-5 h-[calc(100dvh-1.5rem)] lg:h-[calc(100dvh-2.5rem)] max-h-[860px] overflow-y-auto"
       >
-        {/* Minimal Brand Monogram -> returns to Home Page */}
+        {/* Brand Mark -> returns to Home Page */}
         <button
           type="button"
           onClick={onBackToPublicHome}
-          aria-label="Events App Home Page"
-          title="Back to Public Home Page"
-          className="w-9 h-9 lg:w-10 lg:h-10 xl:w-11 xl:h-11 rounded-2xl bg-white text-[#0B0B0B] flex items-center justify-center font-display font-bold text-sm lg:text-base xl:text-lg tracking-tighter shrink-0 hover:scale-105 transition-transform duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[#0B0B0B]"
+          aria-label="Events By You Home Page"
+          title="Events By You — Back to Public Home Page"
+          className="w-9 h-9 lg:w-10 lg:h-10 xl:w-11 xl:h-11 rounded-2xl flex items-center justify-center shrink-0 hover:scale-105 transition-transform duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7BF66E] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0B0B0B]"
         >
-          E.
+          <BrandMark size={40} className="w-full h-full shadow-[0_4px_14px_rgba(123,246,110,0.28)]" />
         </button>
 
         {/* Main Screen Icons */}

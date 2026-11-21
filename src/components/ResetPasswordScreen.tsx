@@ -17,6 +17,7 @@ import {
 
 import { validateStrictEmail, validateStrictPhoneE164 } from '../data/initialData';
 import { api } from '../lib/api';
+import { BrandLogo } from './BrandLogo';
 
 interface ResetPasswordScreenProps {
   initialEmail?: string;
@@ -128,14 +129,10 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
           <button
             type="button"
             onClick={onBackHome}
-            className="flex items-center gap-2"
+            className="flex items-center"
+            aria-label="Events By You Home"
           >
-            <span className="w-8 h-8 rounded-full bg-[#0B0B0B] flex items-center justify-center text-white font-display font-bold text-sm">
-              E
-            </span>
-            <span className="font-display text-base font-bold text-[#1A1C1D] tracking-tight">
-              Events
-            </span>
+            <BrandLogo variant="light" size="sm" />
           </button>
 
           <nav className="flex items-center gap-2">
@@ -509,7 +506,7 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
 
       <footer className="w-full bg-white border-t border-[#E5E5EA] py-5">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-2 text-[11px] text-[#71717A]">
-          <p>© 2026 Events App Inc. All rights reserved.</p>
+          <p>© 2026 Events By You Inc. All rights reserved.</p>
           <div className="flex items-center gap-6">
             <button
               type="button"

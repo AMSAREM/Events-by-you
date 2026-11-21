@@ -29,6 +29,7 @@ import {
 import { Attendee, EventItem } from '../types/events';
 import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
 import { DeterministicQrSvg, buildEventInvitationUrl } from '../lib/qr';
+import { BrandLogo, BrandOfficialBadge } from './BrandLogo';
 import { EventFlyerCard } from './EventFlyerCard';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -158,19 +159,14 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
           <button
             type="button"
             onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-            className="xl:justify-self-start flex items-center gap-2.5 text-left shrink-0 min-w-0 group rounded-xl py-1 pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B0B0B]/20"
+            className="xl:justify-self-start flex items-center text-left shrink-0 min-w-0 group rounded-xl py-1 pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0D3822]/20"
           >
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center shrink-0 shadow-[0_2px_8px_rgba(11,11,11,0.16)] transition-transform duration-150 group-hover:scale-[1.03]">
-              <Layers className="w-4 h-4" />
-            </div>
-            <div className="flex flex-col min-w-0">
-              <span className="font-display text-sm sm:text-base font-bold text-[#1A1C1D] tracking-tight leading-none whitespace-nowrap">
-                Events App
-              </span>
-              <span className="hidden xl:block text-[11px] font-medium text-[#71717A] whitespace-nowrap mt-0.5 truncate">
-                Weddings · Church · Corporate · Tech
-              </span>
-            </div>
+            <BrandLogo
+              variant="light"
+              size="md"
+              subtitle="Weddings · Church · Corporate · Tech"
+              subtitleClassName="hidden xl:block text-[#71717A]"
+            />
           </button>
 
           <nav
@@ -267,7 +263,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   </p>
 
                   <h1 className="font-display text-[30px] leading-[36px] sm:text-[42px] sm:leading-[48px] lg:text-[52px] lg:leading-[60px] xl:text-[56px] xl:leading-[64px] text-white tracking-[-0.03em] font-bold text-balance">
-                    Events App Where Every Event Begins
+                    Events By You — Where Every Event Begins
                   </h1>
 
                   <p className="mt-4 sm:mt-5 text-sm sm:text-base lg:text-[17px] lg:leading-[26px] text-white/80 max-w-xl">
@@ -1586,7 +1582,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   Installable PWA with Offline Local Cache
                 </h3>
                 <p className="mt-3 text-sm text-[#71717A] leading-relaxed">
-                  Add Events App to iOS and Android home screens without app store downloads. Local
+                  Add Events By You to iOS and Android home screens without app store downloads. Local
                   storage syncs attendee manifests for offline gate check-in when convention WiFi
                   drops.
                 </p>
@@ -1732,7 +1728,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                       'Fully Customizable SMS & Email Pass Templates',
                       'One-Click CSV Attendee Data Export',
                       'Post-Event Thank-You SMS Broadcast Blasts',
-                      'Zero Events App Watermarks on passes',
+                      'Zero Events By You Watermarks on passes',
                     ].map((item) => (
                       <div key={item} className="flex items-center gap-3">
                         <Check className="w-4 h-4 text-white shrink-0" />
@@ -1902,13 +1898,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 xl:px-12 pt-10 pb-8">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-8 pb-8">
             <div className="lg:col-span-2 flex flex-col gap-4">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center">
-                  <Layers className="w-4 h-4" />
-                </div>
-                <span className="font-display text-base font-bold text-[#1A1C1D] tracking-tight">
-                  Events App
-                </span>
+              <div className="flex flex-wrap items-center gap-3">
+                <BrandLogo variant="light" size="md" />
+                <BrandOfficialBadge className="w-36 sm:w-40" />
               </div>
               <p className="text-sm text-[#71717A] max-w-sm leading-relaxed">
                 The infrastructure layer for weddings, funerals, church conventions, musical
@@ -2029,7 +2021,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
           </div>
 
           <div className="pt-4 border-t border-[#E5E5EA] flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-[#71717A]">
-            <p>© 2026 Events App Inc. Built for weddings, funerals, church, musical, corporate &amp; tech gatherings.</p>
+            <p>© 2026 Events By You Inc. Built for weddings, funerals, church, musical, corporate &amp; tech gatherings.</p>
             <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6">
               <button
                 type="button"

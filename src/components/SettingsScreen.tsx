@@ -1305,11 +1305,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 Desktop &amp; Mobile App
               </span>
               <h2 className="font-display text-[22px] font-bold tracking-[-0.02em] text-[#0B0B0B]">
-                Install Events App
+                Install Events By You
               </h2>
             </div>
             <p className="text-xs text-[#71717A] mb-4 leading-relaxed">
-              Install Events App directly onto your phone or laptop home screen for instant launch
+              Install Events By You directly onto your phone or laptop home screen for instant launch
               and offline-ready QR gate check-ins.
             </p>
             <PWAInstallButton variant="card" label="Install App Now" />
