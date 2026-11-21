@@ -15,7 +15,7 @@ create table if not exists public.profiles (
   phone_verified boolean not null default false,
   studio text not null default 'Events Studio',
   plan text not null default 'Starter' check (plan in ('Starter', 'Pro Organizer', 'Enterprise')),
-  sms_credits integer not null default 20,
+  sms_credits integer not null default 0,
   capacity_alert_threshold integer not null default 90,
   avatar_url text,
   reply_to_email text,

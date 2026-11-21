@@ -1027,7 +1027,7 @@ export const PlanUpgradeModal: React.FC<PlanUpgradeModalProps> = ({
       name: 'Starter',
       audience: 'For intimate weddings, fellowships & meetups',
       price: '$0 / forever',
-      limits: ['1 active event', 'Up to 50 attendees per event', '20 free starter SMS credits'],
+      limits: ['1 active event', 'Up to 50 attendees per event', 'Pay-as-you-buy Arkesel SMS bundles'],
     },
     {
       name: 'Pro Organizer',

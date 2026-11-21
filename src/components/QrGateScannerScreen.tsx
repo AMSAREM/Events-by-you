@@ -42,8 +42,10 @@ interface QrGateScannerScreenProps {
     attendeeId: string
   ) => Promise<{
     checkInMessageSent?: boolean;
+    checkInSmsSent?: boolean;
     cameraUrl?: string;
     dispatchedMessage?: string;
+    smsSkippedReason?: string;
   } | void> | void;
   onRegisterAttendee: (eventId: string, attendee: Attendee) => void;
   onToggleQrPassPublished?: (eventId: string, published: boolean) => Promise<void> | void;
@@ -291,7 +293,11 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       status: 'verified',
       attendee: updatedAttendee,
       eventTitle: evtTitle,
-      message: `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. Check-in welcome SMS + Disposable Camera link sent.`,
+      message: `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in.${
+        profile.smsCredits > 0
+          ? ' Dispatching welcome SMS + Disposable Camera link...'
+          : ' Checking SMS bundle balance...'
+      }`,
       cameraUrl: fallbackCameraUrl,
       timestamp: nowTime,
     };
@@ -300,13 +306,20 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
     setCodeInput('');
 
     void Promise.resolve(onToggleCheckIn(matchAny.id)).then((res) => {
-      if (res && res.cameraUrl) {
-        const enriched: ScanOutcome = {
-          ...initialOutcome,
-          cameraUrl: res.cameraUrl,
-        };
-        setLastOutcome(enriched);
-      }
+      if (!res) return;
+      const updatedMessage = res.checkInSmsSent
+        ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. Check-in welcome SMS + Disposable Camera link sent.`
+        : res.smsSkippedReason
+          ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. SMS not sent: ${res.smsSkippedReason}`
+          : res.checkInMessageSent
+            ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. Check-in email + Disposable Camera link sent.`
+            : `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in.`;
+      const enriched: ScanOutcome = {
+        ...initialOutcome,
+        cameraUrl: res.cameraUrl || initialOutcome.cameraUrl,
+        message: updatedMessage,
+      };
+      setLastOutcome(enriched);
     });
   };
 

@@ -109,7 +109,7 @@ export function mapProfileRow(row: Record<string, unknown>, fallbackEmail = ''):
     phoneVerified,
     studio: String(row.studio ?? 'Events Studio'),
     plan: (row.plan as OrganizerProfile['plan']) || 'Starter',
-    smsCredits: Number(row.sms_credits ?? 20),
+    smsCredits: Number(row.sms_credits ?? 0),
     capacityAlertThreshold: Number(row.capacity_alert_threshold ?? 90),
     avatarUrl: row.avatar_url != null ? String(row.avatar_url) : undefined,
     replyToEmail: row.reply_to_email != null ? String(row.reply_to_email) : undefined,
@@ -405,7 +405,7 @@ export async function ensureProfileRow(
     app_role: requestedAppRole,
     studio: metaStudio,
     plan: isPrimaryCreator ? 'Pro Organizer' : 'Starter',
-    sms_credits: isPrimaryCreator ? 1840 : 20,
+    sms_credits: 0,
     capacity_alert_threshold: 90,
   };
 

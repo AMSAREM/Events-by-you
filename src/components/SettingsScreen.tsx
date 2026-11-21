@@ -34,6 +34,7 @@ interface SettingsScreenProps {
   events?: EventItem[];
   alerts: SystemAlert[];
   onUpdateProfile: (profile: OrganizerProfile) => void;
+  onSyncProfile?: (profile: OrganizerProfile) => void;
   onResolveAlert: (id: string) => void;
   onOpenPlans: () => void;
   onSignOut: () => void;
@@ -51,6 +52,7 @@ const TOPUP_BUNDLES = [
     label: '100 SMS Credits',
     sub: 'Standard broadcast pack',
     priceGhs: 'GHS 45',
+    amountGhs: 45,
     popular: false,
   },
   {
@@ -59,6 +61,7 @@ const TOPUP_BUNDLES = [
     label: '500 SMS Credits',
     sub: 'Ideal for conference updates',
     priceGhs: 'GHS 200',
+    amountGhs: 200,
     popular: true,
   },
   {
@@ -67,6 +70,7 @@ const TOPUP_BUNDLES = [
     label: '2,000 SMS Credits',
     sub: 'Bulk tier (20% savings)',
     priceGhs: 'GHS 720',
+    amountGhs: 720,
     popular: false,
   },
 ];
@@ -76,6 +80,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   events = [],
   alerts,
   onUpdateProfile,
+  onSyncProfile,
   onResolveAlert,
   onOpenPlans,
   onSignOut,
@@ -116,6 +121,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
   // Wallet & Webhook
   const [selectedBundleId, setSelectedBundleId] = useState('500');
+  const [purchasingBundle, setPurchasingBundle] = useState(false);
   const [webhookSuffix, setWebhookSuffix] = useState('4F98');
 
   // Account Deletion & Toast controls
@@ -257,10 +263,15 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         `${modeTag} dispatched to ${res.phone} via Sender ID "${res.senderId}"${msgPart}.${warnPart}`
       );
       if (typeof res.smsCredits === 'number' && res.smsCredits !== profile.smsCredits) {
-        onUpdateProfile({
+        const nextProfile = {
           ...profile,
           smsCredits: res.smsCredits,
-        });
+        };
+        if (onSyncProfile) {
+          onSyncProfile(nextProfile);
+        } else {
+          onUpdateProfile(nextProfile);
+        }
       }
       showToast(`Test SMS processed via ${res.senderId}`);
     } catch (err) {
@@ -272,13 +283,29 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     }
   };
 
-  const handleBuyBundle = () => {
+  const handleBuyBundle = async () => {
+    if (purchasingBundle) return;
     const bundle = TOPUP_BUNDLES.find((b) => b.id === selectedBundleId) ?? TOPUP_BUNDLES[1];
-    onUpdateProfile({
-      ...profile,
-      smsCredits: profile.smsCredits + bundle.credits,
-    });
-    showToast(`Credited +${bundle.credits.toLocaleString()} SMS (${bundle.priceGhs}) via Paystack MoMo.`);
+    setPurchasingBundle(true);
+    try {
+      const res = await api.studio.purchaseSmsBundle({
+        bundleId: bundle.id,
+        bundleName: bundle.label,
+        credits: bundle.credits,
+        amountGhs: bundle.amountGhs,
+        paymentChannel: 'Arkesel Portal / MoMo',
+      });
+      if (onSyncProfile) {
+        onSyncProfile(res.profile);
+      } else {
+        onUpdateProfile(res.profile);
+      }
+      showToast(res.message);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to purchase SMS bundle.');
+    } finally {
+      setPurchasingBundle(false);
+    }
   };
 
   const handleCopyWebhook = () => {
@@ -326,8 +353,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     }
   };
 
-  const smsBaseAllotment = isFree ? 20 : 2000;
-  const smsPct = Math.min(100, Math.round((profile.smsCredits / Math.max(1, smsBaseAllotment)) * 100));
+  const smsPct =
+    profile.smsCredits <= 0 ? 0 : Math.min(100, Math.max(8, Math.round((profile.smsCredits / 2000) * 100)));
   const strokeDasharray = `${smsPct}, 100`;
 
   const initials = name
@@ -1037,9 +1064,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
             <div className="space-y-1.5 mb-5 text-xs text-[#71717A]">
               <div className="flex justify-between">
-                <span>Allotment baseline:</span>
-                <span className="font-mono text-[#0B0B0B] tabular-nums">
-                  {smsBaseAllotment.toLocaleString()} Credits
+                <span>Wallet quota rule:</span>
+                <span className="font-mono text-[#0B0B0B]">
+                  Purchased SMS bundles only
                 </span>
               </div>
               <div className="flex justify-between">
@@ -1096,11 +1123,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
             <button
               type="button"
-              onClick={handleBuyBundle}
-              className="w-full py-3 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.98] transition-all"
+              onClick={() => void handleBuyBundle()}
+              disabled={purchasingBundle}
+              className="w-full py-3 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-60"
             >
               <Wallet className="w-4 h-4" />
-              <span>Buy SMS Credits (Paystack / MoMo)</span>
+              <span>{purchasingBundle ? 'Crediting Bundle...' : 'Buy SMS Bundle (Arkesel / MoMo)'}</span>
             </button>
           </section>
 

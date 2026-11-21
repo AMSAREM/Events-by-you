@@ -71,7 +71,7 @@ import {
   sendCheckInWelcomeEmail,
   sendEventPassEmail,
 } from './server/resend.ts';
-import { MAX_SHOTS_PER_USER, resolveEventMessage } from './src/lib/eventMessages.ts';
+import { calculateSmsCredits, MAX_SHOTS_PER_USER, resolveEventMessage } from './src/lib/eventMessages.ts';
 import {
   buildSyntheticPhoneEmail,
   clearPendingSignup,
@@ -253,6 +253,69 @@ function hydrateShotWithEventMeta(
   const fallbackKey = shootersMap?.[shot.id];
   if (shot.shooterKey || !fallbackKey) return shot;
   return { ...shot, shooterKey: fallbackKey };
+}
+
+async function consumeSupabaseSmsCredits(
+  client: SupabaseClient,
+  organizerId: string,
+  cost: number
+): Promise<{ ok: boolean; remaining: number }> {
+  const admin = createServiceSupabaseClient() ?? client;
+  const needed = Math.max(0, Math.round(cost));
+  const { data: prof } = await admin
+    .from('profiles')
+    .select('sms_credits')
+    .eq('id', organizerId)
+    .maybeSingle();
+  const current = Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0);
+  if (needed === 0) {
+    return { ok: true, remaining: current };
+  }
+  if (current < needed) {
+    return { ok: false, remaining: current };
+  }
+  const next = current - needed;
+  const { data: updated, error } = await admin
+    .from('profiles')
+    .update({ sms_credits: next, updated_at: new Date().toISOString() })
+    .eq('id', organizerId)
+    .gte('sms_credits', needed)
+    .select('sms_credits')
+    .maybeSingle();
+  if (error || !updated) {
+    const { data: refreshed } = await admin
+      .from('profiles')
+      .select('sms_credits')
+      .eq('id', organizerId)
+      .maybeSingle();
+    return {
+      ok: false,
+      remaining: Number((refreshed as Record<string, unknown> | null)?.sms_credits ?? current),
+    };
+  }
+  return { ok: true, remaining: Number((updated as Record<string, unknown>).sms_credits ?? next) };
+}
+
+async function refundSupabaseSmsCredits(
+  client: SupabaseClient,
+  organizerId: string,
+  amount: number
+): Promise<number> {
+  const admin = createServiceSupabaseClient() ?? client;
+  const delta = Math.max(0, Math.round(amount));
+  const { data: prof } = await admin
+    .from('profiles')
+    .select('sms_credits')
+    .eq('id', organizerId)
+    .maybeSingle();
+  const current = Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0);
+  if (delta === 0) return current;
+  const next = current + delta;
+  await admin
+    .from('profiles')
+    .update({ sms_credits: next, updated_at: new Date().toISOString() })
+    .eq('id', organizerId);
+  return next;
 }
 
 async function mergeEventAttendeeMeta(
@@ -2218,15 +2281,16 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           });
         }
 
-        const event = mapEventRow(payload.event);
+        let event = mapEventRow(payload.event);
 
         let replyTo: string | undefined;
         let orgSenderId: string | undefined;
+        let organizerCredits = 0;
         const organizerId = payload.event?.organizer_id ? String(payload.event.organizer_id) : undefined;
         if (organizerId) {
           const { data: orgProf } = await supabase
             .from('profiles')
-            .select('reply_to_email, sender_id')
+            .select('reply_to_email, sender_id, sms_credits')
             .eq('id', organizerId)
             .maybeSingle();
           const profRec = orgProf as Record<string, unknown> | null;
@@ -2235,6 +2299,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           }
           if (profRec && typeof profRec.sender_id === 'string' && profRec.sender_id.trim()) {
             orgSenderId = profRec.sender_id.trim();
+          }
+          if (profRec) {
+            organizerCredits = Number(profRec.sms_credits ?? 0);
           }
         }
 
@@ -2247,14 +2314,30 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           includeGuestInCameraUrl: true,
         });
 
+        const smsCost = Math.max(1, calculateSmsCredits(resolvedMsg.text));
+        let smsCreditsUsed = 0;
+        let smsCreditsRemaining = organizerCredits;
+        let smsSkippedReason: string | undefined;
+        let debitReserved = false;
+        if (organizerId) {
+          const debit = await consumeSupabaseSmsCredits(supabase, organizerId, smsCost);
+          debitReserved = debit.ok;
+          smsCreditsRemaining = debit.remaining;
+        }
+        if (!debitReserved) {
+          smsSkippedReason = 'Organizer SMS bundle balance is 0 (no purchased SMS credits remaining).';
+        }
+
         const [smsDelivery, emailDelivery] = await Promise.all([
-          dispatchOptionalArkeselSms(
-            normalizedPhone,
-            event.title,
-            finalCode,
-            event.senderId || orgSenderId,
-            resolvedMsg.text
-          ),
+          debitReserved
+            ? dispatchOptionalArkeselSms(
+                normalizedPhone,
+                event.title,
+                finalCode,
+                event.senderId || orgSenderId,
+                resolvedMsg.text
+              )
+            : Promise.resolve('Pending' as const),
           isResendConfigured()
             ? sendEventPassEmail({
                 to: email.trim(),
@@ -2275,10 +2358,28 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         ]);
 
         const hasLiveArkesel = Boolean((process.env.ARKESEL_API_KEY || '').trim()) && platformRuntime.flags.smsMode !== 'sandbox';
+        if (debitReserved && organizerId && smsDelivery === 'Pending' && hasLiveArkesel) {
+          smsCreditsRemaining = await refundSupabaseSmsCredits(supabase, organizerId, smsCost);
+          smsCreditsUsed = 0;
+        } else if (debitReserved && smsDelivery === 'Arkesel Sent') {
+          smsCreditsUsed = smsCost;
+        }
+
+        if (smsCreditsUsed === 0) {
+          const adjustedDispatched = Math.max(0, Number(payload.event.sms_dispatched ?? 1) - 1);
+          await supabase
+            .from('events')
+            .update({ sms_dispatched: adjustedDispatched })
+            .eq('id', eventId);
+          event = { ...event, smsDispatched: adjustedDispatched };
+        }
+
         const finalDeliveryStatus: Attendee['smsStatus'] =
-          emailDelivery.ok && (!hasLiveArkesel || smsDelivery === 'Pending')
-            ? 'Resend Delivered'
-            : smsDelivery;
+          smsCreditsUsed > 0
+            ? 'Arkesel Sent'
+            : emailDelivery.ok && (!hasLiveArkesel || smsDelivery === 'Pending')
+              ? 'Resend Delivered'
+              : 'Pending';
 
         if (finalDeliveryStatus !== payload.attendee.sms_status) {
           await supabase
@@ -2296,7 +2397,13 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           custom_responses: payload.attendee.custom_responses ?? customResponses ?? null,
         });
 
-        return res.status(201).json({ attendee, event: sanitizePublicEvent(event) });
+        return res.status(201).json({
+          attendee,
+          event: sanitizePublicEvent(event),
+          smsCreditsUsed,
+          smsCreditsRemaining,
+          smsSkippedReason,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Registration failed.';
         return res.status(500).json({ error: message });
@@ -2640,7 +2747,6 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       }
       if (next.studio !== undefined) updatePayload.studio = next.studio;
       if (next.plan !== undefined) updatePayload.plan = next.plan;
-      if (next.smsCredits !== undefined) updatePayload.sms_credits = next.smsCredits;
       if (next.capacityAlertThreshold !== undefined) {
         updatePayload.capacity_alert_threshold = next.capacityAlertThreshold;
       }
@@ -2806,9 +2912,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .eq('id', req.user!.id)
         .maybeSingle();
 
-      const currentCredits = Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0);
-      if (currentCredits <= 0 && platformRuntime.flags.smsMode !== 'sandbox') {
-        return res.status(400).json({ error: 'No SMS credits remaining in your organizer balance.' });
+      const debit = await consumeSupabaseSmsCredits(client, req.user!.id, 1);
+      if (!debit.ok) {
+        return res.status(402).json({
+          error: 'Insufficient SMS credits (0 remaining). Purchase an SMS bundle in Plan & Credits to send SMS.',
+        });
       }
 
       const testCode = String(crypto.randomInt(100000, 999999));
@@ -2826,16 +2934,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       });
 
       if (!dispatch.ok) {
+        await refundSupabaseSmsCredits(client, req.user!.id, 1);
         return res.status(400).json({ error: dispatch.error || 'Arkesel SMS test dispatch failed.' });
-      }
-
-      let nextCredits = currentCredits;
-      if (!dispatch.sandbox) {
-        nextCredits = Math.max(0, currentCredits - 1);
-        await client
-          .from('profiles')
-          .update({ sms_credits: nextCredits, updated_at: new Date().toISOString() })
-          .eq('id', req.user!.id);
       }
 
       return res.json({
@@ -2845,7 +2945,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         messageId: dispatch.messageId,
         sandbox: Boolean(dispatch.sandbox),
         warning: dispatch.warning,
-        smsCredits: nextCredits,
+        smsCredits: debit.remaining,
       });
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : 'SMS test failed.' });
@@ -2899,8 +2999,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
     if (!Number.isFinite(parsedCredits) || parsedCredits < 10 || parsedCredits > 100000) {
       return res.status(400).json({ error: 'Bundle credits must be between 10 and 100,000 SMS.' });
     }
-    if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
-      return res.status(400).json({ error: 'Invalid bundle price amount.' });
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ error: 'Bundle purchase amount (GH₵) must be greater than 0.' });
     }
 
     try {
@@ -3524,7 +3624,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       let orgSenderId: string | undefined;
       const { data: orgProf } = await client
         .from('profiles')
-        .select('reply_to_email, sender_id')
+        .select('reply_to_email, sender_id, sms_credits')
         .eq('id', req.user!.id)
         .maybeSingle();
       const orgProfRec = orgProf as Record<string, unknown> | null;
@@ -3545,14 +3645,31 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         includeGuestInCameraUrl: true,
       });
 
+      const smsCost = Math.max(1, calculateSmsCredits(studioResolvedMsg.text));
+      let smsCreditsUsed = 0;
+      let smsCreditsRemaining = Number(orgProfRec?.sms_credits ?? 0);
+      let smsSkippedReason: string | undefined;
+      let debitReserved = false;
+
+      if (normalizedPhone) {
+        const debit = await consumeSupabaseSmsCredits(client, req.user!.id, smsCost);
+        debitReserved = debit.ok;
+        smsCreditsRemaining = debit.remaining;
+        if (!debitReserved) {
+          smsSkippedReason = `Insufficient SMS credits (${smsCreditsRemaining} remaining, ${smsCost} needed). Purchase an SMS bundle to deliver pass SMS.`;
+        }
+      }
+
       const [smsDelivery, emailDelivery] = await Promise.all([
-        dispatchOptionalArkeselSms(
-          normalizedPhone,
-          evtMapped.title,
-          attendee.ticketCode,
-          evtMapped.senderId || orgSenderId,
-          studioResolvedMsg.text
-        ),
+        debitReserved && normalizedPhone
+          ? dispatchOptionalArkeselSms(
+              normalizedPhone,
+              evtMapped.title,
+              attendee.ticketCode,
+              evtMapped.senderId || orgSenderId,
+              studioResolvedMsg.text
+            )
+          : Promise.resolve('Pending' as const),
         isResendConfigured() && attendee.email?.includes('@')
           ? attendee.checkedIn
             ? sendCheckInWelcomeEmail({
@@ -3587,10 +3704,19 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       ]);
 
       const hasLiveArkesel = Boolean((process.env.ARKESEL_API_KEY || '').trim()) && platformRuntime.flags.smsMode !== 'sandbox';
+      if (debitReserved && smsDelivery === 'Pending' && hasLiveArkesel) {
+        smsCreditsRemaining = await refundSupabaseSmsCredits(client, req.user!.id, smsCost);
+        smsCreditsUsed = 0;
+      } else if (debitReserved && smsDelivery === 'Arkesel Sent') {
+        smsCreditsUsed = smsCost;
+      }
+
       const resolvedSmsStatus: Attendee['smsStatus'] =
-        emailDelivery.ok && (!hasLiveArkesel || smsDelivery === 'Pending')
-          ? 'Resend Delivered'
-          : attendee.smsStatus || smsDelivery;
+        smsCreditsUsed > 0
+          ? 'Arkesel Sent'
+          : emailDelivery.ok && (!hasLiveArkesel || smsDelivery === 'Pending')
+            ? 'Resend Delivered'
+            : 'Pending';
 
       const attInsertPayload: Record<string, unknown> = {
         id: attendee.id,
@@ -3632,6 +3758,10 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       }
 
       if (attErr) {
+        if (smsCreditsUsed > 0) {
+          smsCreditsRemaining = await refundSupabaseSmsCredits(client, req.user!.id, smsCreditsUsed);
+          smsCreditsUsed = 0;
+        }
         if (attErr.code === '23505') {
           return res.status(409).json({
             error: `Duplicate shield: ${normalizedPhone} is already registered for this event.`,
@@ -3656,7 +3786,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .from('events')
         .update({
           registered: Number(evtRec.registered ?? 0) + 1,
-          sms_dispatched: Number(evtRec.sms_dispatched ?? 0) + 1,
+          sms_dispatched: Number(evtRec.sms_dispatched ?? 0) + (smsCreditsUsed > 0 ? 1 : 0),
           revenue: Number(evtRec.revenue ?? 0) + Number(evtRec.ticket_price ?? 0),
           checked_in: attendee.checkedIn
             ? Number(evtRec.checked_in ?? 0) + 1
@@ -3681,6 +3811,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         event: mapEventRow(updatedEvt as Record<string, unknown>),
         cameraUrl: studioResolvedMsg.cameraUrl,
         dispatchedMessage: studioResolvedMsg.text,
+        smsCredits: smsCreditsRemaining,
+        smsCreditsUsed,
+        smsSkippedReason,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to register attendee.';
@@ -3734,8 +3867,12 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         attMetaMap
       );
       let checkInMessageSent = false;
+      let checkInSmsSent = false;
       let cameraUrl: string | undefined;
       let dispatchedMessage: string | undefined;
+      let smsCredits: number | undefined;
+      let smsCreditsUsed = 0;
+      let smsSkippedReason: string | undefined;
 
       if (nextCheckedIn && evtRow) {
         const evtMapped = mapEventRow(evtRow as Record<string, unknown>);
@@ -3750,12 +3887,14 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         cameraUrl = resolved.cameraUrl;
         dispatchedMessage = resolved.text;
 
+        const orgId = String((evtRow as Record<string, unknown>).organizer_id || req.user!.id);
+        const adminOrClient = createServiceSupabaseClient() ?? client;
         let replyTo: string | undefined;
         let orgSenderId: string | undefined;
-        const { data: orgProf } = await client
+        const { data: orgProf } = await adminOrClient
           .from('profiles')
-          .select('reply_to_email, sender_id')
-          .eq('id', String((evtRow as Record<string, unknown>).organizer_id || req.user!.id))
+          .select('reply_to_email, sender_id, sms_credits')
+          .eq('id', orgId)
           .maybeSingle();
         const orgProfRec = orgProf as Record<string, unknown> | null;
         if (orgProfRec && typeof orgProfRec.reply_to_email === 'string') {
@@ -3764,9 +3903,21 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         if (orgProfRec && typeof orgProfRec.sender_id === 'string' && orgProfRec.sender_id.trim()) {
           orgSenderId = orgProfRec.sender_id.trim();
         }
+        smsCredits = Number(orgProfRec?.sms_credits ?? 0);
 
-        await Promise.all([
-          mappedAttendee.phone
+        const smsCost = Math.max(1, calculateSmsCredits(resolved.text));
+        let debitReserved = false;
+        if (mappedAttendee.phone) {
+          const debit = await consumeSupabaseSmsCredits(client, orgId, smsCost);
+          debitReserved = debit.ok;
+          smsCredits = debit.remaining;
+          if (!debitReserved) {
+            smsSkippedReason = `No SMS credits remaining (${smsCredits} left, ${smsCost} needed). Purchase an SMS bundle for check-in SMS.`;
+          }
+        }
+
+        const [smsRes, emailRes] = await Promise.all([
+          debitReserved && mappedAttendee.phone
             ? dispatchOptionalArkeselSms(
                 normalizePhoneE164(mappedAttendee.phone),
                 evtMapped.title,
@@ -3791,10 +3942,32 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
               })
             : Promise.resolve({ ok: false, skipped: true }),
         ]);
-        checkInMessageSent = true;
+
+        const hasLiveArkesel = Boolean((process.env.ARKESEL_API_KEY || '').trim()) && platformRuntime.flags.smsMode !== 'sandbox';
+        if (debitReserved && smsRes === 'Pending' && hasLiveArkesel) {
+          smsCredits = await refundSupabaseSmsCredits(client, orgId, smsCost);
+        } else if (debitReserved && smsRes === 'Arkesel Sent') {
+          smsCreditsUsed = smsCost;
+          checkInSmsSent = true;
+          const prevDispatched = Number((evtRow as Record<string, unknown>).sms_dispatched ?? 0);
+          await adminOrClient
+            .from('events')
+            .update({ sms_dispatched: prevDispatched + 1 })
+            .eq('id', eventId);
+        }
+        checkInMessageSent = checkInSmsSent || Boolean(emailRes.ok);
       }
 
-      return res.json({ attendee: mappedAttendee, checkInMessageSent, cameraUrl, dispatchedMessage });
+      return res.json({
+        attendee: mappedAttendee,
+        checkInMessageSent,
+        checkInSmsSent,
+        cameraUrl,
+        dispatchedMessage,
+        smsCredits,
+        smsCreditsUsed,
+        smsSkippedReason,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to toggle check-in.';
       return res.status(500).json({ error: message });
@@ -3852,7 +4025,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         const [{ data: ownedEvents, error: evtsErr }, { data: orgProf }, { data: targetAttRows, error: attErr }] =
           await Promise.all([
             client.from('events').select('*').eq('organizer_id', req.user!.id),
-            client.from('profiles').select('reply_to_email, sender_id').eq('id', req.user!.id).maybeSingle(),
+            client.from('profiles').select('reply_to_email, sender_id, sms_credits').eq('id', req.user!.id).maybeSingle(),
             client.from('attendees').select('*').in('id', attendeeIds),
           ]);
         if (evtsErr) return res.status(400).json({ error: evtsErr.message });
@@ -3879,21 +4052,38 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
             ? profRec.sender_id.trim()
             : undefined;
 
+        const prepared = ownedAttendees.map((att) => {
+          const rawEvt = eventById.get(att.eventId)!;
+          const evtMapped = mapEventRow(rawEvt);
+          const personalizedText = cleanMessage
+            .replace(/\{name\}/gi, att.name)
+            .replace(/\{event\}/gi, evtMapped.title)
+            .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode);
+          const smsCost = att.phone ? calculateSmsCredits(personalizedText) : 0;
+          const cameraUrl = `${resolveBaseUrl(req)}/e/${encodeURIComponent(evtMapped.slug || evtMapped.id)}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
+          return { att, evtMapped, personalizedText, smsCost, cameraUrl };
+        });
+
+        const requiredSmsCredits = prepared.reduce((acc, item) => acc + item.smsCost, 0);
+        let remainingCredits = Number(profRec?.sms_credits ?? 0);
+        if (requiredSmsCredits > 0) {
+          const debit = await consumeSupabaseSmsCredits(client, req.user!.id, requiredSmsCredits);
+          remainingCredits = debit.remaining;
+          if (!debit.ok) {
+            return res.status(402).json({
+              error: `Insufficient SMS bundle credits: you have ${remainingCredits.toLocaleString()} SMS remaining, but this broadcast requires ${requiredSmsCredits.toLocaleString()} SMS.`,
+            });
+          }
+        }
+
         const countsByEvent = new Map<string, number>();
         let sentCount = 0;
+        let failedSmsRefund = 0;
 
         await Promise.all(
-          ownedAttendees.map(async (att) => {
-            const rawEvt = eventById.get(att.eventId)!;
-            const evtMapped = mapEventRow(rawEvt);
-            const personalizedText = cleanMessage
-              .replace(/\{name\}/gi, att.name)
-              .replace(/\{event\}/gi, evtMapped.title)
-              .replace(/\{ticket_code\}/gi, att.ticketCode);
-            const cameraUrl = `${resolveBaseUrl(req)}/e/${encodeURIComponent(evtMapped.slug || evtMapped.id)}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
-
+          prepared.map(async ({ att, evtMapped, personalizedText, smsCost, cameraUrl }) => {
             const [smsRes, emailRes] = await Promise.all([
-              att.phone
+              att.phone && smsCost > 0
                 ? dispatchOptionalArkeselSms(
                     normalizePhoneE164(att.phone),
                     evtMapped.title,
@@ -3919,12 +4109,23 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                 : Promise.resolve({ ok: false, skipped: true }),
             ]);
 
+            if (att.phone && smsCost > 0) {
+              if (smsRes === 'Arkesel Sent') {
+                countsByEvent.set(att.eventId, (countsByEvent.get(att.eventId) ?? 0) + 1);
+              } else {
+                failedSmsRefund += smsCost;
+              }
+            }
             if (smsRes !== 'Pending' || emailRes.ok) {
               sentCount += 1;
             }
-            countsByEvent.set(att.eventId, (countsByEvent.get(att.eventId) ?? 0) + 1);
           })
         );
+
+        if (failedSmsRefund > 0) {
+          remainingCredits = await refundSupabaseSmsCredits(client, req.user!.id, failedSmsRefund);
+        }
+        const creditsUsed = Math.max(0, requiredSmsCredits - failedSmsRefund);
 
         const updatedEvents: EventItem[] = [];
         for (const [evtId, count] of countsByEvent.entries()) {
@@ -3946,6 +4147,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           ok: true,
           recipientCount: ownedAttendees.length,
           sentCount,
+          creditsUsed,
+          smsCredits: remainingCredits,
           events: updatedEvents,
         });
       } catch (err) {

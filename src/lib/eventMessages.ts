@@ -2,6 +2,12 @@ import type { EventItem, EventMessageConfig } from '../types/events';
 
 export const MAX_SHOTS_PER_USER = 5;
 
+export function calculateSmsCredits(message?: string): number {
+  const clean = (message || '').trim();
+  if (!clean) return 0;
+  return Math.max(1, Math.ceil(clean.length / 160));
+}
+
 export function getDefaultMessageConfig(event?: Partial<EventItem>): Required<EventMessageConfig> {
   return {
     confirmationMessage:

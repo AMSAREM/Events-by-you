@@ -518,7 +518,13 @@ export const api = {
         customResponses?: Record<string, string>;
       }
     ) =>
-      request<{ attendee: Attendee; event: EventItem }>(
+      request<{
+        attendee: Attendee;
+        event: EventItem;
+        smsCreditsUsed?: number;
+        smsCreditsRemaining?: number;
+        smsSkippedReason?: string;
+      }>(
         `/api/public/events/${encodeURIComponent(eventId)}/register`,
         {
           method: 'POST',
@@ -685,6 +691,9 @@ export const api = {
         event: EventItem;
         cameraUrl?: string;
         dispatchedMessage?: string;
+        smsCredits?: number;
+        smsCreditsUsed?: number;
+        smsSkippedReason?: string;
       }>(
         `/api/studio/events/${encodeURIComponent(eventId)}/attendees`,
         { method: 'POST', body: JSON.stringify(attendee) },
@@ -695,8 +704,12 @@ export const api = {
       request<{
         attendee: Attendee;
         checkInMessageSent?: boolean;
+        checkInSmsSent?: boolean;
         cameraUrl?: string;
         dispatchedMessage?: string;
+        smsCredits?: number;
+        smsCreditsUsed?: number;
+        smsSkippedReason?: string;
       }>(
         `/api/studio/attendees/${encodeURIComponent(attendeeId)}/checkin`,
         { method: 'PATCH' },
@@ -753,6 +766,8 @@ export const api = {
         ok: boolean;
         recipientCount: number;
         sentCount: number;
+        creditsUsed?: number;
+        smsCredits?: number;
         events: EventItem[];
       }>(
         '/api/studio/broadcast',

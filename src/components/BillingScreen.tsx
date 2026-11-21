@@ -8,7 +8,6 @@ import {
   ExternalLink,
   Infinity as InfinityIcon,
   Lock,
-  Plus,
   RefreshCw,
   RotateCcw,
   SlidersHorizontal,
@@ -25,6 +24,7 @@ interface BillingScreenProps {
   profile: OrganizerProfile;
   events: EventItem[];
   onUpdateProfile: (profile: OrganizerProfile) => void;
+  onSyncProfile?: (profile: OrganizerProfile) => void;
 }
 
 const CREDIT_BUNDLES = [
@@ -76,10 +76,10 @@ const SPEC_ROWS = [
     layer: 'check_attendee_cap()',
   },
   {
-    capability: 'Monthly Arkesel SMS Grant',
-    free: '20 initial credits',
-    pro: '500 free credits / mo',
-    layer: 'monthly_sms_grant',
+    capability: 'Arkesel SMS Balance Model',
+    free: '0 starter (pay-as-you-buy)',
+    pro: 'Purchased SMS bundles only',
+    layer: 'sms_bundle_ledger',
   },
   {
     capability: 'Alphanumeric Sender ID',
@@ -117,6 +117,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
   profile,
   events,
   onUpdateProfile,
+  onSyncProfile,
 }) => {
   const [isAnnual, setIsAnnual] = useState(false);
   const [customCredits, setCustomCredits] = useState(2500);
@@ -184,7 +185,11 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
         paymentChannel,
         arkeselReference: arkeselReference.trim() || undefined,
       });
-      onUpdateProfile(res.profile);
+      if (onSyncProfile) {
+        onSyncProfile(res.profile);
+      } else {
+        onUpdateProfile(res.profile);
+      }
       setArkeselStatus(res.arkeselStatus);
       setCheckoutDraft(null);
       showToast(res.message);
@@ -195,40 +200,21 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     }
   };
 
-  const handleQuickTestGrant = async (amount: number, packName: string) => {
-    try {
-      const res = await api.studio.purchaseSmsBundle({
-        bundleId: 'sandbox-grant',
-        bundleName: packName,
-        credits: amount,
-        amountGhs: 0,
-        paymentChannel: 'Sandbox Test Grant',
-      });
-      onUpdateProfile(res.profile);
-      setArkeselStatus(res.arkeselStatus);
-      showToast(`+${amount.toLocaleString()} SMS credits added via ${packName}`);
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to add credits.');
-    }
-  };
-
   const handleUpgradeToPro = () => {
     if (isPro) return;
     onUpdateProfile({
       ...profile,
       plan: 'Pro Organizer',
-      smsCredits: profile.smsCredits + 500,
     });
-    showToast('Upgraded to Pro Organizer Tier! +500 bonus SMS credits granted.');
+    showToast('Upgraded to Pro Organizer Tier! Purchase an SMS bundle below whenever you need carrier units.');
   };
 
   const handleResetFreeTier = () => {
     onUpdateProfile({
       ...profile,
       plan: 'Starter',
-      smsCredits: 20,
     });
-    showToast('Account reverted to Starter Free Tier sandbox state (20 credits).');
+    showToast('Account reverted to Starter Free Tier. Purchased SMS balance remains unchanged.');
   };
 
   const customUnitRate = customCredits >= 5000 ? 0.15 : customCredits >= 1000 ? 0.175 : 0.2;
@@ -263,14 +249,6 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <button
             type="button"
-            onClick={() => void handleQuickTestGrant(100, 'Test Credits Simulator')}
-            className="px-4 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>+100 Test Credits</span>
-          </button>
-          <button
-            type="button"
             onClick={() => {
               const el = document.getElementById('carrier-bundles');
               if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -278,7 +256,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-sm transition-colors whitespace-nowrap shrink-0"
           >
             <Zap className="w-3.5 h-3.5" />
-            <span>Instant Top-Up</span>
+            <span>Buy SMS Bundle</span>
           </button>
         </div>
       </div>
@@ -323,7 +301,11 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
               <span className="text-xs text-[#71717A]">credits</span>
             </div>
             <span className="text-[11px] text-[#71717A] mt-2">
-              {profile.smsCredits < 100 ? 'Low balance alert active' : 'Direct Arkesel route'}
+              {profile.smsCredits <= 0
+                ? '0 credits — purchase an SMS bundle to send SMS'
+                : profile.smsCredits < 100
+                  ? 'Low bundle balance alert'
+                  : 'Direct Arkesel bundle credits'}
             </span>
           </div>
 
@@ -455,7 +437,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
               <div className="space-y-2.5 pt-1 text-xs">
                 <div className="flex items-center gap-2.5 text-[#0B0B0B]">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>20 starting Arkesel carrier SMS credits</span>
+                  <span>Starts with 0 SMS credits — pay only for bundles you buy</span>
                 </div>
                 <div className="flex items-center gap-2.5 text-[#0B0B0B]">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
@@ -543,7 +525,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
 
               <div className="space-y-2.5 pt-1 text-xs">
                 {[
-                  { strong: '500 bonus SMS credits', rest: ' added to carrier balance monthly' },
+                  { strong: 'Purchased SMS bundle pool', rest: ' — spend the exact SMS units you buy' },
                   { strong: 'Custom Sender IDs', rest: ' registered on Arkesel (11 chars)' },
                   { strong: 'Customizable templates', rest: ' for SMS & Email with dynamic tokens' },
                   { strong: 'Instant CSV & TSV exports', rest: ' with check-in timestamps & Act 843 logs' },

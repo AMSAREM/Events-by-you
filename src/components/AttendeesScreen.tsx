@@ -8,6 +8,7 @@ import {
   SystemAlert,
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
+import { calculateSmsCredits } from '../lib/eventMessages';
 import { CircularGauge } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
 
@@ -22,12 +23,26 @@ interface AttendeesScreenProps {
   ) =>
     | Promise<{
         checkInMessageSent?: boolean;
+        checkInSmsSent?: boolean;
         cameraUrl?: string;
         dispatchedMessage?: string;
+        smsSkippedReason?: string;
       } | void>
     | void;
   onRetryPayment: (attendeeId: string) => void;
   onRegisterAttendee: (eventId: string, attendee: Attendee) => void;
+  onBroadcast?: (payload: {
+    eventId?: string;
+    attendeeIds: string[];
+    message: string;
+  }) => Promise<{
+    ok: boolean;
+    recipientCount: number;
+    sentCount: number;
+    creditsUsed?: number;
+    smsCredits?: number;
+  }>;
+  onOpenPlans?: () => void;
   onManageEvent: (event: EventItem) => void;
   onOpenQrScanner?: (eventId?: string, code?: string) => void;
   onNavigateSettings: () => void;
@@ -44,6 +59,8 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
   onToggleCheckIn,
   onRetryPayment,
   onRegisterAttendee,
+  onBroadcast,
+  onOpenPlans,
   onManageEvent,
   onOpenQrScanner,
   onNavigateSettings,
@@ -59,6 +76,8 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
     'Doors open 30 minutes prior to keynote. Keep your pass QR ready at Gate A.'
   );
   const [broadcastStatus, setBroadcastStatus] = useState<string | null>(null);
+  const [broadcastError, setBroadcastError] = useState<string | null>(null);
+  const [broadcastSending, setBroadcastSending] = useState(false);
 
   // Walk-in registration modal state
   const [walkInOpen, setWalkInOpen] = useState(false);
@@ -131,14 +150,48 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
   const checkedCount = filtered.filter((a) => a.checkedIn).length;
   const checkInPct = filtered.length > 0 ? Math.round((checkedCount / filtered.length) * 100) : 0;
 
-  const handleBroadcastSubmit = (e: React.FormEvent) => {
+  const phoneRecipients = useMemo(
+    () => filtered.filter((a) => Boolean(a.phone && a.phone.trim())),
+    [filtered]
+  );
+  const smsPerRecipientCost = calculateSmsCredits(broadcastMsg);
+  const totalBroadcastSmsCost = phoneRecipients.length * smsPerRecipientCost;
+  const hasEnoughCreditsForBroadcast = profile.smsCredits >= totalBroadcastSmsCost;
+
+  const handleBroadcastSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!broadcastMsg.trim()) return;
-    setBroadcastStatus(`Dispatched update to ${filtered.length} attendees.`);
-    setTimeout(() => {
-      setBroadcastOpen(false);
-      setBroadcastStatus(null);
-    }, 1200);
+    if (!broadcastMsg.trim() || filtered.length === 0 || broadcastSending) return;
+    if (totalBroadcastSmsCost > 0 && !hasEnoughCreditsForBroadcast) {
+      setBroadcastError(
+        `You have ${profile.smsCredits.toLocaleString()} SMS credits, but this broadcast requires ${totalBroadcastSmsCost.toLocaleString()} SMS.`
+      );
+      return;
+    }
+    setBroadcastSending(true);
+    setBroadcastError(null);
+    setBroadcastStatus(null);
+    try {
+      if (onBroadcast) {
+        const res = await onBroadcast({
+          eventId: eventFilter !== 'all' ? eventFilter : undefined,
+          attendeeIds: filtered.map((a) => a.id),
+          message: broadcastMsg.trim(),
+        });
+        setBroadcastStatus(
+          `Dispatched to ${res.sentCount} of ${res.recipientCount} guests (${(res.creditsUsed ?? totalBroadcastSmsCost).toLocaleString()} SMS credits used).`
+        );
+      } else {
+        setBroadcastStatus(`Dispatched update to ${filtered.length} attendees.`);
+      }
+      setTimeout(() => {
+        setBroadcastOpen(false);
+        setBroadcastStatus(null);
+      }, 1500);
+    } catch (err) {
+      setBroadcastError(err instanceof Error ? err.message : 'Broadcast dispatch failed.');
+    } finally {
+      setBroadcastSending(false);
+    }
   };
 
   const handleWalkInSubmit = (e: React.FormEvent) => {
@@ -507,9 +560,17 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                           type="button"
                           onClick={async () => {
                             const res = await Promise.resolve(onToggleCheckIn(att.id));
-                            if (res && res.checkInMessageSent) {
+                            if (res && res.checkInSmsSent) {
                               showToast(
                                 `Checked in ${att.name} — SMS + Disposable Camera link sent!`
+                              );
+                            } else if (res && res.smsSkippedReason) {
+                              showToast(
+                                `Checked in ${att.name}. SMS skipped: ${res.smsSkippedReason}`
+                              );
+                            } else if (res && res.checkInMessageSent) {
+                              showToast(
+                                `Checked in ${att.name} — check-in welcome email + camera link sent!`
                               );
                             }
                           }}
@@ -736,14 +797,60 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
             </div>
 
             <form onSubmit={handleBroadcastSubmit} className="space-y-4">
+              <div className="p-3.5 rounded-2xl bg-[#F5F5F7] text-xs space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[#71717A]">SMS cost ({smsPerRecipientCost} SMS × {phoneRecipients.length} phones)</span>
+                  <span className="font-bold text-[#0B0B0B] tabular-nums">
+                    {totalBroadcastSmsCost.toLocaleString()} credits
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[#71717A]">Your bundle balance</span>
+                  <span
+                    className={`font-bold tabular-nums ${
+                      hasEnoughCreditsForBroadcast ? 'text-emerald-700' : 'text-red-600'
+                    }`}
+                  >
+                    {profile.smsCredits.toLocaleString()} credits
+                  </span>
+                </div>
+              </div>
+
               <textarea
                 rows={4}
                 value={broadcastMsg}
-                onChange={(e) => setBroadcastMsg(e.target.value)}
+                onChange={(e) => {
+                  setBroadcastMsg(e.target.value);
+                  if (broadcastError) setBroadcastError(null);
+                }}
                 className="w-full p-4 rounded-2xl bg-[#F5F5F7] text-sm text-[#0B0B0B] border border-transparent focus:bg-white focus:border-[#0B0B0B] focus:outline-none"
               />
+
+              {(!hasEnoughCreditsForBroadcast && totalBroadcastSmsCost > 0) && (
+                <div className="p-3 rounded-2xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-center justify-between gap-2">
+                  <span>
+                    Need {(totalBroadcastSmsCost - profile.smsCredits).toLocaleString()} more SMS credits.
+                  </span>
+                  {onOpenPlans && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBroadcastOpen(false);
+                        onOpenPlans();
+                      }}
+                      className="px-3 py-1 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold shrink-0"
+                    >
+                      Buy SMS Bundle
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {broadcastError && (
+                <p className="text-xs font-semibold text-red-600">{broadcastError}</p>
+              )}
               {broadcastStatus && (
-                <p className="text-xs font-semibold text-[#0B0B0B]">{broadcastStatus}</p>
+                <p className="text-xs font-semibold text-emerald-700">{broadcastStatus}</p>
               )}
               <div className="flex items-center justify-end gap-2">
                 <button
@@ -755,9 +862,15 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
+                  disabled={
+                    broadcastSending ||
+                    filtered.length === 0 ||
+                    !broadcastMsg.trim() ||
+                    (totalBroadcastSmsCost > 0 && !hasEnoughCreditsForBroadcast)
+                  }
+                  className="px-5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
                 >
-                  Send Dispatch
+                  {broadcastSending ? 'Dispatching...' : 'Send Dispatch'}
                 </button>
               </div>
             </form>

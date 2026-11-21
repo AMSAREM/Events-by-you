@@ -1101,17 +1101,44 @@ export default function App() {
       setAttendees((prev) => [res.attendee, ...prev]);
       setEvents((prev) => prev.map((evt) => (evt.id === eventId ? res.event : evt)));
       setPublicEvents((prev) => prev.map((evt) => (evt.id === eventId ? res.event : evt)));
+      if (typeof res.smsCredits === 'number') {
+        setProfile((prev) => ({ ...prev, smsCredits: res.smsCredits! }));
+      }
+      if (res.smsSkippedReason) {
+        setApiBannerError(res.smsSkippedReason);
+      }
     } catch (err) {
       notifyError(err, 'Failed to register attendee in Supabase.');
     }
+  };
+
+  const handleBroadcastUpdate = async (payload: {
+    eventId?: string;
+    attendeeIds: string[];
+    message: string;
+  }) => {
+    const res = await api.studio.broadcastUpdate(payload);
+    if (typeof res.smsCredits === 'number') {
+      setProfile((prev) => ({ ...prev, smsCredits: res.smsCredits! }));
+    }
+    if (Array.isArray(res.events) && res.events.length > 0) {
+      const byId = new Map(res.events.map((e) => [e.id, e]));
+      setEvents((prev) => prev.map((e) => byId.get(e.id) ?? e));
+      setPublicEvents((prev) => prev.map((e) => byId.get(e.id) ?? e));
+    }
+    return res;
   };
 
   const handleToggleCheckIn = async (
     attendeeId: string
   ): Promise<{
     checkInMessageSent?: boolean;
+    checkInSmsSent?: boolean;
     cameraUrl?: string;
     dispatchedMessage?: string;
+    smsCredits?: number;
+    smsCreditsUsed?: number;
+    smsSkippedReason?: string;
   } | void> => {
     const target = attendees.find((a) => a.id === attendeeId);
     const nowTime = new Date().toLocaleTimeString('en-GB', {
@@ -1140,10 +1167,17 @@ export default function App() {
     try {
       const res = await api.studio.toggleCheckIn(attendeeId);
       setAttendees((prev) => prev.map((a) => (a.id === attendeeId ? res.attendee : a)));
+      if (typeof res.smsCredits === 'number') {
+        setProfile((prev) => ({ ...prev, smsCredits: res.smsCredits! }));
+      }
       return {
         checkInMessageSent: res.checkInMessageSent,
+        checkInSmsSent: res.checkInSmsSent,
         cameraUrl: res.cameraUrl,
         dispatchedMessage: res.dispatchedMessage,
+        smsCredits: res.smsCredits,
+        smsCreditsUsed: res.smsCreditsUsed,
+        smsSkippedReason: res.smsSkippedReason,
       };
     } catch (err) {
       notifyError(err, 'Failed to update check-in status in Supabase.');
@@ -2112,6 +2146,7 @@ export default function App() {
               }}
               onToggleCheckIn={handleToggleCheckIn}
               onRegisterAttendee={handleStudioRegisterAttendee}
+              onBroadcast={handleBroadcastUpdate}
               onRecordGiftEntry={handleStudioRecordGiftTableEntry}
               onCreateGiftAttendantLink={handleCreateGiftAttendantLink}
               onToggleGiftAttendantLink={handleToggleGiftAttendantLink}
@@ -2263,6 +2298,8 @@ export default function App() {
                   onToggleCheckIn={handleToggleCheckIn}
                   onRetryPayment={handleRetryPayment}
                   onRegisterAttendee={handleStudioRegisterAttendee}
+                  onBroadcast={handleBroadcastUpdate}
+                  onOpenPlans={openBillingScreen}
                   onManageEvent={handleOpenWorkspace}
                   onOpenQrScanner={(evtId, code) => openQrScanner(evtId, code)}
                   onNavigateSettings={() => setActiveScreen('settings')}
@@ -2312,6 +2349,7 @@ export default function App() {
                   profile={profile}
                   events={safeEvents}
                   onUpdateProfile={handleUpdateProfile}
+                  onSyncProfile={setProfile}
                 />
               )}
 
@@ -2321,6 +2359,7 @@ export default function App() {
                   events={safeEvents}
                   alerts={safeAlerts}
                   onUpdateProfile={handleUpdateProfile}
+                  onSyncProfile={setProfile}
                   onResolveAlert={handleResolveAlert}
                   onOpenPlans={openBillingScreen}
                   onSignOut={handleSignOut}

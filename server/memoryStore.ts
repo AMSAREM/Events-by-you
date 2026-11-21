@@ -442,7 +442,7 @@ export function getOrCreateMemoryUser(
     phoneVerified: Boolean(options?.phoneVerified),
     studio: options?.studio?.trim() || (isCreator ? 'Apps Creator Console' : 'Events Studio'),
     plan: isCreator ? 'Pro Organizer' : 'Starter',
-    smsCredits: isCreator ? 1840 : 20,
+    smsCredits: 0,
     capacityAlertThreshold: 90,
     timezone: 'Africa/Accra',
     twoFactorEnabled: false,
@@ -696,18 +696,76 @@ export const memoryStore = {
     return null;
   },
 
-  getEventOrganizerDefaults(slugOrId: string): { replyToEmail?: string; senderId?: string } {
+  getEventOrganizerDefaults(slugOrId: string): { organizerId?: string; replyToEmail?: string; senderId?: string; smsCredits: number } {
     const target = slugOrId.trim().toLowerCase();
     for (const evt of db.events.values()) {
       if (evt.id.toLowerCase() === target || evt.slug.toLowerCase() === target) {
         const owner = db.users.get(evt.organizerId);
         return {
+          organizerId: evt.organizerId,
           replyToEmail: owner?.profile.replyToEmail,
           senderId: owner?.profile.senderId,
+          smsCredits: owner?.profile.smsCredits ?? 0,
         };
       }
     }
-    return {};
+    return { smsCredits: 0 };
+  },
+
+  getSmsCredits(userId: string): number {
+    return db.users.get(userId)?.profile.smsCredits ?? 0;
+  },
+
+  addSmsCredits(userId: string, credits: number): OrganizerProfile {
+    const user = db.users.get(userId);
+    if (!user) throw new Error('User not found.');
+    const delta = Math.max(0, Math.round(credits));
+    user.profile = { ...user.profile, smsCredits: user.profile.smsCredits + delta };
+    return user.profile;
+  },
+
+  consumeSmsCredits(userId: string, cost: number): { ok: boolean; remaining: number } {
+    const user = db.users.get(userId);
+    if (!user) return { ok: false, remaining: 0 };
+    const needed = Math.max(0, Math.round(cost));
+    if (user.profile.smsCredits < needed) {
+      return { ok: false, remaining: user.profile.smsCredits };
+    }
+    const next = user.profile.smsCredits - needed;
+    user.profile = { ...user.profile, smsCredits: next };
+    return { ok: true, remaining: next };
+  },
+
+  setAttendeeSmsStatus(attendeeId: string, smsStatus: Attendee['smsStatus']): Attendee | null {
+    const existing = db.attendees.get(attendeeId);
+    if (!existing) return null;
+    const updated = { ...existing, smsStatus };
+    db.attendees.set(attendeeId, updated);
+    return updated;
+  },
+
+  incrementEventSmsDispatched(eventId: string, count: number): EventItem | null {
+    const evt = db.events.get(eventId);
+    if (!evt) return null;
+    if (count > 0) {
+      evt.smsDispatched += count;
+    }
+    const { organizerId: _org, ...clean } = evt;
+    return clean;
+  },
+
+  broadcastOwnedAttendees(userId: string, attendeeIds: string[]): { attendees: Attendee[]; eventById: Map<string, EventItem & { organizerId: string }> } {
+    const eventById = new Map<string, EventItem & { organizerId: string }>();
+    for (const evt of db.events.values()) {
+      if (evt.organizerId === userId) {
+        eventById.set(evt.id, evt);
+      }
+    }
+    const idSet = new Set(attendeeIds);
+    const attendees = Array.from(db.attendees.values()).filter(
+      (att) => idSet.has(att.id) && eventById.has(att.eventId)
+    );
+    return { attendees, eventById };
   },
 
   getPublicCameraRoll(slugOrId: string, passCode?: string): {
@@ -924,6 +982,7 @@ export const memoryStore = {
     tier?: Attendee['tier'];
     ticketCode: string;
     smsStatus: Attendee['smsStatus'];
+    smsCreditsUsed?: number;
     validationGroup?: string;
     inviteCodeUsed?: string;
     giftEntry?: Attendee['giftEntry'];
@@ -974,11 +1033,12 @@ export const memoryStore = {
     };
     db.attendees.set(attendee.id, attendee);
 
+    const smsUsed = Math.max(0, payload.smsCreditsUsed ?? 0);
     evt.registered += 1;
-    evt.smsDispatched += 1;
+    evt.smsDispatched += smsUsed > 0 ? 1 : 0;
     evt.revenue += evt.ticketPrice;
-    if (platformRuntime.gatewayBalanceCredits > 0) {
-      platformRuntime.gatewayBalanceCredits -= 1;
+    if (smsUsed > 0 && platformRuntime.gatewayBalanceCredits > 0) {
+      platformRuntime.gatewayBalanceCredits = Math.max(0, platformRuntime.gatewayBalanceCredits - smsUsed);
     }
 
     const { organizerId: _org, ...cleanEvent } = evt;
@@ -1041,6 +1101,7 @@ export const memoryStore = {
     const {
       appRole: _ignoreAppRole,
       phoneVerified: _ignorePhoneVerified,
+      smsCredits: _ignoreSmsCredits,
       ...safePatch
     } = patch;
     if (typeof safePatch.phone === 'string') {
@@ -1360,13 +1421,12 @@ export const memoryStore = {
       phone: normalizedPhone,
       organization: attendee.organization || 'General Guest',
       tier: attendee.tier || 'General',
-      smsStatus: attendee.smsStatus || 'Arkesel Sent',
+      smsStatus: attendee.smsStatus || 'Pending',
       paymentStatus: attendee.paymentStatus || 'paid',
     };
     db.attendees.set(created.id, created);
 
     evt.registered += 1;
-    evt.smsDispatched += 1;
     evt.revenue += evt.ticketPrice;
     if (created.checkedIn) evt.checkedIn += 1;
 

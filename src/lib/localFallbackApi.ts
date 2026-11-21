@@ -11,7 +11,7 @@ import {
   validateStrictPassword,
   validateStrictPhoneE164,
 } from '../data/initialData';
-import { resolveEventMessage } from './eventMessages';
+import { calculateSmsCredits, resolveEventMessage } from './eventMessages';
 import type {
   AppRole,
   Attendee,
@@ -680,7 +680,7 @@ export async function localFallbackRequest<T>(
           phoneVerified: true,
           studio: pending.studio,
           plan: 'Starter',
-          smsCredits: 20,
+          smsCredits: 0,
           senderId: 'EVENTSAPP',
         },
         suspended: false,
@@ -849,6 +849,35 @@ export async function localFallbackRequest<T>(
     const finalCode =
       String(body.ticketCode || '').trim() ||
       `#EVT-2026-${Math.floor(1000 + Math.random() * 8999)}`;
+    const origin =
+      typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : 'https://www.eventsbyyou.xyz';
+    const resolvedMsg = resolveEventMessage({
+      type: 'confirmation',
+      event: evt,
+      attendeeName: name,
+      ticketCode: finalCode,
+      originOverride: origin,
+      includeGuestInCameraUrl: true,
+    });
+    const smsCost = Math.max(1, calculateSmsCredits(resolvedMsg.text));
+    const owner = Object.values(db.users).find((u) => u.id === evt.organizerId);
+    let smsStatus: Attendee['smsStatus'] = 'Pending';
+    let smsCreditsUsed = 0;
+    let smsCreditsRemaining = owner?.profile.smsCredits ?? 0;
+    let smsSkippedReason: string | undefined;
+
+    if (owner && owner.profile.smsCredits >= smsCost) {
+      owner.profile.smsCredits -= smsCost;
+      smsStatus = 'Arkesel Sent';
+      smsCreditsUsed = smsCost;
+      smsCreditsRemaining = owner.profile.smsCredits;
+      evt.smsDispatched += 1;
+    } else {
+      smsSkippedReason = 'Organizer SMS bundle balance is 0 (no purchased SMS credits remaining).';
+    }
+
     const attendee: Attendee = {
       id: `att-${Date.now()}-${Math.floor(100 + Math.random() * 899)}`,
       eventId,
@@ -859,7 +888,7 @@ export async function localFallbackRequest<T>(
       tier: (body.tier as Attendee['tier']) || 'General',
       checkedIn: false,
       ticketCode: finalCode,
-      smsStatus: 'Pending',
+      smsStatus,
       paymentStatus: 'paid',
       validationGroup: body.validationGroup ? String(body.validationGroup).trim() : undefined,
       inviteCodeUsed: body.inviteCodeUsed ? String(body.inviteCodeUsed).trim() : undefined,
@@ -868,11 +897,16 @@ export async function localFallbackRequest<T>(
     };
     db.attendees.unshift(attendee);
     evt.registered += 1;
-    evt.smsDispatched += 1;
     evt.revenue += evt.ticketPrice;
     saveDb(db);
     const { organizerId: _org, ...cleanEvent } = evt;
-    return { attendee, event: cleanEvent } as T;
+    return {
+      attendee,
+      event: cleanEvent,
+      smsCreditsUsed,
+      smsCreditsRemaining,
+      smsSkippedReason,
+    } as T;
   }
 
   const publicLookupMatch = path.match(/^\/public\/events\/([^/]+)\/pass-lookup$/);
@@ -1124,8 +1158,12 @@ export async function localFallbackRequest<T>(
 
   if (method === 'PATCH' && path === '/studio/profile') {
     requireRoles(user, ['creator', 'organizer']);
-    const { appRole: _ignoreRole, phoneVerified: _ignoreVerified, ...safePatch } =
-      body as Partial<OrganizerProfile>;
+    const {
+      appRole: _ignoreRole,
+      phoneVerified: _ignoreVerified,
+      smsCredits: _ignoreSmsCredits,
+      ...safePatch
+    } = body as Partial<OrganizerProfile>;
     user.profile = { ...user.profile, ...safePatch };
     saveDb(db);
     return { profile: user.profile } as T;
@@ -1156,6 +1194,9 @@ export async function localFallbackRequest<T>(
     const parsedAmount = Number(body.amountGhs ?? 0);
     if (!Number.isFinite(parsedCredits) || parsedCredits < 10 || parsedCredits > 100000) {
       throw new LocalApiError('Bundle credits must be between 10 and 100,000 SMS.', 400);
+    }
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      throw new LocalApiError('Bundle purchase amount (GH₵) must be greater than 0.', 400);
     }
     const nextCredits = user.profile.smsCredits + parsedCredits;
     user.profile = { ...user.profile, smsCredits: nextCredits };
@@ -1245,17 +1286,17 @@ export async function localFallbackRequest<T>(
     if (!phoneCheck.ok) {
       throw new LocalApiError(phoneCheck.error, 400);
     }
-    const isSandbox = db.flags.smsMode === 'sandbox';
-    if (user.profile.smsCredits <= 0 && !isSandbox) {
-      throw new LocalApiError('No SMS credits remaining in your organizer balance.', 400);
+    if (user.profile.smsCredits < 1) {
+      throw new LocalApiError(
+        'No SMS credits remaining in your organizer balance. Purchase an SMS bundle first.',
+        402
+      );
     }
     const rawSender = String(body.senderId || user.profile.senderId || db.flags.arkeselSenderId || 'EVENTSAPP')
       .toUpperCase()
       .replace(/[^A-Z0-9]/g, '')
       .slice(0, 11) || 'EVENTSAPP';
-    const nextCredits = isSandbox
-      ? user.profile.smsCredits
-      : Math.max(0, user.profile.smsCredits - 1);
+    const nextCredits = Math.max(0, user.profile.smsCredits - 1);
     user.profile.smsCredits = nextCredits;
     saveDb(db);
     return {
@@ -1265,7 +1306,7 @@ export async function localFallbackRequest<T>(
       messageId: `loc-sms-${randomHex(4)}`,
       sandbox: true,
       warning:
-        'Browser local fallback mode is active (sandbox simulation). Connect live Node server with ARKESEL_API_KEY for real carrier delivery.',
+        'Browser local fallback mode is active (sandbox simulation). 1 SMS credit deducted from your bundle.',
       smsCredits: nextCredits,
     } as T;
   }
@@ -1323,34 +1364,53 @@ export async function localFallbackRequest<T>(
     const evt = db.events.find((e) => e.id === eventId && e.organizerId === user.id);
     if (!evt) throw new LocalApiError('Event not found.', 404);
     const payload = body as unknown as Attendee;
-    const att: Attendee = {
-      ...payload,
-      id: payload.id || `att-${Date.now()}-${randomHex(2)}`,
-      eventId,
-      phone: normalizePhoneE164(payload.phone || ''),
-    };
-    db.attendees.unshift(att);
-    evt.registered += 1;
-    evt.smsDispatched += 1;
-    evt.revenue += evt.ticketPrice;
-    saveDb(db);
+    const normalizedAttPhone = payload.phone ? normalizePhoneE164(payload.phone) : '';
     const resolved = resolveEventMessage({
-      type: att.checkedIn ? 'checkin' : 'confirmation',
+      type: payload.checkedIn ? 'checkin' : 'confirmation',
       event: evt,
-      attendeeName: att.name,
-      ticketCode: att.ticketCode,
+      attendeeName: payload.name,
+      ticketCode: payload.ticketCode,
       originOverride:
         typeof window !== 'undefined' && window.location?.origin
           ? window.location.origin
           : 'https://www.eventsbyyou.xyz',
       includeGuestInCameraUrl: true,
     });
+
+    const smsCost = normalizedAttPhone ? Math.max(1, calculateSmsCredits(resolved.text)) : 0;
+    let smsStatus: Attendee['smsStatus'] = 'Pending';
+    let smsCreditsUsed = 0;
+    let smsSkippedReason: string | undefined;
+
+    if (normalizedAttPhone && user.profile.smsCredits >= smsCost) {
+      user.profile.smsCredits -= smsCost;
+      smsCreditsUsed = smsCost;
+      smsStatus = 'Arkesel Sent';
+      evt.smsDispatched += 1;
+    } else if (normalizedAttPhone) {
+      smsSkippedReason = `Insufficient SMS credits (${user.profile.smsCredits} remaining, ${smsCost} needed). Purchase an SMS bundle to deliver pass SMS.`;
+    }
+
+    const att: Attendee = {
+      ...payload,
+      id: payload.id || `att-${Date.now()}-${randomHex(2)}`,
+      eventId,
+      phone: normalizedAttPhone,
+      smsStatus,
+    };
+    db.attendees.unshift(att);
+    evt.registered += 1;
+    evt.revenue += evt.ticketPrice;
+    saveDb(db);
     const { organizerId: _org, ...cleanEvent } = evt;
     return {
       attendee: att,
       event: cleanEvent,
       cameraUrl: resolved.cameraUrl,
       dispatchedMessage: resolved.text,
+      smsCredits: user.profile.smsCredits,
+      smsCreditsUsed,
+      smsSkippedReason,
     } as T;
   }
 
@@ -1493,10 +1553,17 @@ export async function localFallbackRequest<T>(
     if (evt) {
       evt.checkedIn = Math.max(0, evt.checkedIn + (att.checkedIn ? 1 : -1));
     }
-    saveDb(db);
-    const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://www.eventsbyyou.xyz';
+    const owner = (evt && Object.values(db.users).find((u) => u.id === evt.organizerId)) || user;
+    const origin =
+      typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : 'https://www.eventsbyyou.xyz';
     let cameraUrl: string | undefined;
     let dispatchedMessage: string | undefined;
+    let checkInSmsSent = false;
+    let smsCreditsUsed = 0;
+    let smsSkippedReason: string | undefined;
+
     if (att.checkedIn && evt) {
       const resolved = resolveEventMessage({
         type: 'checkin',
@@ -1508,12 +1575,26 @@ export async function localFallbackRequest<T>(
       });
       cameraUrl = resolved.cameraUrl;
       dispatchedMessage = resolved.text;
+      const smsCost = att.phone ? Math.max(1, calculateSmsCredits(resolved.text)) : 0;
+      if (att.phone && owner.profile.smsCredits >= smsCost) {
+        owner.profile.smsCredits -= smsCost;
+        smsCreditsUsed = smsCost;
+        checkInSmsSent = true;
+        evt.smsDispatched += 1;
+      } else if (att.phone) {
+        smsSkippedReason = `No SMS credits remaining (${owner.profile.smsCredits} left, ${smsCost} needed). Purchase an SMS bundle for check-in SMS.`;
+      }
     }
+    saveDb(db);
     return {
       attendee: att,
-      checkInMessageSent: Boolean(att.checkedIn && evt),
+      checkInMessageSent: checkInSmsSent,
+      checkInSmsSent,
       cameraUrl,
       dispatchedMessage,
+      smsCredits: owner.profile.smsCredits,
+      smsCreditsUsed,
+      smsSkippedReason,
     } as T;
   }
 
@@ -1547,10 +1628,26 @@ export async function localFallbackRequest<T>(
     if (recipients.length === 0) {
       throw new LocalApiError('No matching attendees found in your studio.', 404);
     }
+    const prepared = recipients.map((att) => {
+      const evt = db.events.find((e) => e.id === att.eventId)!;
+      const personalized = message
+        .replace(/\{name\}/gi, att.name)
+        .replace(/\{event\}/gi, evt.title)
+        .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode);
+      const smsCost = att.phone?.trim() ? calculateSmsCredits(personalized) : 0;
+      return { att, evt, smsCost };
+    });
+    const requiredSmsCredits = prepared.reduce((acc, item) => acc + item.smsCost, 0);
+    if (requiredSmsCredits > 0 && user.profile.smsCredits < requiredSmsCredits) {
+      throw new LocalApiError(
+        `Insufficient SMS bundle credits: you have ${user.profile.smsCredits.toLocaleString()} SMS remaining, but this broadcast requires ${requiredSmsCredits.toLocaleString()} SMS.`,
+        402
+      );
+    }
+    user.profile.smsCredits = Math.max(0, user.profile.smsCredits - requiredSmsCredits);
     const touchedIds = new Set<string>();
-    for (const att of recipients) {
-      const evt = db.events.find((e) => e.id === att.eventId);
-      if (evt) {
+    for (const { evt, smsCost } of prepared) {
+      if (smsCost > 0) {
         evt.smsDispatched += 1;
         touchedIds.add(evt.id);
       }
@@ -1563,6 +1660,8 @@ export async function localFallbackRequest<T>(
       ok: true,
       recipientCount: recipients.length,
       sentCount: recipients.length,
+      creditsUsed: requiredSmsCredits,
+      smsCredits: user.profile.smsCredits,
       events: updatedEvents,
     } as T;
   }

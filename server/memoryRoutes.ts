@@ -33,7 +33,7 @@ import {
   sendCheckInWelcomeEmail,
   sendEventPassEmail,
 } from './resend.ts';
-import { resolveEventMessage } from '../src/lib/eventMessages.ts';
+import { calculateSmsCredits, resolveEventMessage } from '../src/lib/eventMessages.ts';
 import {
   clearPendingSignup,
   consumePendingSignup,
@@ -654,14 +654,23 @@ export function createMemoryRouter() {
           })
         : null;
 
-      const [smsDelivery, emailDelivery] = await Promise.all([
-        dispatchOptionalArkeselSms(
-          normalizedPhone,
-          targetEvent?.title ?? 'Events App',
-          finalCode,
-          targetEvent?.senderId || orgDefaults.senderId,
-          resolvedMsg?.text
-        ),
+      const smsCost = Math.max(1, calculateSmsCredits(resolvedMsg?.text || `${targetEvent?.title ?? 'Event'} pass ${finalCode}`));
+      const hasCredits = Boolean(orgDefaults.organizerId && orgDefaults.smsCredits >= smsCost);
+      let smsDelivery: Attendee['smsStatus'] = 'Pending';
+      let smsCreditsUsed = 0;
+      let smsCreditsRemaining = orgDefaults.smsCredits;
+      let smsSkippedReason: string | undefined;
+
+      const [smsResult, emailDelivery] = await Promise.all([
+        hasCredits
+          ? dispatchOptionalArkeselSms(
+              normalizedPhone,
+              targetEvent?.title ?? 'Events App',
+              finalCode,
+              targetEvent?.senderId || orgDefaults.senderId,
+              resolvedMsg?.text
+            )
+          : Promise.resolve('Pending' as const),
         isResendConfigured() && targetEvent
           ? sendEventPassEmail({
               to: email.trim(),
@@ -680,6 +689,21 @@ export function createMemoryRouter() {
             })
           : Promise.resolve({ ok: false, skipped: true }),
       ]);
+
+      if (!hasCredits) {
+        smsSkippedReason = 'Organizer SMS bundle balance is 0 (no purchased SMS credits remaining).';
+      } else if (smsResult === 'Arkesel Sent' && orgDefaults.organizerId) {
+        const debit = memoryStore.consumeSmsCredits(orgDefaults.organizerId, smsCost);
+        if (debit.ok) {
+          smsDelivery = 'Arkesel Sent';
+          smsCreditsUsed = smsCost;
+          smsCreditsRemaining = debit.remaining;
+        } else {
+          smsCreditsRemaining = debit.remaining;
+          smsSkippedReason = 'Organizer SMS bundle balance is insufficient.';
+        }
+      }
+
       const hasLiveArkesel = Boolean((process.env.ARKESEL_API_KEY || '').trim()) && platformRuntime.flags.smsMode !== 'sandbox';
       const finalDeliveryStatus: Attendee['smsStatus'] =
         emailDelivery.ok && (!hasLiveArkesel || smsDelivery === 'Pending')
@@ -696,12 +720,18 @@ export function createMemoryRouter() {
         tier,
         ticketCode: finalCode,
         smsStatus: finalDeliveryStatus,
+        smsCreditsUsed,
         validationGroup,
         inviteCodeUsed,
         giftEntry,
         customResponses,
       });
-      return res.status(201).json(result);
+      return res.status(201).json({
+        ...result,
+        smsCreditsUsed,
+        smsCreditsRemaining,
+        smsSkippedReason,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Registration failed.';
       if (msg.includes('QR_PASS_NOT_PUBLISHED:')) {
@@ -852,8 +882,10 @@ export function createMemoryRouter() {
     }
     try {
       const currentProfile = req.memoryUser!.profile;
-      if (currentProfile.smsCredits <= 0 && platformRuntime.flags.smsMode !== 'sandbox') {
-        return res.status(400).json({ error: 'No SMS credits remaining in your organizer balance.' });
+      if (currentProfile.smsCredits < 1) {
+        return res.status(402).json({
+          error: 'Insufficient SMS credits (0 remaining). Purchase an SMS bundle in Plan & Credits to send SMS.',
+        });
       }
       const testCode = String(Math.floor(100000 + Math.random() * 899999));
       const dispatch = await sendArkeselSmsOtp({
@@ -865,13 +897,7 @@ export function createMemoryRouter() {
       if (!dispatch.ok) {
         return res.status(400).json({ error: dispatch.error || 'Arkesel SMS test dispatch failed.' });
       }
-      let nextCredits = currentProfile.smsCredits;
-      if (!dispatch.sandbox) {
-        const updated = memoryStore.updateProfile(req.user!.id, {
-          smsCredits: Math.max(0, currentProfile.smsCredits - 1),
-        });
-        nextCredits = updated.smsCredits;
-      }
+      const debit = memoryStore.consumeSmsCredits(req.user!.id, 1);
       return res.json({
         ok: true,
         phone: phoneCheck.normalized,
@@ -879,7 +905,7 @@ export function createMemoryRouter() {
         messageId: dispatch.messageId,
         sandbox: Boolean(dispatch.sandbox),
         warning: dispatch.warning,
-        smsCredits: nextCredits,
+        smsCredits: debit.remaining,
       });
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : 'SMS test failed.' });
@@ -925,15 +951,12 @@ export function createMemoryRouter() {
     if (!Number.isFinite(parsedCredits) || parsedCredits < 10 || parsedCredits > 100000) {
       return res.status(400).json({ error: 'Bundle credits must be between 10 and 100,000 SMS.' });
     }
-    if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
-      return res.status(400).json({ error: 'Invalid bundle price amount.' });
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ error: 'Bundle purchase amount (GH₵) must be greater than 0.' });
     }
 
-    const currentProfile = req.memoryUser!.profile;
-    const nextCredits = currentProfile.smsCredits + parsedCredits;
-    const updatedProfile = memoryStore.updateProfile(req.user!.id, {
-      smsCredits: nextCredits,
-    });
+    const updatedProfile = memoryStore.addSmsCredits(req.user!.id, parsedCredits);
+    const nextCredits = updatedProfile.smsCredits;
     const senderInfo = platformRuntime.getEffectiveArkeselSenderId(updatedProfile.senderId);
     const bal = await fetchArkeselGatewayBalance();
     const cleanRef = (arkeselReference || '').trim() || `ARK-${Date.now().toString(36).toUpperCase()}`;
@@ -1076,8 +1099,15 @@ export function createMemoryRouter() {
         includeGuestInCameraUrl: true,
       });
 
-      await Promise.all([
-        result.attendee.phone
+      const smsCost = Math.max(1, calculateSmsCredits(resolvedMsg.text));
+      const availableCredits = memoryStore.getSmsCredits(req.user!.id);
+      const canSendSms = Boolean(result.attendee.phone && availableCredits >= smsCost);
+      let smsCreditsUsed = 0;
+      let smsCreditsRemaining = availableCredits;
+      let smsSkippedReason: string | undefined;
+
+      const [smsDelivery, emailDelivery] = await Promise.all([
+        canSendSms
           ? dispatchOptionalArkeselSms(
               result.attendee.phone,
               result.event.title,
@@ -1118,10 +1148,39 @@ export function createMemoryRouter() {
               })
           : Promise.resolve({ ok: false, skipped: true }),
       ]);
+
+      if (result.attendee.phone && !canSendSms) {
+        smsSkippedReason = `Insufficient SMS credits (${availableCredits} remaining, ${smsCost} needed). Purchase an SMS bundle to deliver pass SMS.`;
+      } else if (smsDelivery === 'Arkesel Sent') {
+        const debit = memoryStore.consumeSmsCredits(req.user!.id, smsCost);
+        if (debit.ok) {
+          smsCreditsUsed = smsCost;
+          smsCreditsRemaining = debit.remaining;
+          memoryStore.incrementEventSmsDispatched(req.params.eventId, 1);
+        }
+      }
+
+      const hasLiveArkesel = Boolean((process.env.ARKESEL_API_KEY || '').trim()) && platformRuntime.flags.smsMode !== 'sandbox';
+      const resolvedSmsStatus: Attendee['smsStatus'] =
+        smsCreditsUsed > 0
+          ? 'Arkesel Sent'
+          : emailDelivery.ok && (!hasLiveArkesel || smsDelivery === 'Pending')
+            ? 'Resend Delivered'
+            : 'Pending';
+      const updatedAtt = memoryStore.setAttendeeSmsStatus(result.attendee.id, resolvedSmsStatus) ?? {
+        ...result.attendee,
+        smsStatus: resolvedSmsStatus,
+      };
+      const updatedEvt = memoryStore.getAnyEventBySlugOrId(req.params.eventId) ?? result.event;
+
       return res.status(201).json({
-        ...result,
+        attendee: updatedAtt,
+        event: updatedEvt,
         cameraUrl: resolvedMsg.cameraUrl,
         dispatchedMessage: resolvedMsg.text,
+        smsCredits: smsCreditsRemaining,
+        smsCreditsUsed,
+        smsSkippedReason,
       });
     } catch (err) {
       const status = (err as Error & { status?: number }).status || 400;
@@ -1149,12 +1208,19 @@ export function createMemoryRouter() {
     try {
       const attendee = memoryStore.toggleCheckIn(req.user!.id, req.params.id);
       let checkInMessageSent = false;
+      let checkInSmsSent = false;
       let cameraUrl: string | undefined;
       let dispatchedMessage: string | undefined;
+      let smsCredits = memoryStore.getSmsCredits(req.user!.id);
+      let smsCreditsUsed = 0;
+      let smsSkippedReason: string | undefined;
 
       if (attendee.checkedIn) {
         const evt = memoryStore.getAnyEventBySlugOrId(attendee.eventId);
         if (evt) {
+          const orgDefaults = memoryStore.getEventOrganizerDefaults(evt.id);
+          const orgId = orgDefaults.organizerId || req.user!.id;
+          smsCredits = orgDefaults.organizerId ? orgDefaults.smsCredits : smsCredits;
           const requestOrigin = (process.env.APP_URL || '').trim().replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
           const resolved = resolveEventMessage({
             type: 'checkin',
@@ -1166,13 +1232,16 @@ export function createMemoryRouter() {
           });
           cameraUrl = resolved.cameraUrl;
           dispatchedMessage = resolved.text;
-          await Promise.all([
-            attendee.phone
+
+          const smsCost = Math.max(1, calculateSmsCredits(resolved.text));
+          const canSendSms = Boolean(attendee.phone && smsCredits >= smsCost);
+          const [smsRes, emailRes] = await Promise.all([
+            canSendSms
               ? dispatchOptionalArkeselSms(
                   attendee.phone,
                   evt.title,
                   attendee.ticketCode,
-                  evt.senderId || req.memoryUser?.profile.senderId,
+                  evt.senderId || orgDefaults.senderId || req.memoryUser?.profile.senderId,
                   resolved.text
                 )
               : Promise.resolve('Pending' as const),
@@ -1188,15 +1257,36 @@ export function createMemoryRouter() {
                   organizerName: evt.organizer,
                   welcomeMessage: resolved.text,
                   cameraUrl: resolved.cameraUrl,
-                  replyTo: req.memoryUser?.profile.replyToEmail,
+                  replyTo: orgDefaults.replyToEmail || req.memoryUser?.profile.replyToEmail,
                 })
               : Promise.resolve({ ok: false, skipped: true }),
           ]);
-          checkInMessageSent = true;
+
+          if (attendee.phone && !canSendSms) {
+            smsSkippedReason = `No SMS credits remaining (${smsCredits} left, ${smsCost} needed). Purchase an SMS bundle for check-in SMS.`;
+          } else if (smsRes === 'Arkesel Sent') {
+            const debit = memoryStore.consumeSmsCredits(orgId, smsCost);
+            if (debit.ok) {
+              smsCreditsUsed = smsCost;
+              smsCredits = debit.remaining;
+              checkInSmsSent = true;
+              memoryStore.incrementEventSmsDispatched(evt.id, 1);
+            }
+          }
+          checkInMessageSent = checkInSmsSent || Boolean(emailRes.ok);
         }
       }
 
-      return res.json({ attendee, checkInMessageSent, cameraUrl, dispatchedMessage });
+      return res.json({
+        attendee,
+        checkInMessageSent,
+        checkInSmsSent,
+        cameraUrl,
+        dispatchedMessage,
+        smsCredits,
+        smsCreditsUsed,
+        smsSkippedReason,
+      });
     } catch (err) {
       return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to toggle check-in.' });
     }
@@ -1208,6 +1298,111 @@ export function createMemoryRouter() {
       return res.json({ attendee });
     } catch (err) {
       return res.status(400).json({ error: err instanceof Error ? err.message : 'Payment retry failed.' });
+    }
+  });
+
+  router.post('/studio/broadcast', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    const { attendeeIds, message } = req.body as {
+      eventId?: string;
+      attendeeIds?: string[];
+      message?: string;
+    };
+    const cleanMessage = (message || '').trim();
+    if (!cleanMessage) {
+      return res.status(400).json({ error: 'Broadcast message text is required.' });
+    }
+    if (!Array.isArray(attendeeIds) || attendeeIds.length === 0) {
+      return res.status(400).json({ error: 'Select at least one recipient for the broadcast.' });
+    }
+    try {
+      const { attendees: ownedAttendees, eventById } = memoryStore.broadcastOwnedAttendees(
+        req.user!.id,
+        attendeeIds
+      );
+      if (ownedAttendees.length === 0) {
+        return res.status(404).json({ error: 'No matching attendees found in your studio.' });
+      }
+      const requestOrigin = (process.env.APP_URL || '').trim().replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
+      const prepared = ownedAttendees.map((att) => {
+        const evtMapped = eventById.get(att.eventId)!;
+        const personalizedText = cleanMessage
+          .replace(/\{name\}/gi, att.name)
+          .replace(/\{event\}/gi, evtMapped.title)
+          .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode);
+        const smsCost = att.phone ? calculateSmsCredits(personalizedText) : 0;
+        const cameraUrl = `${requestOrigin}/e/${encodeURIComponent(evtMapped.slug || evtMapped.id)}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
+        return { att, evtMapped, personalizedText, smsCost, cameraUrl };
+      });
+      const requiredSmsCredits = prepared.reduce((acc, item) => acc + item.smsCost, 0);
+      const currentCredits = memoryStore.getSmsCredits(req.user!.id);
+      if (requiredSmsCredits > 0 && currentCredits < requiredSmsCredits) {
+        return res.status(402).json({
+          error: `Insufficient SMS bundle credits: you have ${currentCredits.toLocaleString()} SMS remaining, but this broadcast requires ${requiredSmsCredits.toLocaleString()} SMS.`,
+        });
+      }
+
+      const countsByEvent = new Map<string, number>();
+      let sentCount = 0;
+      let totalCreditsUsed = 0;
+
+      await Promise.all(
+        prepared.map(async ({ att, evtMapped, personalizedText, smsCost, cameraUrl }) => {
+          const [smsRes, emailRes] = await Promise.all([
+            att.phone && smsCost > 0
+              ? dispatchOptionalArkeselSms(
+                  normalizePhoneE164(att.phone),
+                  evtMapped.title,
+                  att.ticketCode,
+                  evtMapped.senderId || req.memoryUser?.profile.senderId,
+                  personalizedText
+                )
+              : Promise.resolve('Pending' as const),
+            isResendConfigured() && att.email?.includes('@')
+              ? sendCheckInWelcomeEmail({
+                  to: att.email.trim(),
+                  attendeeName: att.name,
+                  eventTitle: evtMapped.title,
+                  eventDate: evtMapped.date,
+                  eventVenue: evtMapped.venue,
+                  eventCity: evtMapped.city,
+                  ticketCode: att.ticketCode,
+                  organizerName: evtMapped.organizer,
+                  welcomeMessage: personalizedText,
+                  cameraUrl,
+                  replyTo: req.memoryUser?.profile.replyToEmail,
+                })
+              : Promise.resolve({ ok: false, skipped: true }),
+          ]);
+          if (smsRes === 'Arkesel Sent') {
+            totalCreditsUsed += smsCost;
+            countsByEvent.set(att.eventId, (countsByEvent.get(att.eventId) ?? 0) + 1);
+          }
+          if (smsRes !== 'Pending' || emailRes.ok) {
+            sentCount += 1;
+          }
+        })
+      );
+
+      if (totalCreditsUsed > 0) {
+        memoryStore.consumeSmsCredits(req.user!.id, totalCreditsUsed);
+      }
+      const updatedEvents: EventItem[] = [];
+      for (const [evtId, count] of countsByEvent.entries()) {
+        const updated = memoryStore.incrementEventSmsDispatched(evtId, count);
+        if (updated) updatedEvents.push(updated);
+      }
+      const remainingCredits = memoryStore.getSmsCredits(req.user!.id);
+
+      return res.json({
+        ok: true,
+        recipientCount: ownedAttendees.length,
+        sentCount,
+        creditsUsed: totalCreditsUsed,
+        smsCredits: remainingCredits,
+        events: updatedEvents,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'Broadcast dispatch failed.' });
     }
   });
 

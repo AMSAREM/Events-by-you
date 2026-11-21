@@ -44,6 +44,7 @@ import {
 } from '../data/initialData';
 import {
   buildCameraLinkForOrigin,
+  calculateSmsCredits,
   getDefaultMessageConfig,
   resolveEventMessage,
 } from '../lib/eventMessages';
@@ -83,6 +84,17 @@ interface EventWorkspaceScreenProps {
   onPreviewPublicEvent: (focus?: 'top' | 'checkin' | 'gifts') => void;
   onToggleCheckIn: (attendeeId: string) => void;
   onRegisterAttendee?: (eventId: string, attendee: Attendee) => void;
+  onBroadcast?: (payload: {
+    eventId?: string;
+    attendeeIds: string[];
+    message: string;
+  }) => Promise<{
+    ok: boolean;
+    recipientCount: number;
+    sentCount: number;
+    creditsUsed?: number;
+    smsCredits?: number;
+  }>;
   onRecordGiftEntry?: (
     eventId: string,
     gift: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
@@ -124,6 +136,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   onPreviewPublicEvent,
   onToggleCheckIn,
   onRegisterAttendee,
+  onBroadcast,
   onRecordGiftEntry,
   onCreateGiftAttendantLink,
   onToggleGiftAttendantLink,
@@ -1928,36 +1941,79 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
               </div>
 
               {/* Flow 3: Post-Event Thank You */}
-              <div className="p-3.5 bg-white rounded-2xl">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-semibold text-[#0B0B0B]">
-                    Post-Event Thank You
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-[11px] font-medium">
-                    Send-once guard
-                  </span>
-                </div>
-                <p className="text-[11px] text-[#71717A] tabular-nums">
-                  Target: {totalRegistered} recipients · Cost: {totalRegistered} credits
-                </p>
-                <div className="mt-3 flex items-center justify-between">
-                  <span className="text-[11px] text-[#71717A]">
-                    Status: {thankYouSent ? 'Queued via Arkesel' : 'Paused'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setThankYouSent(true);
-                      void handleSaveMessageSettings(
-                        `Post-event broadcast queued for ${totalRegistered} guests`
-                      );
-                    }}
-                    className="px-3 py-1.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:opacity-90"
-                  >
-                    {thankYouSent ? 'Queued ✓' : 'Setup Broadcast'}
-                  </button>
-                </div>
-              </div>
+              {(() => {
+                const phoneRecipients = eventAttendees.filter((a) => Boolean(a.phone?.trim()));
+                const thankYouSegments = calculateSmsCredits(thankYouTemplate);
+                const thankYouCost = phoneRecipients.length * Math.max(1, thankYouSegments);
+                const hasThankYouCredits = profile.smsCredits >= thankYouCost;
+                return (
+                  <div className="p-3.5 bg-white rounded-2xl">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold text-[#0B0B0B]">
+                        Post-Event Thank You
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-[11px] font-medium tabular-nums">
+                        {profile.smsCredits.toLocaleString()} credits left
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[#71717A] tabular-nums">
+                      Target: {phoneRecipients.length} phone recipients · Cost: {thankYouCost.toLocaleString()} SMS credits
+                    </p>
+                    <div className="mt-3 flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-[#71717A]">
+                        Status:{' '}
+                        {thankYouSent
+                          ? 'Dispatched'
+                          : phoneRecipients.length === 0
+                            ? 'No recipients yet'
+                            : hasThankYouCredits
+                              ? 'Ready to send'
+                              : 'Insufficient credits'}
+                      </span>
+                      {!hasThankYouCredits && thankYouCost > 0 ? (
+                        <button
+                          type="button"
+                          onClick={onOpenPlans}
+                          className="px-3 py-1.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:opacity-90"
+                        >
+                          Buy SMS Bundle
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={savingMessages || thankYouSent || phoneRecipients.length === 0}
+                          onClick={async () => {
+                            if (phoneRecipients.length === 0) return;
+                            try {
+                              await handleSaveMessageSettings('Message templates saved');
+                              if (onBroadcast) {
+                                const res = await onBroadcast({
+                                  eventId: event.id,
+                                  attendeeIds: eventAttendees.map((a) => a.id),
+                                  message: thankYouTemplate,
+                                });
+                                setThankYouSent(true);
+                                triggerToast(
+                                  `Thank-you broadcast sent to ${res.sentCount} guests (${(res.creditsUsed ?? thankYouCost).toLocaleString()} SMS credits deducted)`
+                                );
+                              } else {
+                                triggerToast('Thank-you template saved');
+                              }
+                            } catch (err) {
+                              triggerToast(
+                                err instanceof Error ? err.message : 'Unable to send thank-you broadcast'
+                              );
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:opacity-90 disabled:opacity-45 disabled:cursor-not-allowed"
+                        >
+                          {thankYouSent ? 'Dispatched ✓' : 'Send Broadcast'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </section>
 

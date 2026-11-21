@@ -312,7 +312,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                 <p className="text-sm text-[#444748] mb-8 max-w-xl leading-relaxed">
                   Create your free individual or organiser account. A 6-digit verification code is
                   sent to both your phone via Arkesel SMS and your email via Resend before your
-                  account and 20 free SMS credits are provisioned.
+                  account is provisioned. Top up any Arkesel SMS bundle inside Billing to dispatch guest SMS.
                 </p>
 
                 <form onSubmit={handleSubmit} className="space-y-5">
