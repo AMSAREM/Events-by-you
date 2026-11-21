@@ -15,14 +15,42 @@ import type {
 import { isSyntheticPhoneEmail } from './phoneAuth.ts';
 import { normalizeHexColor } from '../src/lib/themeColors.ts';
 
+function cleanEnvValue(raw: string | undefined): string {
+  if (!raw) return '';
+  return raw.trim().replace(/^['"]|['"]$/g, '').trim();
+}
+
+function isNewFormatSupabaseKey(key: string): boolean {
+  return key.startsWith('sb_publishable_') || key.startsWith('sb_secret_');
+}
+
+function createSupabaseSafeFetch(apiKey: string): typeof fetch | undefined {
+  if (!isNewFormatSupabaseKey(apiKey)) return undefined;
+  return async (input, init) => {
+    const headers = new Headers(init?.headers);
+    const authHeader = headers.get('Authorization') || headers.get('authorization');
+    if (authHeader && authHeader.trim() === `Bearer ${apiKey}`) {
+      headers.delete('Authorization');
+      headers.delete('authorization');
+    }
+    if (!headers.has('apikey')) {
+      headers.set('apikey', apiKey);
+    }
+    return fetch(input, { ...init, headers });
+  };
+}
+
 export function getSupabaseConfig() {
-  const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
-  const anonKey = (
+  const url = cleanEnvValue(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
+  const anonKey = cleanEnvValue(
     process.env.SUPABASE_ANON_KEY ||
-    process.env.VITE_SUPABASE_ANON_KEY ||
-    ''
-  ).trim();
-  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+      process.env.VITE_SUPABASE_ANON_KEY ||
+      process.env.SUPABASE_PUBLISHABLE_KEY ||
+      process.env.VITE_SUPABASE_PUBLISHABLE_KEY
+  );
+  const serviceRoleKey = cleanEnvValue(
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY
+  );
   return { url, anonKey, serviceRoleKey };
 }
 
@@ -38,7 +66,9 @@ export function createPublicSupabaseClient(): SupabaseClient {
       'Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in your environment.'
     );
   }
+  const safeFetch = createSupabaseSafeFetch(anonKey);
   return createClient(url, anonKey, {
+    ...(safeFetch ? { global: { fetch: safeFetch } } : {}),
     auth: {
       autoRefreshToken: false,
       persistSession: false,
@@ -54,10 +84,17 @@ export function createUserSupabaseClient(accessToken: string): SupabaseClient {
       'Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in your environment.'
     );
   }
+  const cleanToken = accessToken
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/^Bearer\s+/i, '')
+    .trim();
+  const safeFetch = createSupabaseSafeFetch(anonKey);
   return createClient(url, anonKey, {
     global: {
+      ...(safeFetch ? { fetch: safeFetch } : {}),
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${cleanToken}`,
       },
     },
     auth: {
@@ -71,7 +108,9 @@ export function createUserSupabaseClient(accessToken: string): SupabaseClient {
 export function createServiceSupabaseClient(): SupabaseClient | null {
   const { url, serviceRoleKey } = getSupabaseConfig();
   if (!url || !serviceRoleKey) return null;
+  const safeFetch = createSupabaseSafeFetch(serviceRoleKey);
   return createClient(url, serviceRoleKey, {
+    ...(safeFetch ? { global: { fetch: safeFetch } } : {}),
     auth: {
       autoRefreshToken: false,
       persistSession: false,
@@ -92,13 +131,13 @@ export function mapProfileRow(row: Record<string, unknown>, fallbackEmail = ''):
     : '';
   const isCreatorEmail = Boolean(email) && email.trim().toLowerCase() === creatorEmail;
   const isCreatorPhone = Boolean(creatorPhone && phone && normalizePhoneE164(phone) === creatorPhone);
+  const isPrimaryCreator = isCreatorEmail || isCreatorPhone;
   const rawAppRole = row.app_role != null ? String(row.app_role) : undefined;
-  const appRole: AppRole =
-    rawAppRole === 'creator' || rawAppRole === 'organizer' || rawAppRole === 'gate_staff'
-      ? rawAppRole
-      : isCreatorEmail || isCreatorPhone
-        ? 'creator'
-        : 'organizer';
+  const appRole: AppRole = isPrimaryCreator
+    ? 'creator'
+    : rawAppRole === 'gate_staff'
+      ? 'gate_staff'
+      : 'organizer';
   return {
     name,
     firstName: String(row.first_name ?? (name.split(' ')[0] || 'Organiser')),

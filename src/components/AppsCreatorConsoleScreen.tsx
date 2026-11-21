@@ -384,7 +384,20 @@ export const AppsCreatorConsoleScreen: React.FC<AppsCreatorConsoleScreenProps> =
     }
   };
 
-  const handleUpdateRole = async (userId: string, appRole: AppRole) => {
+  const handleUpdateRole = async (
+    userId: string,
+    appRole: Extract<AppRole, 'organizer' | 'gate_staff'> | AppRole
+  ) => {
+    if (appRole === 'creator') {
+      setBuilderError(
+        'The creator role is exclusive to the platform owner and cannot be assigned to any other user.'
+      );
+      return;
+    }
+    if (appRole !== 'organizer' && appRole !== 'gate_staff') {
+      setBuilderError('Invalid RBAC role.');
+      return;
+    }
     setActionBusyId(`role-${userId}`);
     setBuilderError(null);
     try {
@@ -1727,17 +1740,27 @@ const { attendee, event } = await response.json();`;
                         </p>
                       </td>
                       <td className="py-3.5 px-4 align-top">
-                        <select
-                          aria-label={`RBAC role for ${tenant.email}`}
-                          value={tenant.appRole}
-                          disabled={actionBusyId === `role-${tenant.id}`}
-                          onChange={(e) => handleUpdateRole(tenant.id, e.target.value as AppRole)}
-                          className="h-8 px-2.5 rounded-lg border border-[#E5E5EA] bg-white font-mono text-xs text-[#0B0B0B]"
-                        >
-                          <option value="organizer">organizer</option>
-                          <option value="gate_staff">gate_staff</option>
-                          <option value="creator">creator</option>
-                        </select>
+                        {tenant.appRole === 'creator' ? (
+                          <span className="inline-flex items-center h-8 px-2.5 rounded-lg border border-[#0B0B0B]/15 bg-[#0B0B0B] text-white font-mono text-xs">
+                            creator (Owner)
+                          </span>
+                        ) : (
+                          <select
+                            aria-label={`RBAC role for ${tenant.email}`}
+                            value={tenant.appRole === 'gate_staff' ? 'gate_staff' : 'organizer'}
+                            disabled={actionBusyId === `role-${tenant.id}`}
+                            onChange={(e) =>
+                              handleUpdateRole(
+                                tenant.id,
+                                e.target.value as Extract<AppRole, 'organizer' | 'gate_staff'>
+                              )
+                            }
+                            className="h-8 px-2.5 rounded-lg border border-[#E5E5EA] bg-white font-mono text-xs text-[#0B0B0B]"
+                          >
+                            <option value="organizer">organizer</option>
+                            <option value="gate_staff">gate_staff</option>
+                          </select>
+                        )}
                       </td>
                       <td className="py-3.5 px-4 align-top">
                         <select

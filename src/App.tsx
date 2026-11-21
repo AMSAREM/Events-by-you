@@ -23,6 +23,7 @@ import type {
   WebhookTriggerEvent,
 } from './types/events';
 import {
+  ApiError,
   api,
   extractSessionFromUrlHash,
   getStoredCreatorToken,
@@ -360,13 +361,20 @@ export default function App() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unable to load workspace from Supabase.';
       const lower = msg.toLowerCase();
-      if (
+      const isAuthFailure =
+        (err instanceof ApiError && (err.status === 401 || err.code === 'INVALID_SESSION_TOKEN')) ||
         lower.includes('session') ||
         lower.includes('authentication') ||
+        lower.includes('invalid jwt') ||
+        lower.includes('token is malformed') ||
+        lower.includes('invalid number of segment') ||
+        lower.includes('expired') ||
         lower.includes('timed out') ||
-        lower.includes('inactivity')
-      ) {
+        lower.includes('inactivity');
+      if (isAuthFailure) {
         saveStoredSession(null);
+        saveStoredCreatorToken(null);
+        setCreatorUnlocked(false);
         setIsSignedIn(false);
         if (lower.includes('timed out') || lower.includes('inactivity')) {
           setSessionTimeoutNotice(
@@ -1521,8 +1529,11 @@ export default function App() {
   };
 
   const effectiveRole: AppRole =
-    profile.appRole ??
-    (profile.email?.toLowerCase() === creatorEmail.toLowerCase() ? 'creator' : 'organizer');
+    profile.email?.toLowerCase() === creatorEmail.toLowerCase()
+      ? 'creator'
+      : profile.appRole === 'gate_staff'
+        ? 'gate_staff'
+        : 'organizer';
   const hasSetEvent = isSignedIn && safeEvents.length > 0;
   const unresolvedCount = safeAlerts.filter((a) => !a.resolved).length;
   const landingEvents =

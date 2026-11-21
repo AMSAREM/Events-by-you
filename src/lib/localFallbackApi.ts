@@ -315,7 +315,10 @@ function getAuthenticatedUser(db: LocalDatabase, accessToken?: string | null): L
 }
 
 function getEffectiveRole(user: LocalUser): AppRole {
-  return user.profile.appRole ?? (user.email.toLowerCase() === CREATOR_EMAIL ? 'creator' : 'organizer');
+  if (user.email.trim().toLowerCase() === CREATOR_EMAIL) {
+    return 'creator';
+  }
+  return user.profile.appRole === 'gate_staff' ? 'gate_staff' : 'organizer';
 }
 
 function requireRoles(user: LocalUser, allowed: AppRole[]): void {
@@ -2611,7 +2614,21 @@ export async function localFallbackRequest<T>(
         return { tenant: buildTenantSummary(db, targetUser) } as T;
       }
       if (action === 'role' && method === 'POST') {
-        targetUser.profile.appRole = body.appRole as AppRole;
+        const nextRole = body.appRole as AppRole;
+        if (nextRole === 'creator') {
+          throw new LocalApiError(
+            'The creator role is exclusive to the platform owner and cannot be assigned to any other user.',
+            403
+          );
+        }
+        if (nextRole !== 'organizer' && nextRole !== 'gate_staff') {
+          throw new LocalApiError('Invalid RBAC role.', 400);
+        }
+        if (targetUser.email.trim().toLowerCase() === CREATOR_EMAIL) {
+          throw new LocalApiError('The primary creator account role cannot be modified.', 403);
+        }
+        targetUser.profile.appRole = nextRole;
+        targetUser.profile.role = nextRole === 'gate_staff' ? 'Gate Check-In Staff' : 'Lead Organiser';
         saveDb(db);
         return { tenant: buildTenantSummary(db, targetUser) } as T;
       }

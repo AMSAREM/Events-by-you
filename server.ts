@@ -56,8 +56,11 @@ import type {
 } from './src/types/events.ts';
 import {
   dispatchOptionalArkeselSms,
+  formatSupabaseAuthError,
   getBearerToken,
   getCreatorCredentials,
+  isPrimaryCreatorIdentity,
+  isValidJwtFormat,
   requireCreatorVerification,
   requireRole,
   requireVerifiedPhoneIfSet,
@@ -583,11 +586,22 @@ async function requireSupabaseAuth(req: AuthedRequest, res: Response, next: Next
     return res.status(401).json({ error: 'Authentication required. Please sign in.' });
   }
 
+  if (!isValidJwtFormat(token)) {
+    return res.status(401).json({
+      error: 'Your session token is invalid or from an offline workspace. Please sign in again.',
+      code: 'INVALID_SESSION_TOKEN',
+    });
+  }
+
   try {
     const publicClient = createPublicSupabaseClient();
     const { data, error } = await publicClient.auth.getUser(token);
     if (error || !data.user) {
-      return res.status(401).json({ error: error?.message || 'Session expired. Please sign in again.' });
+      const formatted = formatSupabaseAuthError(error?.message);
+      return res.status(401).json({
+        error: formatted.error,
+        ...(formatted.isMalformedJwt ? { code: 'INVALID_SESSION_TOKEN' } : {}),
+      });
     }
     req.accessToken = token;
     req.user = data.user;
@@ -609,14 +623,16 @@ async function requireSupabaseAuth(req: AuthedRequest, res: Response, next: Next
       prof = legacyRes.data as Record<string, unknown> | null;
     }
     const dbRole = prof?.app_role;
-    if (dbRole === 'creator' || dbRole === 'organizer' || dbRole === 'gate_staff') {
-      req.appRole = dbRole;
-    }
     const rawPhone =
       (typeof prof?.phone === 'string' && prof.phone.trim()) ||
       (typeof data.user.phone === 'string' && data.user.phone.trim()) ||
       (typeof data.user.user_metadata?.phone === 'string' && data.user.user_metadata.phone.trim()) ||
       '';
+    req.appRole = isPrimaryCreatorIdentity(data.user.email, rawPhone)
+      ? 'creator'
+      : dbRole === 'gate_staff'
+        ? 'gate_staff'
+        : 'organizer';
     if (rawPhone) {
       req.userPhone = normalizePhoneE164(rawPhone);
       req.phoneVerified = Boolean(
@@ -627,8 +643,12 @@ async function requireSupabaseAuth(req: AuthedRequest, res: Response, next: Next
     }
     return next();
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unable to verify session';
-    return res.status(401).json({ error: message });
+    const rawMsg = err instanceof Error ? err.message : 'Unable to verify session';
+    const formatted = formatSupabaseAuthError(rawMsg);
+    return res.status(401).json({
+      error: formatted.error,
+      ...(formatted.isMalformedJwt ? { code: 'INVALID_SESSION_TOKEN' } : {}),
+    });
   }
 }
 
@@ -2071,6 +2091,16 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       return res.status(400).json({ error: pwCheck.error });
     }
     try {
+      const svc = createServiceSupabaseClient();
+      if (svc && req.user?.id) {
+        const { error: adminErr } = await svc.auth.admin.updateUserById(req.user.id, {
+          password: password!,
+        });
+        if (adminErr) {
+          return res.status(400).json({ error: adminErr.message });
+        }
+        return res.json({ ok: true });
+      }
       const { error } = await req.supabase!.auth.updateUser({ password: password! });
       if (error) {
         return res.status(400).json({ error: error.message });

@@ -488,12 +488,24 @@ function buildTenantSummary(user: MemoryUser): BuilderTenantSummary {
   const shots = Array.from(db.disposableShots.values()).filter((s) => evtIds.has(s.eventId));
   const storageBytes = shots.reduce((acc, s) => acc + estimateShotBytes(s.dataUrl), 0);
 
+  const creatorEmail = (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase();
+  const creatorPhone = (process.env.CREATOR_PHONE || '').trim()
+    ? normalizePhoneE164((process.env.CREATOR_PHONE || '').trim())
+    : '';
+  const isPrimaryCreator =
+    user.email.trim().toLowerCase() === creatorEmail ||
+    Boolean(creatorPhone && user.profile.phone && normalizePhoneE164(user.profile.phone) === creatorPhone);
+
   return {
     id: user.id,
     name: user.profile.name,
     email: user.email,
     studio: user.profile.studio,
-    appRole: user.profile.appRole ?? 'organizer',
+    appRole: isPrimaryCreator
+      ? 'creator'
+      : user.profile.appRole === 'gate_staff'
+        ? 'gate_staff'
+        : 'organizer',
     plan: user.profile.plan,
     smsCredits: user.profile.smsCredits,
     eventsCount: userEvents.length,
@@ -2825,9 +2837,26 @@ export const memoryStore = {
   },
 
   updateTenantRole(userId: string, appRole: AppRole): BuilderTenantSummary {
+    if (appRole === 'creator') {
+      throw new Error('The creator role is exclusive to the platform owner and cannot be assigned to any other user.');
+    }
+    if (appRole !== 'organizer' && appRole !== 'gate_staff') {
+      throw new Error('Invalid RBAC role.');
+    }
     const user = db.users.get(userId);
     if (!user) throw new Error('Organiser account not found.');
+    const creatorEmail = (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase();
+    const creatorPhone = (process.env.CREATOR_PHONE || '').trim()
+      ? normalizePhoneE164((process.env.CREATOR_PHONE || '').trim())
+      : '';
+    const isPrimaryCreator =
+      user.email.trim().toLowerCase() === creatorEmail ||
+      Boolean(creatorPhone && user.profile.phone && normalizePhoneE164(user.profile.phone) === creatorPhone);
+    if (isPrimaryCreator) {
+      throw new Error('The primary creator account role cannot be modified.');
+    }
     user.profile.appRole = appRole;
+    user.profile.role = appRole === 'gate_staff' ? 'Gate Check-In Staff' : 'Lead Organiser';
     return buildTenantSummary(user);
   },
 

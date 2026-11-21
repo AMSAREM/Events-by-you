@@ -147,12 +147,32 @@ export interface SubscriptionCheckoutResponse {
   message: string;
 }
 
+function sanitizeTokenValue(raw?: string | null): string {
+  if (!raw || typeof raw !== 'string') return '';
+  let cleaned = raw.trim().replace(/^['"]|['"]$/g, '').trim();
+  if (/^Bearer\s+/i.test(cleaned)) {
+    cleaned = cleaned.replace(/^Bearer\s+/i, '').trim();
+  }
+  cleaned = cleaned.replace(/^['"]|['"]$/g, '').trim();
+  if (!cleaned || cleaned === 'null' || cleaned === 'undefined') return '';
+  return cleaned;
+}
+
 export function getStoredSession(): StoredAuthSession | null {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StoredAuthSession;
-    return parsed?.accessToken ? parsed : null;
+    const accessToken = sanitizeTokenValue(parsed?.accessToken);
+    if (!accessToken) {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return {
+      accessToken,
+      refreshToken: sanitizeTokenValue(parsed?.refreshToken),
+      expiresAt: parsed?.expiresAt,
+    };
   } catch {
     return null;
   }
@@ -160,10 +180,18 @@ export function getStoredSession(): StoredAuthSession | null {
 
 export function saveStoredSession(session: StoredAuthSession | null): void {
   try {
-    if (!session) {
+    const accessToken = sanitizeTokenValue(session?.accessToken);
+    if (!session || !accessToken) {
       localStorage.removeItem(SESSION_KEY);
     } else {
-      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      localStorage.setItem(
+        SESSION_KEY,
+        JSON.stringify({
+          ...session,
+          accessToken,
+          refreshToken: sanitizeTokenValue(session.refreshToken),
+        })
+      );
     }
   } catch {
     // Ignore storage quota errors
@@ -175,10 +203,10 @@ export function extractSessionFromUrlHash(): StoredAuthSession | null {
     const hash = window.location.hash;
     if (!hash || !hash.includes('access_token=')) return null;
     const params = new URLSearchParams(hash.replace(/^#/, ''));
-    const accessToken = params.get('access_token');
-    const refreshToken = params.get('refresh_token') || '';
+    const accessToken = sanitizeTokenValue(params.get('access_token'));
+    const refreshToken = sanitizeTokenValue(params.get('refresh_token'));
     const expiresIn = Number(params.get('expires_in') || 3600);
-    if (!accessToken) return null;
+    if (!accessToken || accessToken.split('.').length !== 3) return null;
     const session: StoredAuthSession = {
       accessToken,
       refreshToken,
@@ -358,10 +386,20 @@ async function request<T>(
 
   if (!resp.ok) {
     const parsedErr = parsed as { error?: string; code?: string } | null;
-    if (parsedErr?.error) {
-      throw new ApiError(parsedErr.error, resp.status, parsedErr.code);
+    const errMsg = parsedErr?.error || `Request failed (${resp.status})`;
+    const lowerErr = errMsg.toLowerCase();
+    if (
+      authenticated &&
+      (resp.status === 401 ||
+        parsedErr?.code === 'INVALID_SESSION_TOKEN' ||
+        lowerErr.includes('invalid jwt') ||
+        lowerErr.includes('token is malformed') ||
+        lowerErr.includes('invalid number of segment'))
+    ) {
+      saveStoredSession(null);
+      saveStoredCreatorToken(null);
     }
-    throw new ApiError(`Request failed (${resp.status})`, resp.status, parsedErr?.code);
+    throw new ApiError(errMsg, resp.status, parsedErr?.code);
   }
 
   if (!parsed || typeof parsed !== 'object') {
@@ -1072,7 +1110,10 @@ export const api = {
         true
       ),
 
-    updateTenantRole: (userId: string, appRole: AppRole) =>
+    updateTenantRole: (
+      userId: string,
+      appRole: Extract<AppRole, 'organizer' | 'gate_staff'>
+    ) =>
       request<{ tenant?: BuilderTenantSummary; ok?: boolean; appRole?: AppRole }>(
         `/api/builder/tenants/${encodeURIComponent(userId)}/role`,
         { method: 'POST', body: JSON.stringify({ appRole }) },

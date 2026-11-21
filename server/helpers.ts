@@ -15,11 +15,53 @@ export interface AuthedRequest extends Request {
   phoneVerified?: boolean;
 }
 
+export function sanitizeBearerToken(raw: string): string {
+  let token = raw.trim();
+  token = token.replace(/^['"]|['"]$/g, '').trim();
+  if (/^Bearer\s+/i.test(token)) {
+    token = token.replace(/^Bearer\s+/i, '').trim();
+  }
+  token = token.replace(/^['"]|['"]$/g, '').trim();
+  return token;
+}
+
 export function getBearerToken(req: Request): string | null {
   const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) return null;
-  const token = header.slice('Bearer '.length).trim();
-  return token || null;
+  if (!header || typeof header !== 'string') return null;
+  const trimmed = header.trim();
+  if (!/^Bearer\s+/i.test(trimmed)) return null;
+  const token = sanitizeBearerToken(trimmed.replace(/^Bearer\s+/i, ''));
+  if (!token || token === 'null' || token === 'undefined') return null;
+  return token;
+}
+
+export function isValidJwtFormat(token: string): boolean {
+  const cleaned = sanitizeBearerToken(token);
+  const parts = cleaned.split('.');
+  return parts.length === 3 && parts.every((part) => part.length > 0 && !/\s/.test(part));
+}
+
+export function formatSupabaseAuthError(message?: string | null): {
+  error: string;
+  isMalformedJwt: boolean;
+} {
+  const raw = (message || '').trim();
+  const lower = raw.toLowerCase();
+  if (
+    lower.includes('invalid jwt') ||
+    lower.includes('unable to parse or verify signature') ||
+    lower.includes('token is malformed') ||
+    lower.includes('invalid number of segment')
+  ) {
+    return {
+      error: 'Your session token is expired or invalid. Please sign in again.',
+      isMalformedJwt: true,
+    };
+  }
+  return {
+    error: raw || 'Session expired. Please sign in again.',
+    isMalformedJwt: false,
+  };
 }
 
 export function getCreatorCredentials() {
@@ -35,20 +77,39 @@ export function getCreatorCredentials() {
   };
 }
 
-export function resolveUserRole(req: AuthedRequest): AppRole {
-  if (req.memoryUser?.profile.appRole) {
-    return req.memoryUser.profile.appRole;
+export function isPrimaryCreatorIdentity(
+  email?: string | null,
+  phone?: string | null
+): boolean {
+  const creator = getCreatorCredentials();
+  const cleanEmail = (email || '').trim().toLowerCase();
+  if (cleanEmail && cleanEmail === creator.email) {
+    return true;
   }
-  if (req.appRole) {
+  if (creator.phone && phone && normalizePhoneE164(phone) === creator.phone) {
+    return true;
+  }
+  return false;
+}
+
+export function resolveUserRole(req: AuthedRequest): AppRole {
+  const email = req.user?.email || req.memoryUser?.profile.email;
+  const phone = req.userPhone || req.memoryUser?.profile.phone;
+  if (isPrimaryCreatorIdentity(email, phone)) {
+    return 'creator';
+  }
+  const memRole = req.memoryUser?.profile.appRole;
+  if (memRole === 'gate_staff' || memRole === 'organizer') {
+    return memRole;
+  }
+  if (memRole === 'creator') {
+    return 'organizer';
+  }
+  if (req.appRole === 'gate_staff' || req.appRole === 'organizer') {
     return req.appRole;
   }
-  const creator = getCreatorCredentials();
-  const email = (req.user?.email || '').trim().toLowerCase();
-  if (email && email === creator.email) {
-    return 'creator';
-  }
-  if (creator.phone && req.userPhone && normalizePhoneE164(req.userPhone) === creator.phone) {
-    return 'creator';
+  if (req.appRole === 'creator') {
+    return 'organizer';
   }
   const metaRole = req.user?.user_metadata?.app_role;
   if (metaRole === 'gate_staff') return 'gate_staff';

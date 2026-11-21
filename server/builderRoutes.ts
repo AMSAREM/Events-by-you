@@ -21,7 +21,10 @@ import {
 } from '../src/lib/subscriptionPlans.ts';
 import {
   dispatchOptionalArkeselSms,
+  formatSupabaseAuthError,
   getBearerToken,
+  isPrimaryCreatorIdentity,
+  isValidJwtFormat,
   requireCreatorVerification,
   type AuthedRequest,
 } from './helpers.ts';
@@ -156,27 +159,46 @@ async function requireBuilderAuth(req: AuthedRequest, res: Response, next: NextF
     req.user = { id: user.id, email: user.email } as User;
     return next();
   }
+  if (!isValidJwtFormat(token)) {
+    return res.status(401).json({
+      error: 'Your session token is invalid or from an offline workspace. Please sign in again.',
+      code: 'INVALID_SESSION_TOKEN',
+    });
+  }
   try {
     const publicClient = createPublicSupabaseClient();
     const { data, error } = await publicClient.auth.getUser(token);
     if (error || !data.user) {
-      return res.status(401).json({ error: error?.message || 'Session expired.' });
+      const formatted = formatSupabaseAuthError(error?.message);
+      return res.status(401).json({
+        error: formatted.error,
+        ...(formatted.isMalformedJwt ? { code: 'INVALID_SESSION_TOKEN' } : {}),
+      });
     }
     req.accessToken = token;
     req.user = data.user;
     req.supabase = createUserSupabaseClient(token);
     const { data: prof } = await req.supabase
       .from('profiles')
-      .select('app_role')
+      .select('app_role, phone')
       .eq('id', data.user.id)
       .maybeSingle();
-    const dbRole = (prof as Record<string, unknown> | null)?.app_role;
-    if (dbRole === 'creator' || dbRole === 'organizer' || dbRole === 'gate_staff') {
-      req.appRole = dbRole;
-    }
+    const profRec = prof as Record<string, unknown> | null;
+    const dbRole = profRec?.app_role;
+    const dbPhone = typeof profRec?.phone === 'string' ? profRec.phone : data.user.phone;
+    req.appRole = isPrimaryCreatorIdentity(data.user.email, dbPhone)
+      ? 'creator'
+      : dbRole === 'gate_staff'
+        ? 'gate_staff'
+        : 'organizer';
     return next();
   } catch (err) {
-    return res.status(401).json({ error: err instanceof Error ? err.message : 'Auth error.' });
+    const rawMsg = err instanceof Error ? err.message : 'Auth error.';
+    const formatted = formatSupabaseAuthError(rawMsg);
+    return res.status(401).json({
+      error: formatted.error,
+      ...(formatted.isMalformedJwt ? { code: 'INVALID_SESSION_TOKEN' } : {}),
+    });
   }
 }
 
@@ -312,9 +334,14 @@ export function createBuilderRouter() {
           return acc + (url.startsWith('data:') ? Math.round((url.length * 3) / 4) : 420 * 1024);
         }, 0);
         const rawRole = p.app_role != null ? String(p.app_role) : 'organizer';
-        const appRole: AppRole =
-          rawRole === 'creator' || rawRole === 'organizer' || rawRole === 'gate_staff'
-            ? rawRole
+        const isCreatorAccount = isPrimaryCreatorIdentity(
+          String(p.email ?? ''),
+          p.phone != null ? String(p.phone) : undefined
+        );
+        const appRole: AppRole = isCreatorAccount
+          ? 'creator'
+          : rawRole === 'gate_staff'
+            ? 'gate_staff'
             : 'organizer';
         return {
           id: uid,
@@ -585,21 +612,56 @@ export function createBuilderRouter() {
 
   router.post('/tenants/:userId/role', async (req: AuthedRequest, res) => {
     const { appRole } = req.body as { appRole?: AppRole };
-    if (appRole !== 'creator' && appRole !== 'organizer' && appRole !== 'gate_staff') {
-      return res.status(400).json({ error: 'Invalid RBAC role.' });
+    if (appRole === 'creator') {
+      return res.status(403).json({
+        error: 'The creator role is exclusive to the platform owner and cannot be assigned to any other user.',
+        code: 'CREATOR_ROLE_LOCKED',
+      });
+    }
+    if (appRole !== 'organizer' && appRole !== 'gate_staff') {
+      return res.status(400).json({ error: 'Invalid RBAC role. Allowed roles: organizer or gate_staff.' });
+    }
+    if (req.params.userId === req.user?.id) {
+      return res.status(403).json({
+        error: 'The primary creator account role cannot be modified.',
+        code: 'CREATOR_ROLE_LOCKED',
+      });
     }
     if (!isSupabaseConfigured()) {
       try {
         return res.json({ tenant: memoryStore.updateTenantRole(req.params.userId, appRole) });
       } catch (err) {
-        return res.status(404).json({ error: err instanceof Error ? err.message : 'Tenant not found.' });
+        const msg = err instanceof Error ? err.message : 'Tenant not found.';
+        return res.status(msg.toLowerCase().includes('creator') ? 403 : 404).json({ error: msg });
       }
     }
     try {
       const client = createServiceSupabaseClient() ?? req.supabase!;
+      const { data: targetProf } = await client
+        .from('profiles')
+        .select('email, phone, app_role')
+        .eq('id', req.params.userId)
+        .maybeSingle();
+      const targetRec = targetProf as Record<string, unknown> | null;
+      if (
+        targetRec &&
+        isPrimaryCreatorIdentity(
+          typeof targetRec.email === 'string' ? targetRec.email : undefined,
+          typeof targetRec.phone === 'string' ? targetRec.phone : undefined
+        )
+      ) {
+        return res.status(403).json({
+          error: 'The primary creator account role cannot be modified.',
+          code: 'CREATOR_ROLE_LOCKED',
+        });
+      }
       const { error } = await client
         .from('profiles')
-        .update({ app_role: appRole, updated_at: new Date().toISOString() })
+        .update({
+          app_role: appRole,
+          role: appRole === 'gate_staff' ? 'Gate Check-In Staff' : 'Lead Organiser',
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', req.params.userId);
       if (error) return res.status(400).json({ error: error.message });
       return res.json({ ok: true, appRole });
@@ -669,9 +731,13 @@ export function createBuilderRouter() {
           name: String(p.name ?? 'Organiser'),
           email: String(p.email ?? ''),
           studio: String(p.studio ?? 'Events Studio'),
-          appRole:
-            p.app_role === 'creator' || p.app_role === 'organizer' || p.app_role === 'gate_staff'
-              ? p.app_role
+          appRole: isPrimaryCreatorIdentity(
+            typeof p.email === 'string' ? p.email : undefined,
+            typeof p.phone === 'string' ? p.phone : undefined
+          )
+            ? 'creator'
+            : p.app_role === 'gate_staff'
+              ? 'gate_staff'
               : 'organizer',
           plan: (p.plan as OrganizerProfile['plan']) || 'Starter',
           smsCredits: Number(p.sms_credits ?? 0),

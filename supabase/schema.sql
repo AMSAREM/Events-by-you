@@ -123,6 +123,10 @@ begin
     new.plan_expires_at := old.plan_expires_at;
     new.sms_credits := old.sms_credits;
   end if;
+  -- Never allow promoting another user row to creator from authenticated updates
+  if auth.uid() is not null and new.app_role = 'creator' and old.app_role is distinct from 'creator' then
+    new.app_role := old.app_role;
+  end if;
   return new;
 end;
 $$;
@@ -131,6 +135,27 @@ drop trigger if exists trg_protect_profile_privilege on public.profiles;
 create trigger trg_protect_profile_privilege
   before update on public.profiles
   for each row execute procedure public.protect_profile_privilege_columns();
+
+create or replace function public.enforce_single_creator_role()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if new.app_role = 'creator' and exists (
+    select 1 from public.profiles
+    where app_role = 'creator' and id <> new.id
+  ) then
+    raise exception 'The creator role is exclusive and cannot be assigned to another user.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_enforce_single_creator_role on public.profiles;
+create trigger trg_enforce_single_creator_role
+  before insert or update on public.profiles
+  for each row execute procedure public.enforce_single_creator_role();
 
 -- 2. Events
 create table if not exists public.events (
