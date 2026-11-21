@@ -25,11 +25,21 @@ import {
 import { getCategoryPreset } from '../data/initialData';
 import { STUDIO_FLYER_PRESETS, compressFlyerImageFile } from '../lib/flyerUpload';
 import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
+import {
+  getPlanEntitlements,
+  isActiveEventStatus,
+  STARTER_MAX_ACTIVE_EVENTS,
+  STARTER_MAX_ATTENDEES_PER_EVENT,
+  SUBSCRIPTION_PLAN_CATALOG,
+} from '../lib/subscriptionPlans';
 import { CircularGauge, MonochromePoster } from './MonochromeArtwork';
 import { ThemeColorPicker } from './ThemeColorPicker';
 
 interface CreateEventModalProps {
   organizerName?: string;
+  profile?: OrganizerProfile;
+  events?: EventItem[];
+  onOpenBilling?: () => void;
   onClose: () => void;
   onCreate: (event: EventItem) => void;
 }
@@ -45,9 +55,17 @@ const ARTWORK_OPTIONS: { id: ArtworkVariant; label: string }[] = [
 
 export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   organizerName = 'Organiser',
+  profile,
+  events = [],
+  onOpenBilling,
   onClose,
   onCreate,
 }) => {
+  const entitlements = getPlanEntitlements(profile);
+  const activeEventsCount = events.filter((e) => isActiveEventStatus(e.status)).length;
+  const atStarterActiveLimit =
+    entitlements.maxActiveEvents !== null && activeEventsCount >= entitlements.maxActiveEvents;
+
   const [title, setTitle] = useState('');
   const [subtitle, setSubtitle] = useState('');
   const [category, setCategory] = useState('Events');
@@ -55,9 +73,11 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const [time, setTime] = useState('09:00 GMT');
   const [venue, setVenue] = useState('');
   const [city, setCity] = useState('Accra');
-  const [capacity, setCapacity] = useState(250);
+  const [capacity, setCapacity] = useState(
+    entitlements.maxAttendeesPerEvent ?? 250
+  );
   const [ticketPrice, setTicketPrice] = useState(0);
-  const [status, setStatus] = useState<EventStatus>('upcoming');
+  const [status, setStatus] = useState<EventStatus>(atStarterActiveLimit ? 'draft' : 'upcoming');
   const [publishQrPass, setPublishQrPass] = useState(true);
   const [artwork, setArtwork] = useState<ArtworkVariant>('architecture');
   const [designTheme, setDesignTheme] = useState<DesignTheme>('obsidian-gold');
@@ -81,7 +101,13 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '') || `event-${Date.now()}`;
 
-    const initialReg = status === 'draft' ? 0 : Math.min(24, Math.max(10, Number(capacity) || 100));
+    const clampedCap =
+      entitlements.maxAttendeesPerEvent !== null
+        ? Math.min(entitlements.maxAttendeesPerEvent, Math.max(10, Number(capacity) || STARTER_MAX_ATTENDEES_PER_EVENT))
+        : Math.max(10, Number(capacity) || 100);
+    const effectiveStatus: EventStatus =
+      atStarterActiveLimit && isActiveEventStatus(status) ? 'draft' : status;
+    const initialReg = 0;
     const preset = getCategoryPreset(category);
 
     const newEvent: EventItem = {
@@ -90,13 +116,13 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       title: title.trim(),
       subtitle: subtitle.trim() || 'Curated production and live stage gathering.',
       category,
-      status,
+      status: effectiveStatus,
       date: formattedDate,
       isoDate: date,
       time,
       venue: venue.trim(),
       city: city.trim() || 'Accra',
-      capacity: Math.max(10, Number(capacity) || 100),
+      capacity: clampedCap,
       registered: initialReg,
       checkedIn: 0,
       smsDispatched: initialReg,
@@ -221,12 +247,22 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5">Capacity</label>
+              <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5">
+                Capacity {entitlements.maxAttendeesPerEvent ? `(Max ${entitlements.maxAttendeesPerEvent})` : ''}
+              </label>
               <input
                 type="number"
                 min={10}
+                max={entitlements.maxAttendeesPerEvent ?? undefined}
                 value={capacity}
-                onChange={(e) => setCapacity(Number(e.target.value))}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setCapacity(
+                    entitlements.maxAttendeesPerEvent !== null
+                      ? Math.min(entitlements.maxAttendeesPerEvent, val)
+                      : val
+                  );
+                }}
                 className="w-full h-11 px-3 rounded-2xl bg-[#F5F5F7] text-xs text-[#0B0B0B] border border-transparent focus:bg-white focus:border-[#0B0B0B] focus:outline-none tabular-nums"
               />
             </div>
@@ -266,21 +302,37 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
             <div>
               <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5">Initial State</label>
               <div className="grid grid-cols-3 gap-1.5 p-1 bg-[#F5F5F7] rounded-full">
-                {(['upcoming', 'live', 'draft'] as EventStatus[]).map((st) => (
-                  <button
-                    key={st}
-                    type="button"
-                    onClick={() => setStatus(st)}
-                    className={`h-9 rounded-full text-xs font-semibold capitalize transition-colors ${
-                      status === st
-                        ? 'bg-[#0B0B0B] text-white'
-                        : 'text-[#71717A] hover:text-[#0B0B0B]'
-                    }`}
-                  >
-                    {st}
-                  </button>
-                ))}
+                {(['upcoming', 'live', 'draft'] as EventStatus[]).map((st) => {
+                  const disabledActive = atStarterActiveLimit && isActiveEventStatus(st);
+                  return (
+                    <button
+                      key={st}
+                      type="button"
+                      disabled={disabledActive}
+                      onClick={() => setStatus(st)}
+                      className={`h-9 rounded-full text-xs font-semibold capitalize transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                        status === st
+                          ? 'bg-[#0B0B0B] text-white'
+                          : 'text-[#71717A] hover:text-[#0B0B0B]'
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  );
+                })}
               </div>
+              {atStarterActiveLimit && (
+                <p className="text-[11px] text-amber-700 mt-1">
+                  Starter allows {STARTER_MAX_ACTIVE_EVENTS} active event. Save as Draft or{' '}
+                  {onOpenBilling ? (
+                    <button type="button" onClick={onOpenBilling} className="underline font-semibold">
+                      Upgrade to Pro
+                    </button>
+                  ) : (
+                    'Upgrade to Pro'
+                  )}.
+                </p>
+              )}
             </div>
           </div>
 
@@ -409,8 +461,11 @@ interface EventDetailModalProps {
   event: EventItem;
   scheduleBlocks: ScheduleBlock[];
   capacityThreshold: number;
+  profile?: OrganizerProfile;
+  events?: EventItem[];
   canPublishQrPass?: boolean;
   onToggleQrPassPublished?: (eventId: string, published: boolean) => Promise<void> | void;
+  onOpenBilling?: () => void;
   onClose: () => void;
   onUpdateEvent: (updated: EventItem) => void;
   onDeleteEvent: (id: string) => void;
@@ -421,14 +476,26 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   event,
   scheduleBlocks,
   capacityThreshold,
+  profile,
+  events = [],
   canPublishQrPass = true,
   onToggleQrPassPublished,
+  onOpenBilling,
   onClose,
   onUpdateEvent,
   onDeleteEvent,
   onOpenAttendees,
 }) => {
   const preset = getCategoryPreset(event.category);
+  const entitlements = getPlanEntitlements(profile);
+  const otherActiveCount = events.filter(
+    (e) => e.id !== event.id && isActiveEventStatus(e.status)
+  ).length;
+  const starterActiveBlocked =
+    entitlements.maxActiveEvents !== null &&
+    !isActiveEventStatus(event.status) &&
+    otherActiveCount >= entitlements.maxActiveEvents;
+
   const [capacityDraft, setCapacityDraft] = useState(event.capacity);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
@@ -453,7 +520,8 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     setFlyerDraft(event.flyerUrl || preset.flyerUrl);
     setDesignDraft(event.designTheme ?? preset.designTheme);
     setBrandColorDraft(event.brandColor ?? event.extraDataConfig?.brandColor);
-  }, [event.id, event.flyerUrl, event.designTheme, event.brandColor, event.extraDataConfig?.brandColor, preset.flyerUrl, preset.designTheme]);
+    setCapacityDraft(event.capacity);
+  }, [event.id, event.capacity, event.flyerUrl, event.designTheme, event.brandColor, event.extraDataConfig?.brandColor, preset.flyerUrl, preset.designTheme]);
 
   const pct = Math.round((event.registered / Math.max(1, event.capacity)) * 100);
   const isAtCeiling = pct >= capacityThreshold;
@@ -463,11 +531,16 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   const flyerSrc = flyerDraft || preset.flyerUrl;
 
   const handleStatusChange = (newStatus: EventStatus) => {
+    if (starterActiveBlocked && isActiveEventStatus(newStatus)) return;
     onUpdateEvent({ ...event, status: newStatus });
   };
 
   const handleCapacitySave = () => {
-    const nextCap = Math.max(event.registered || 10, capacityDraft);
+    const rawNext = Math.max(event.registered || 10, capacityDraft);
+    const nextCap =
+      entitlements.maxAttendeesPerEvent !== null
+        ? Math.min(entitlements.maxAttendeesPerEvent, Math.max(event.registered || 1, rawNext))
+        : rawNext;
     setCapacityDraft(nextCap);
     onUpdateEvent({ ...event, capacity: nextCap });
   };
@@ -794,21 +867,38 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
           <div className="p-4 rounded-2xl bg-[#F5F5F7]">
             <p className="text-xs font-semibold text-[#0B0B0B] mb-2">Production State</p>
             <div className="grid grid-cols-4 gap-1 p-1 bg-white rounded-full border border-[#E5E5EA]">
-              {(['live', 'upcoming', 'draft', 'past'] as EventStatus[]).map((st) => (
-                <button
-                  key={st}
-                  type="button"
-                  onClick={() => handleStatusChange(st)}
-                  className={`h-8 rounded-full text-xs font-semibold capitalize transition-colors ${
-                    event.status === st
-                      ? 'bg-[#0B0B0B] text-white'
-                      : 'text-[#71717A] hover:text-[#0B0B0B]'
-                  }`}
-                >
-                  {st}
-                </button>
-              ))}
+              {(['live', 'upcoming', 'draft', 'past'] as EventStatus[]).map((st) => {
+                const blocked = starterActiveBlocked && isActiveEventStatus(st);
+                return (
+                  <button
+                    key={st}
+                    type="button"
+                    disabled={blocked}
+                    onClick={() => handleStatusChange(st)}
+                    className={`h-8 rounded-full text-xs font-semibold capitalize transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                      event.status === st
+                        ? 'bg-[#0B0B0B] text-white'
+                        : 'text-[#71717A] hover:text-[#0B0B0B]'
+                    }`}
+                  >
+                    {st}
+                  </button>
+                );
+              })}
             </div>
+            {starterActiveBlocked && (
+              <p className="text-[11px] text-amber-700 mt-2">
+                Starter limit ({STARTER_MAX_ACTIVE_EVENTS} active event) reached.{' '}
+                {onOpenBilling ? (
+                  <button type="button" onClick={onOpenBilling} className="underline font-semibold">
+                    Upgrade to Pro Organizer
+                  </button>
+                ) : (
+                  'Upgrade to Pro Organizer'
+                )}{' '}
+                to activate multiple events.
+              </p>
+            )}
             <div className="mt-3 pt-3 border-t border-[#E5E5EA] flex items-center justify-between gap-2">
               <div>
                 <p className="text-[11px] font-semibold text-[#0B0B0B]">Check-In QR Pass</p>
@@ -838,11 +928,17 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
           </div>
 
           <div className="p-4 rounded-2xl bg-[#F5F5F7]">
-            <p className="text-xs font-semibold text-[#0B0B0B] mb-2">Adjust Venue Capacity</p>
+            <p className="text-xs font-semibold text-[#0B0B0B] mb-2">
+              Adjust Venue Capacity{' '}
+              {entitlements.maxAttendeesPerEvent !== null
+                ? `(Starter Cap: ${entitlements.maxAttendeesPerEvent})`
+                : ''}
+            </p>
             <div className="flex items-center gap-2">
               <input
                 type="number"
                 min={event.registered || 10}
+                max={entitlements.maxAttendeesPerEvent ?? undefined}
                 value={capacityDraft}
                 onChange={(e) => setCapacityDraft(Number(e.target.value))}
                 className="flex-1 h-10 px-3.5 rounded-full bg-white border border-[#E5E5EA] text-sm font-medium text-[#0B0B0B] tabular-nums focus:border-[#0B0B0B] focus:outline-none"
@@ -855,6 +951,16 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
                 Update Cap
               </button>
             </div>
+            {entitlements.maxAttendeesPerEvent !== null && (
+              <p className="text-[11px] text-[#71717A] mt-2">
+                Starter seats cap at {STARTER_MAX_ATTENDEES_PER_EVENT}.{' '}
+                {onOpenBilling && (
+                  <button type="button" onClick={onOpenBilling} className="underline font-semibold text-[#0B0B0B]">
+                    Upgrade for unlimited seats
+                  </button>
+                )}
+              </p>
+            )}
           </div>
         </div>
 
@@ -1008,41 +1114,16 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
 
 interface PlanUpgradeModalProps {
   currentPlan: OrganizerProfile['plan'];
-  onSelectPlan: (plan: OrganizerProfile['plan']) => void;
+  onOpenBilling?: () => void;
+  onSelectPlan?: (plan: OrganizerProfile['plan']) => void;
   onClose: () => void;
 }
 
 export const PlanUpgradeModal: React.FC<PlanUpgradeModalProps> = ({
   currentPlan,
-  onSelectPlan,
+  onOpenBilling,
   onClose,
 }) => {
-  const tiers: {
-    name: OrganizerProfile['plan'];
-    audience: string;
-    price: string;
-    limits: string[];
-  }[] = [
-    {
-      name: 'Starter',
-      audience: 'For intimate weddings, fellowships & meetups',
-      price: '$0 / forever',
-      limits: ['1 active event', 'Up to 50 attendees per event', 'Pay-as-you-buy Arkesel SMS bundles'],
-    },
-    {
-      name: 'Pro Organizer',
-      audience: 'For concerts, church conventions, corporate & tech',
-      price: '$19 / mo',
-      limits: ['Unlimited concurrent events', 'Custom Arkesel SMS Sender ID', 'CSV export & offline gate PWA'],
-    },
-    {
-      name: 'Enterprise',
-      audience: 'For national funerals, festivals & multi-venue teams',
-      price: '$79 / mo',
-      limits: ['Dedicated SMPP carrier throughput', 'Custom domain passbooks', 'Priority gate team onboarding'],
-    },
-  ];
-
   return (
     <div
       className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4"
@@ -1057,7 +1138,7 @@ export const PlanUpgradeModal: React.FC<PlanUpgradeModalProps> = ({
               Workspace Capacity Plans
             </h2>
             <p className="text-xs text-[#71717A] mt-0.5">
-              Explicit stage limits and gate throughput per billing cycle.
+              Verified subscription tiers &amp; strict capacity limits per billing cycle.
             </p>
           </div>
           <button
@@ -1071,11 +1152,11 @@ export const PlanUpgradeModal: React.FC<PlanUpgradeModalProps> = ({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {tiers.map((tier) => {
+          {SUBSCRIPTION_PLAN_CATALOG.map((tier) => {
             const isCurrent = currentPlan === tier.name;
             return (
               <div
-                key={tier.name}
+                key={tier.id}
                 className={`p-5 rounded-3xl flex flex-col justify-between transition-colors ${
                   isCurrent
                     ? 'bg-[#0B0B0B] text-white'
@@ -1084,12 +1165,19 @@ export const PlanUpgradeModal: React.FC<PlanUpgradeModalProps> = ({
               >
                 <div>
                   <p className={`text-xs ${isCurrent ? 'text-zinc-400' : 'text-[#71717A]'}`}>
-                    {tier.audience}
+                    {tier.tagline}
                   </p>
                   <h3 className="text-lg font-bold mt-1">{tier.name}</h3>
-                  <p className="text-2xl font-bold tabular-nums mt-3">{tier.price}</p>
+                  <p className="text-2xl font-bold tabular-nums mt-3">
+                    ${tier.monthlyUsd} {tier.id === 'starter' ? '/ forever' : '/ mo'}
+                  </p>
+                  {tier.monthlyGhs > 0 && (
+                    <p className={`text-xs font-mono mt-0.5 ${isCurrent ? 'text-zinc-300' : 'text-[#71717A]'}`}>
+                      GH₵ {tier.monthlyGhs.toLocaleString()} / mo
+                    </p>
+                  )}
                   <ul className="mt-4 space-y-2">
-                    {tier.limits.map((lim) => (
+                    {tier.features.slice(0, 4).map((lim) => (
                       <li key={lim} className="text-xs flex items-start gap-2">
                         <Check className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                         <span className={isCurrent ? 'text-zinc-200' : 'text-[#444748]'}>{lim}</span>
@@ -1101,8 +1189,8 @@ export const PlanUpgradeModal: React.FC<PlanUpgradeModalProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    onSelectPlan(tier.name);
                     onClose();
+                    if (!isCurrent) onOpenBilling?.();
                   }}
                   className={`mt-6 w-full py-2.5 rounded-full text-xs font-semibold transition-colors ${
                     isCurrent
@@ -1110,7 +1198,7 @@ export const PlanUpgradeModal: React.FC<PlanUpgradeModalProps> = ({
                       : 'bg-[#0B0B0B] text-white hover:bg-zinc-800'
                   }`}
                 >
-                  {isCurrent ? 'Current Plan' : `Switch to ${tier.name}`}
+                  {isCurrent ? 'Current Plan' : `Proceed to Checkout`}
                 </button>
               </div>
             );

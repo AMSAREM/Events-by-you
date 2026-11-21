@@ -4,63 +4,54 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
+  Clock,
   Code2,
+  CreditCard,
   ExternalLink,
   Infinity as InfinityIcon,
   Lock,
   RefreshCw,
   RotateCcw,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   UserPlus,
-  Verified,
   X,
   Zap,
 } from 'lucide-react';
 import { api, type ArkeselStatusResponse } from '../lib/api';
-import { EventItem, OrganizerProfile } from '../types/events';
+import {
+  calculateCustomBundleQuote,
+  SMS_BUNDLE_CATALOG,
+} from '../lib/smsBundles';
+import {
+  getPlanEntitlements,
+  isPlanExpired,
+  resolveAuthoritativeSubscriptionQuote,
+  STARTER_MAX_ACTIVE_EVENTS,
+  STARTER_MAX_ATTENDEES_PER_EVENT,
+  SUBSCRIPTION_PLAN_CATALOG,
+  type BillingCycle,
+} from '../lib/subscriptionPlans';
+import {
+  EventItem,
+  OrganizerProfile,
+  SmsBundlePurchase,
+  SubscriptionPayment,
+} from '../types/events';
 
 interface BillingScreenProps {
   profile: OrganizerProfile;
   events: EventItem[];
   onUpdateProfile: (profile: OrganizerProfile) => void;
   onSyncProfile?: (profile: OrganizerProfile) => void;
+  initialCheckoutBundleId?: string | null;
+  onConsumeInitialBundle?: () => void;
+  pendingPaystackRef?: string | null;
+  onConsumePaystackRef?: () => void;
+  pendingSubscriptionRef?: string | null;
+  onConsumeSubscriptionRef?: () => void;
 }
-
-const CREDIT_BUNDLES = [
-  {
-    id: 'starter',
-    name: 'Starter Pack',
-    credits: 250,
-    priceGhs: 'GH₵ 50',
-    approxUsd: '(~$3.80)',
-    unitRate: 'GH₵ 0.20 per SMS',
-    desc: 'Ideal for intimate weddings, church fellowships, memorials, or boutique meetups.',
-    featured: false,
-  },
-  {
-    id: 'growth',
-    name: 'Growth Pack',
-    credits: 1000,
-    priceGhs: 'GH₵ 175',
-    approxUsd: '(~$13.20)',
-    unitRate: 'GH₵ 0.175 per SMS',
-    savings: '12.5% savings',
-    desc: 'Recommended for concerts, church conventions, corporate galas, and morning guest reminders.',
-    featured: true,
-  },
-  {
-    id: 'summit',
-    name: 'Enterprise Pack',
-    credits: 5000,
-    priceGhs: 'GH₵ 750',
-    approxUsd: '(~$56.50)',
-    unitRate: 'GH₵ 0.15 per SMS',
-    savings: '25% savings',
-    desc: 'For large festivals, multi-day conventions, automated turnstile entrance pings, and high-volume rosters.',
-    featured: false,
-  },
-];
 
 const SPEC_ROWS = [
   {
@@ -118,12 +109,22 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
   events,
   onUpdateProfile,
   onSyncProfile,
+  initialCheckoutBundleId,
+  onConsumeInitialBundle,
+  pendingPaystackRef,
+  onConsumePaystackRef,
+  pendingSubscriptionRef,
+  onConsumeSubscriptionRef,
 }) => {
   const [isAnnual, setIsAnnual] = useState(false);
   const [customCredits, setCustomCredits] = useState(2500);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [arkeselStatus, setArkeselStatus] = useState<ArkeselStatusResponse | null>(null);
   const [arkeselLoading, setArkeselLoading] = useState(false);
+  const [purchases, setPurchases] = useState<SmsBundlePurchase[]>([]);
+  const [purchasesLoading, setPurchasesLoading] = useState(false);
+  const [subPayments, setSubPayments] = useState<SubscriptionPayment[]>([]);
+  const [subPaymentsLoading, setSubPaymentsLoading] = useState(false);
   const [checkoutDraft, setCheckoutDraft] = useState<{
     bundleId: string;
     bundleName: string;
@@ -133,57 +134,216 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
   const [paymentChannel, setPaymentChannel] = useState('Arkesel Portal Wallet');
   const [arkeselReference, setArkeselReference] = useState('');
   const [purchasing, setPurchasing] = useState(false);
+  const [paystackInitializing, setPaystackInitializing] = useState(false);
+  const [verifyingRef, setVerifyingRef] = useState<string | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
-  const isPro = profile.plan !== 'Starter';
+  const [planCheckoutDraft, setPlanCheckoutDraft] = useState<{
+    planId: 'pro' | 'enterprise';
+    planName: 'Pro Organizer' | 'Enterprise';
+    billingCycle: BillingCycle;
+    amountUsd: number;
+    amountGhs: number;
+  } | null>(null);
+  const [subPaymentChannel, setSubPaymentChannel] = useState('Paystack MoMo / Card');
+  const [subReceiptReference, setSubReceiptReference] = useState('');
+  const [subPurchasing, setSubPurchasing] = useState(false);
+  const [subPaystackInitializing, setSubPaystackInitializing] = useState(false);
+  const [verifyingSubRef, setVerifyingSubRef] = useState<string | null>(null);
+  const [subCheckoutError, setSubCheckoutError] = useState<string | null>(null);
+  const [downgradeConfirmOpen, setDowngradeConfirmOpen] = useState(false);
+  const [downgrading, setDowngrading] = useState(false);
+
+  const entitlements = getPlanEntitlements(profile);
+  const effectivePlan = entitlements.plan;
+  const planExpired = isPlanExpired(profile);
+  const isPro = effectivePlan !== 'Starter';
   const activeEventsCount = events.filter((e) => e.status === 'live' || e.status === 'upcoming').length;
-  const topEvent = events[0];
+  const topEvent = events.find((e) => e.status === 'live' || e.status === 'upcoming') ?? events[0];
+  const topRegistered = topEvent?.registered ?? 0;
+  const topEffectiveCap = topEvent
+    ? Math.min(topEvent.capacity, entitlements.maxAttendeesPerEvent ?? topEvent.capacity)
+    : STARTER_MAX_ATTENDEES_PER_EVENT;
   const topFillPct = topEvent
-    ? Math.min(100, Math.round((topEvent.registered / Math.max(1, topEvent.capacity)) * 100))
+    ? Math.min(100, Math.round((topRegistered / Math.max(1, topEffectiveCap)) * 100))
     : 0;
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(null), 4000);
-  };
+    setTimeout(() => setToastMsg(null), 4500);
+  }, []);
 
-  const refreshArkeselStatus = useCallback(async () => {
+  const syncProfileState = useCallback(
+    (nextProfile: OrganizerProfile) => {
+      if (onSyncProfile) {
+        onSyncProfile(nextProfile);
+      } else {
+        onUpdateProfile(nextProfile);
+      }
+    },
+    [onSyncProfile, onUpdateProfile]
+  );
+
+  const refreshBillingTelemetry = useCallback(async () => {
     setArkeselLoading(true);
+    setPurchasesLoading(true);
+    setSubPaymentsLoading(true);
     try {
-      const status = await api.studio.getArkeselStatus();
+      const [status, ledger, subLedger] = await Promise.all([
+        api.studio.getArkeselStatus(),
+        api.studio.getSmsPurchases().catch(() => null),
+        api.studio.getSubscriptionPayments().catch(() => null),
+      ]);
       setArkeselStatus(status);
+      if (ledger && Array.isArray(ledger.purchases)) {
+        setPurchases(ledger.purchases);
+      }
+      if (subLedger && Array.isArray(subLedger.payments)) {
+        setSubPayments(subLedger.payments);
+      }
     } catch {
       // Keep previous status if network fails
     } finally {
       setArkeselLoading(false);
+      setPurchasesLoading(false);
+      setSubPaymentsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void refreshArkeselStatus();
-  }, [refreshArkeselStatus]);
+    void refreshBillingTelemetry();
+  }, [refreshBillingTelemetry]);
 
-  const openBundleCheckout = (bundle: {
-    bundleId: string;
-    bundleName: string;
-    credits: number;
-    amountGhs: number;
-  }) => {
+  const handleVerifyPaystack = useCallback(
+    async (reference: string) => {
+      const clean = reference.trim();
+      if (!clean) return;
+      setVerifyingRef(clean);
+      setCheckoutError(null);
+      try {
+        const res = await api.studio.verifyPaystackBundle(clean);
+        syncProfileState(res.profile);
+        setArkeselStatus(res.arkeselStatus);
+        showToast(res.message);
+        await refreshBillingTelemetry();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unable to verify Paystack transaction.';
+        setCheckoutError(msg);
+        showToast(msg);
+      } finally {
+        setVerifyingRef(null);
+      }
+    },
+    [refreshBillingTelemetry, showToast, syncProfileState]
+  );
+
+  const handleVerifySubscriptionPaystack = useCallback(
+    async (reference: string) => {
+      const clean = reference.trim();
+      if (!clean) return;
+      setVerifyingSubRef(clean);
+      setSubCheckoutError(null);
+      try {
+        const res = await api.studio.verifySubscriptionPaystack(clean);
+        syncProfileState(res.profile);
+        showToast(res.message);
+        await refreshBillingTelemetry();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unable to verify subscription payment.';
+        setSubCheckoutError(msg);
+        showToast(msg);
+      } finally {
+        setVerifyingSubRef(null);
+      }
+    },
+    [refreshBillingTelemetry, showToast, syncProfileState]
+  );
+
+  useEffect(() => {
+    if (!pendingPaystackRef) return;
+    const ref = pendingPaystackRef;
+    onConsumePaystackRef?.();
+    void handleVerifyPaystack(ref);
+  }, [pendingPaystackRef, onConsumePaystackRef, handleVerifyPaystack]);
+
+  useEffect(() => {
+    if (!pendingSubscriptionRef) return;
+    const ref = pendingSubscriptionRef;
+    onConsumeSubscriptionRef?.();
+    void handleVerifySubscriptionPaystack(ref);
+  }, [pendingSubscriptionRef, onConsumeSubscriptionRef, handleVerifySubscriptionPaystack]);
+
+  const openBundleCheckout = useCallback(
+    (bundle: {
+      bundleId: string;
+      bundleName: string;
+      credits: number;
+      amountGhs: number;
+    }) => {
+      setCheckoutError(null);
+      setArkeselReference('');
+      setCheckoutDraft(bundle);
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!initialCheckoutBundleId) return;
+    const match = SMS_BUNDLE_CATALOG.find((p) => p.id === initialCheckoutBundleId);
+    onConsumeInitialBundle?.();
+    if (match) {
+      openBundleCheckout({
+        bundleId: match.id,
+        bundleName: match.name,
+        credits: match.credits,
+        amountGhs: match.amountGhs,
+      });
+      setTimeout(() => {
+        document.getElementById('carrier-bundles')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
+  }, [initialCheckoutBundleId, onConsumeInitialBundle, openBundleCheckout]);
+
+  const handlePayWithPaystack = async () => {
+    if (!checkoutDraft || paystackInitializing) return;
+    setPaystackInitializing(true);
     setCheckoutError(null);
-    setArkeselReference('');
-    setCheckoutDraft(bundle);
+    try {
+      const callbackUrl = `${window.location.origin}/`;
+      const res = await api.studio.initializePaystackBundle({
+        bundleId: checkoutDraft.bundleId,
+        credits: checkoutDraft.credits,
+        amountGhs: checkoutDraft.amountGhs,
+        callbackUrl,
+      });
+      await refreshBillingTelemetry();
+      showToast(`Redirecting to Paystack checkout (${res.reference})...`);
+      window.location.assign(res.authorizationUrl);
+    } catch (err) {
+      setCheckoutError(
+        err instanceof Error ? err.message : 'Failed to start Paystack payment checkout.'
+      );
+      setPaystackInitializing(false);
+    }
   };
 
   const handleConfirmBundlePurchase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!checkoutDraft || purchasing) return;
+    const trimmedRef = arkeselReference.trim();
+    if (trimmedRef.length < 6) {
+      setCheckoutError(
+        'Enter your real Arkesel or Mobile Money transaction reference (at least 6 characters).'
+      );
+      return;
+    }
     setPurchasing(true);
     setCheckoutError(null);
     try {
       const res = await api.studio.purchaseSmsBundle({
         ...checkoutDraft,
         paymentChannel,
-        arkeselReference: arkeselReference.trim() || undefined,
+        arkeselReference: trimmedRef,
       });
       if (onSyncProfile) {
         onSyncProfile(res.profile);
@@ -193,32 +353,110 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       setArkeselStatus(res.arkeselStatus);
       setCheckoutDraft(null);
       showToast(res.message);
+      await refreshBillingTelemetry();
     } catch (err) {
-      setCheckoutError(err instanceof Error ? err.message : 'Unable to record SMS bundle top-up.');
+      setCheckoutError(err instanceof Error ? err.message : 'Unable to submit SMS bundle receipt.');
     } finally {
       setPurchasing(false);
     }
   };
 
-  const handleUpgradeToPro = () => {
-    if (isPro) return;
-    onUpdateProfile({
-      ...profile,
-      plan: 'Pro Organizer',
+  const openPlanCheckout = (planId: 'pro' | 'enterprise', billingCycle: BillingCycle) => {
+    const quote = resolveAuthoritativeSubscriptionQuote({ planId, billingCycle });
+    setSubCheckoutError(null);
+    setSubReceiptReference('');
+    setDowngradeConfirmOpen(false);
+    setPlanCheckoutDraft({
+      planId: quote.planId,
+      planName: quote.planName,
+      billingCycle: quote.billingCycle,
+      amountUsd: quote.amountUsd,
+      amountGhs: quote.amountGhs,
     });
-    showToast('Upgraded to Pro Organizer Tier! Purchase an SMS bundle below whenever you need carrier units.');
+    setTimeout(() => {
+      document.getElementById('subscription-checkout-drawer')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    }, 80);
   };
 
-  const handleResetFreeTier = () => {
-    onUpdateProfile({
-      ...profile,
-      plan: 'Starter',
-    });
-    showToast('Account reverted to Starter Free Tier. Purchased SMS balance remains unchanged.');
+  const handlePaySubscriptionWithPaystack = async () => {
+    if (!planCheckoutDraft || subPaystackInitializing) return;
+    setSubPaystackInitializing(true);
+    setSubCheckoutError(null);
+    try {
+      const callbackUrl = `${window.location.origin}/`;
+      const res = await api.studio.initializeSubscriptionPaystack({
+        planId: planCheckoutDraft.planId,
+        planName: planCheckoutDraft.planName,
+        billingCycle: planCheckoutDraft.billingCycle,
+        amountGhs: planCheckoutDraft.amountGhs,
+        callbackUrl,
+      });
+      await refreshBillingTelemetry();
+      showToast(`Redirecting to Paystack subscription checkout (${res.reference})...`);
+      window.location.assign(res.authorizationUrl);
+    } catch (err) {
+      setSubCheckoutError(
+        err instanceof Error ? err.message : 'Failed to initialize Paystack subscription checkout.'
+      );
+      setSubPaystackInitializing(false);
+    }
   };
 
-  const customUnitRate = customCredits >= 5000 ? 0.15 : customCredits >= 1000 ? 0.175 : 0.2;
-  const customTotalGhs = Math.round(customCredits * customUnitRate);
+  const handleConfirmSubscriptionPurchase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!planCheckoutDraft || subPurchasing) return;
+    const trimmedRef = subReceiptReference.trim();
+    if (trimmedRef.length < 6) {
+      setSubCheckoutError(
+        'Enter your real Paystack, Mobile Money, or bank transfer reference (at least 6 characters).'
+      );
+      return;
+    }
+    setSubPurchasing(true);
+    setSubCheckoutError(null);
+    try {
+      const res = await api.studio.purchaseSubscription({
+        planId: planCheckoutDraft.planId,
+        planName: planCheckoutDraft.planName,
+        billingCycle: planCheckoutDraft.billingCycle,
+        amountGhs: planCheckoutDraft.amountGhs,
+        paymentChannel: subPaymentChannel,
+        receiptReference: trimmedRef,
+      });
+      syncProfileState(res.profile);
+      setPlanCheckoutDraft(null);
+      showToast(res.message);
+      await refreshBillingTelemetry();
+    } catch (err) {
+      setSubCheckoutError(
+        err instanceof Error ? err.message : 'Unable to submit subscription payment receipt.'
+      );
+    } finally {
+      setSubPurchasing(false);
+    }
+  };
+
+  const handleDowngradeToStarter = async () => {
+    if (downgrading) return;
+    setDowngrading(true);
+    try {
+      const res = await api.studio.downgradeSubscription();
+      syncProfileState(res.profile);
+      setDowngradeConfirmOpen(false);
+      showToast(res.message);
+      await refreshBillingTelemetry();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to downgrade subscription.');
+    } finally {
+      setDowngrading(false);
+    }
+  };
+
+  const customQuote = calculateCustomBundleQuote(customCredits);
+  const customTotalGhs = customQuote.amountGhs;
 
   const initials = profile.name
     .split(' ')
@@ -264,7 +502,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       {/* SECTION: ORGANISER ACCOUNT STATUS BANNER */}
       <section className="bg-[#F5F5F7] rounded-3xl p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
         <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-[#71717A]">
               Organiser Account Status
             </span>
@@ -273,8 +511,19 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                 isPro ? 'bg-[#0B0B0B] text-white' : 'bg-[#E2E2E4] text-[#0B0B0B]'
               }`}
             >
-              {isPro ? `${profile.plan} Active` : 'Free Starter Plan'}
+              {isPro ? `${effectivePlan} Active` : 'Starter Free Tier'}
             </span>
+            {planExpired && (
+              <span className="px-2.5 py-0.5 rounded-full bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold">
+                Subscription Expired · Starter Limits Enforced
+              </span>
+            )}
+            {isPro && profile.planExpiresAt && (
+              <span className="text-[11px] font-mono text-[#71717A]">
+                {profile.planBillingCycle === 'annual' ? 'Annual' : 'Monthly'} · renews{' '}
+                {new Date(profile.planExpiresAt).toLocaleDateString()}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-3.5">
@@ -315,14 +564,20 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             </span>
             <div className="flex items-baseline gap-1.5 mt-1">
               <span className="font-display text-[28px] leading-9 font-bold text-[#0B0B0B] tabular-nums">
-                {isPro ? activeEventsCount : `${Math.min(activeEventsCount, 1)}/1`}
+                {isPro
+                  ? activeEventsCount
+                  : `${Math.min(activeEventsCount, STARTER_MAX_ACTIVE_EVENTS)}/${STARTER_MAX_ACTIVE_EVENTS}`}
               </span>
               <span className="text-xs text-[#71717A]">{isPro ? 'unlimited' : 'cap'}</span>
             </div>
             <div className="w-full bg-[#EEEEF0] h-1.5 rounded-full mt-2 overflow-hidden">
               <div
                 className="bg-[#0B0B0B] h-full rounded-full transition-all duration-300"
-                style={{ width: isPro ? '24%' : '100%' }}
+                style={{
+                  width: isPro
+                    ? `${Math.min(100, Math.max(18, activeEventsCount * 15))}%`
+                    : `${Math.min(100, Math.round((activeEventsCount / STARTER_MAX_ACTIVE_EVENTS) * 100))}%`,
+                }}
               />
             </div>
           </div>
@@ -333,10 +588,10 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             </span>
             <div className="flex items-baseline gap-1.5 mt-1">
               <span className="font-display text-[28px] leading-9 font-bold text-[#0B0B0B] tabular-nums">
-                {isPro ? '∞' : topEvent?.registered ?? 42}
+                {isPro ? '∞' : topRegistered}
               </span>
               <span className="text-xs text-[#71717A] tabular-nums">
-                {isPro ? 'uncapped' : `/ ${topEvent?.capacity ?? 50} limit`}
+                {isPro ? 'uncapped' : `/ ${topEffectiveCap} limit`}
               </span>
             </div>
             <span className="text-[11px] text-[#71717A] mt-2 truncate tabular-nums">
@@ -347,14 +602,14 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       </section>
 
       {/* SECTION: SUBSCRIPTION TIERS */}
-      <section className="space-y-4">
+      <section className="space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h2 className="font-display text-[22px] font-bold tracking-[-0.02em] text-[#0B0B0B]">
               Subscription Tiers
             </h2>
             <p className="text-xs text-[#71717A]">
-              Enforced at registration time via workspace schema triggers.
+              Strictly enforced server-side &amp; in Postgres RLS triggers — upgrades require verified payment activation.
             </p>
           </div>
 
@@ -383,194 +638,477 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
-          {/* FREE TIER */}
-          <div className="bg-[#F5F5F7] rounded-3xl p-6 sm:p-8 flex flex-col justify-between gap-6">
-            <div className="space-y-5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-base font-bold text-[#0B0B0B]">Free Plan</span>
-                <span className="px-3 py-1 rounded-full bg-white text-[#0B0B0B] text-xs font-semibold shadow-sm">
-                  {!isPro ? 'Current Tier' : 'Community Tier'}
-                </span>
-              </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-stretch">
+          {SUBSCRIPTION_PLAN_CATALOG.map((tier) => {
+            const isCurrent = effectivePlan === tier.name;
+            const cycle: BillingCycle = isAnnual ? 'annual' : 'monthly';
+            const priceUsd = isAnnual ? tier.annualUsd : tier.monthlyUsd;
+            const priceGhs = isAnnual ? tier.annualGhs : tier.monthlyGhs;
+            const isStarter = tier.id === 'starter';
+            const starterEventsPct = Math.min(
+              100,
+              Math.round((activeEventsCount / STARTER_MAX_ACTIVE_EVENTS) * 100)
+            );
+            const isSelectedDraft =
+              planCheckoutDraft?.planId === tier.id && planCheckoutDraft?.billingCycle === cycle;
 
-              <div>
-                <div className="flex items-baseline gap-1.5">
-                  <span className="font-display text-[36px] leading-none font-bold text-[#0B0B0B] tabular-nums">
-                    $0
-                  </span>
-                  <span className="text-sm text-[#71717A]">/ month</span>
-                </div>
-                <p className="text-xs text-[#71717A] mt-1">
-                  Lifetime free for emerging independent community organizers
-                </p>
-              </div>
-
-              <div className="space-y-2.5">
-                <div className="bg-white rounded-2xl p-3.5 space-y-1.5">
-                  <div className="flex justify-between text-xs font-semibold">
-                    <span>Active Events Limit</span>
-                    <span className="tabular-nums">1 / 1 (Cap)</span>
-                  </div>
-                  <div className="w-full bg-[#E8E8EA] h-1.5 rounded-full overflow-hidden">
-                    <div className="bg-[#0B0B0B] h-full rounded-full w-full" />
-                  </div>
-                  <span className="text-[11px] text-[#71717A] block">
-                    Cannot publish concurrent drafts
-                  </span>
-                </div>
-
-                <div className="bg-white rounded-2xl p-3.5 space-y-1.5">
-                  <div className="flex justify-between text-xs font-semibold">
-                    <span>Attendee Registration Gate</span>
-                    <span className="tabular-nums">42 / 50 (84%)</span>
-                  </div>
-                  <div className="w-full bg-[#E8E8EA] h-1.5 rounded-full overflow-hidden">
-                    <div className="bg-[#EF4444] h-full rounded-full w-[84%]" />
-                  </div>
-                  <span className="text-[11px] text-[#71717A] block">
-                    Pauses automatically at 50 registrations
-                  </span>
-                </div>
-              </div>
-
-              <div className="space-y-2.5 pt-1 text-xs">
-                <div className="flex items-center gap-2.5 text-[#0B0B0B]">
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>Starts with 0 SMS credits — pay only for bundles you buy</span>
-                </div>
-                <div className="flex items-center gap-2.5 text-[#0B0B0B]">
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>Standard QR ticket generation &amp; check-in app</span>
-                </div>
-                <div className="flex items-center gap-2.5 text-[#71717A]">
-                  <Lock className="w-4 h-4 shrink-0" />
-                  <span>Custom SMS/Email templates (system default only)</span>
-                </div>
-                <div className="flex items-center gap-2.5 text-[#71717A]">
-                  <Lock className="w-4 h-4 shrink-0" />
-                  <span>Attendee raw CSV exports locked</span>
-                </div>
-                <div className="flex items-center gap-2.5 text-[#71717A]">
-                  <Lock className="w-4 h-4 shrink-0" />
-                  <span>Post-event thank you: Email only (SMS disabled)</span>
-                </div>
-              </div>
-            </div>
-
-            {!isPro ? (
-              <button
-                type="button"
-                disabled
-                className="w-full py-3 px-4 rounded-full bg-[#E8E8EA] text-[#71717A] text-xs font-semibold cursor-not-allowed"
-              >
-                Active Tier • Free Plan
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleResetFreeTier}
-                className="w-full py-3 px-4 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-xs font-semibold transition-colors"
-              >
-                Switch to Free Starter Tier
-              </button>
-            )}
-          </div>
-
-          {/* PRO TIER */}
-          <div className="bg-white border border-[#E5E5EA] rounded-3xl p-6 sm:p-8 flex flex-col justify-between gap-6 shadow-sm">
-            <div className="space-y-5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="inline-flex items-center gap-1.5 text-base font-bold text-[#0B0B0B]">
-                  <span>Pro Organizer Tier</span>
-                  <Sparkles className="w-4 h-4" />
-                </span>
-                <span className="px-3 py-1 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold uppercase tracking-wider">
-                  Unlimited Scale
-                </span>
-              </div>
-
-              <div>
-                <div className="flex items-baseline gap-1.5">
-                  <span className="font-display text-[36px] leading-none font-bold text-[#0B0B0B] tabular-nums">
-                    {isAnnual ? '$190' : '$19'}
-                  </span>
-                  <span className="text-sm text-[#71717A]">
-                    {isAnnual ? '/ year' : '/ month'}
-                  </span>
-                </div>
-                <p className="text-xs text-[#71717A] mt-1">
-                  {isAnnual
-                    ? 'Includes 2 months free • Save $38 annually'
-                    : 'Billed monthly • Cancel anytime with zero downtime'}
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="p-3.5 rounded-2xl bg-[#F5F5F7] flex items-center gap-2.5">
-                  <InfinityIcon className="w-5 h-5 text-[#0B0B0B] shrink-0" />
-                  <div>
-                    <span className="text-xs font-bold text-[#0B0B0B] block">Unlimited</span>
-                    <span className="text-[11px] text-[#71717A]">Concurrent Events</span>
-                  </div>
-                </div>
-                <div className="p-3.5 rounded-2xl bg-[#F5F5F7] flex items-center gap-2.5">
-                  <UserPlus className="w-5 h-5 text-[#0B0B0B] shrink-0" />
-                  <div>
-                    <span className="text-xs font-bold text-[#0B0B0B] block">No Attendee Cap</span>
-                    <span className="text-[11px] text-[#71717A]">Zero Gatekeeping</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-2.5 pt-1 text-xs">
-                {[
-                  { strong: 'Purchased SMS bundle pool', rest: ' — spend the exact SMS units you buy' },
-                  { strong: 'Custom Sender IDs', rest: ' registered on Arkesel (11 chars)' },
-                  { strong: 'Customizable templates', rest: ' for SMS & Email with dynamic tokens' },
-                  { strong: 'Instant CSV & TSV exports', rest: ' with check-in timestamps & Act 843 logs' },
-                  { strong: 'Thank-you SMS broadcasts', rest: ' alongside Resend email blasts' },
-                  { strong: '100% white-label', rest: ' registration pages with zero watermarks' },
-                ].map((item) => (
-                  <div key={item.strong} className="flex items-center gap-2.5 text-[#0B0B0B]">
-                    <CheckCircle2 className="w-4 h-4 shrink-0" />
-                    <span>
-                      <strong>{item.strong}</strong>
-                      {item.rest}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={handleUpgradeToPro}
-                disabled={isPro}
-                className={`w-full py-3 px-4 rounded-full text-xs font-semibold inline-flex items-center justify-center gap-2 transition-all ${
-                  isPro
-                    ? 'bg-[#F5F5F7] text-[#71717A] cursor-not-allowed'
-                    : 'bg-[#0B0B0B] hover:bg-zinc-800 text-white shadow-sm'
+            return (
+              <div
+                key={tier.id}
+                className={`rounded-3xl p-6 sm:p-7 flex flex-col justify-between gap-6 transition-all ${
+                  isStarter
+                    ? 'bg-[#F5F5F7]'
+                    : tier.featured
+                      ? 'bg-white border-2 border-[#0B0B0B] shadow-sm'
+                      : 'bg-white border border-[#E5E5EA] shadow-sm'
                 }`}
               >
-                {isPro ? (
-                  <>
-                    <Check className="w-4 h-4 text-[#0B0B0B]" />
-                    <span>{profile.plan} Active</span>
-                  </>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-base font-bold text-[#0B0B0B]">
+                      <span>{tier.name}</span>
+                      {!isStarter && <Sparkles className="w-4 h-4" />}
+                    </span>
+                    <span
+                      className={`px-3 py-1 rounded-full text-[11px] font-semibold uppercase tracking-wider ${
+                        isCurrent
+                          ? 'bg-[#0B0B0B] text-white'
+                          : tier.featured
+                            ? 'bg-[#F5F5F7] text-[#0B0B0B]'
+                            : 'bg-white text-[#71717A] border border-[#E5E5EA]'
+                      }`}
+                    >
+                      {isCurrent
+                        ? 'Current Tier'
+                        : isStarter
+                          ? 'Community'
+                          : tier.featured
+                            ? 'Most Popular'
+                            : 'Multi-Venue'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="font-display text-[34px] leading-none font-bold text-[#0B0B0B] tabular-nums">
+                        ${priceUsd.toLocaleString()}
+                      </span>
+                      <span className="text-sm text-[#71717A]">
+                        {isStarter ? '/ forever' : isAnnual ? '/ year' : '/ month'}
+                      </span>
+                    </div>
+                    {!isStarter && (
+                      <p className="text-xs font-mono font-semibold text-[#0B0B0B] mt-1 tabular-nums">
+                        GH₵ {priceGhs.toLocaleString()} {isAnnual ? 'per year' : 'per month'}
+                      </p>
+                    )}
+                    <p className="text-xs text-[#71717A] mt-1">{tier.tagline}</p>
+                  </div>
+
+                  {isStarter ? (
+                    <div className="space-y-2.5">
+                      <div className="bg-white rounded-2xl p-3.5 space-y-1.5">
+                        <div className="flex justify-between text-xs font-semibold">
+                          <span>Active Events Limit</span>
+                          <span className="tabular-nums">
+                            {Math.min(activeEventsCount, STARTER_MAX_ACTIVE_EVENTS)} / {STARTER_MAX_ACTIVE_EVENTS} (Cap)
+                          </span>
+                        </div>
+                        <div className="w-full bg-[#E8E8EA] h-1.5 rounded-full overflow-hidden">
+                          <div
+                            className="bg-[#0B0B0B] h-full rounded-full transition-all"
+                            style={{ width: `${starterEventsPct}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="bg-white rounded-2xl p-3.5 space-y-1.5">
+                        <div className="flex justify-between text-xs font-semibold">
+                          <span>Top Event Seat Cap</span>
+                          <span className="tabular-nums">
+                            {Math.min(topRegistered, STARTER_MAX_ATTENDEES_PER_EVENT)} /{' '}
+                            {STARTER_MAX_ATTENDEES_PER_EVENT} ({topFillPct}%)
+                          </span>
+                        </div>
+                        <div className="w-full bg-[#E8E8EA] h-1.5 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              topFillPct >= 85 ? 'bg-[#EF4444]' : 'bg-[#0B0B0B]'
+                            }`}
+                            style={{ width: `${topFillPct}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div className="p-3 rounded-2xl bg-[#F5F5F7] flex items-center gap-2">
+                        <InfinityIcon className="w-4 h-4 text-[#0B0B0B] shrink-0" />
+                        <div>
+                          <span className="text-xs font-bold text-[#0B0B0B] block">Unlimited</span>
+                          <span className="text-[10px] text-[#71717A]">Active Events</span>
+                        </div>
+                      </div>
+                      <div className="p-3 rounded-2xl bg-[#F5F5F7] flex items-center gap-2">
+                        <UserPlus className="w-4 h-4 text-[#0B0B0B] shrink-0" />
+                        <div>
+                          <span className="text-xs font-bold text-[#0B0B0B] block">Uncapped</span>
+                          <span className="text-[10px] text-[#71717A]">Attendees</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-2 pt-1 text-xs">
+                    {tier.features.map((feat) => (
+                      <div key={feat} className="flex items-start gap-2 text-[#0B0B0B]">
+                        <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                        <span>{feat}</span>
+                      </div>
+                    ))}
+                    {tier.limitations.map((lim) => (
+                      <div key={lim} className="flex items-start gap-2 text-[#71717A]">
+                        <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+                        <span>{lim} (Locked)</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {isStarter ? (
+                  !isPro ? (
+                    <button
+                      type="button"
+                      disabled
+                      className="w-full py-3 px-4 rounded-full bg-[#E8E8EA] text-[#71717A] text-xs font-semibold cursor-not-allowed"
+                    >
+                      Active Tier • Starter
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setDowngradeConfirmOpen(true)}
+                      className="w-full py-3 px-4 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-xs font-semibold transition-colors"
+                    >
+                      Downgrade to Starter Free Tier
+                    </button>
+                  )
                 ) : (
-                  <>
-                    <span>Upgrade to Pro Tier</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      disabled={isCurrent}
+                      onClick={() =>
+                        openPlanCheckout(tier.id === 'enterprise' ? 'enterprise' : 'pro', cycle)
+                      }
+                      className={`w-full py-3 px-4 rounded-full text-xs font-semibold inline-flex items-center justify-center gap-2 transition-all ${
+                        isCurrent
+                          ? 'bg-[#F5F5F7] text-[#71717A] cursor-not-allowed'
+                          : isSelectedDraft
+                            ? 'bg-emerald-700 text-white shadow-sm'
+                            : 'bg-[#0B0B0B] hover:bg-zinc-800 text-white shadow-sm'
+                      }`}
+                    >
+                      {isCurrent ? (
+                        <>
+                          <Check className="w-4 h-4 text-[#0B0B0B]" />
+                          <span>{tier.name} Active</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>
+                            {effectivePlan === 'Pro Organizer' && tier.id === 'enterprise'
+                              ? `Upgrade to Enterprise (GH₵ ${priceGhs.toLocaleString()})`
+                              : `Subscribe to ${tier.name} (GH₵ ${priceGhs.toLocaleString()})`}
+                          </span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                    <p className="text-[11px] text-[#71717A] text-center">
+                      Paystack instant verification or manual receipt review
+                    </p>
+                  </div>
                 )}
-              </button>
-              <p className="text-[11px] text-[#71717A] text-center">
-                Instant unlock • Sandboxed quota enforcement
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Confirmed Downgrade Prompt */}
+        {downgradeConfirmOpen && isPro && (
+          <div className="bg-amber-50 border border-amber-200 rounded-3xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-[#0B0B0B]">
+                Confirm Downgrade to Starter Free Tier
+              </h3>
+              <p className="text-xs text-[#52525B] max-w-2xl">
+                Downgrading immediately re-enforces Starter limits (max 1 active event, 50 attendees/event, &ldquo;EVENTSAPP&rdquo; shared Sender ID, and Email-only broadcasts). Your purchased SMS bundle credits remain untouched.
               </p>
             </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                disabled={downgrading}
+                onClick={() => setDowngradeConfirmOpen(false)}
+                className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B]"
+              >
+                Keep {effectivePlan}
+              </button>
+              <button
+                type="button"
+                disabled={downgrading}
+                onClick={() => void handleDowngradeToStarter()}
+                className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {downgrading ? 'Downgrading...' : 'Confirm Downgrade'}
+              </button>
+            </div>
           </div>
+        )}
+
+        {/* Verified Subscription Checkout Drawer */}
+        {planCheckoutDraft && (
+          <form
+            id="subscription-checkout-drawer"
+            onSubmit={handleConfirmSubscriptionPurchase}
+            className="bg-white border-2 border-[#0B0B0B] rounded-3xl p-6 shadow-md space-y-5"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-[#71717A]">
+                  Verified Subscription Plan Checkout
+                </span>
+                <h3 className="font-display text-xl font-bold text-[#0B0B0B] mt-0.5">
+                  {planCheckoutDraft.planName} ({planCheckoutDraft.billingCycle === 'annual' ? 'Annual' : 'Monthly'}) — GH₵{' '}
+                  {planCheckoutDraft.amountGhs.toLocaleString()} (${planCheckoutDraft.amountUsd})
+                </h3>
+                <p className="text-xs text-[#71717A] mt-1 leading-relaxed max-w-2xl">
+                  Plans activate automatically once Paystack confirms settlement, or submit a verified MoMo/Bank receipt for Creator Console approval.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPlanCheckoutDraft(null)}
+                aria-label="Close subscription checkout"
+                className="p-2 rounded-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <CreditCard className="w-4 h-4 text-[#0B0B0B]" />
+                  <span className="text-xs font-bold text-[#0B0B0B]">
+                    Instant MoMo &amp; Card Activation (Paystack)
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                      arkeselStatus?.paystackConfigured
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'bg-white text-[#71717A] border border-[#E5E5EA]'
+                    }`}
+                  >
+                    {arkeselStatus?.paystackConfigured ? 'Auto-Activates on Payment' : 'Not Configured'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#71717A] leading-relaxed">
+                  {arkeselStatus?.paystackConfigured
+                    ? 'Verified server-side with Paystack before activating your tier atomically.'
+                    : 'Set PAYSTACK_SECRET_KEY on the server for automated Paystack settlement, or submit a manual transfer receipt below.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={!arkeselStatus?.paystackConfigured || subPaystackInitializing}
+                onClick={() => void handlePaySubscriptionWithPaystack()}
+                className="px-4 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-45 whitespace-nowrap shrink-0"
+              >
+                <CreditCard className="w-3.5 h-3.5" />
+                <span>
+                  {subPaystackInitializing
+                    ? 'Starting Paystack...'
+                    : `Pay GH₵ ${planCheckoutDraft.amountGhs.toLocaleString()} Online`}
+                </span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[#0B0B0B]">Payment Channel</label>
+                <select
+                  value={subPaymentChannel}
+                  onChange={(e) => setSubPaymentChannel(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-2xl bg-[#F5F5F7] border border-transparent focus:border-[#0B0B0B] text-xs font-medium text-[#0B0B0B] outline-none"
+                >
+                  <option value="Paystack MoMo / Card">Paystack / Card Transfer Receipt</option>
+                  <option value="MTN Mobile Money">MTN Mobile Money Merchant</option>
+                  <option value="Telecel Cash">Telecel Cash</option>
+                  <option value="Ghana Interbank Transfer">Ghana Interbank / SWIFT Transfer</option>
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[#0B0B0B]">
+                  Payment Receipt Reference <span className="text-red-600">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  minLength={6}
+                  maxLength={80}
+                  value={subReceiptReference}
+                  onChange={(e) => setSubReceiptReference(e.target.value)}
+                  placeholder="Required (6+ chars, e.g. SUB-MOMO-88412)"
+                  className="w-full px-4 py-2.5 rounded-2xl bg-[#F5F5F7] border border-transparent focus:border-[#0B0B0B] text-xs font-mono text-[#0B0B0B] outline-none"
+                />
+              </div>
+            </div>
+
+            {subCheckoutError && (
+              <div className="px-4 py-2.5 rounded-2xl bg-red-50 border border-red-200 text-xs text-red-700">
+                {subCheckoutError}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#EEEEF0]">
+              <span className="text-[11px] text-[#71717A] inline-flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-[#0B0B0B]" />
+                Server checks amount (GH₵ {planCheckoutDraft.amountGhs.toLocaleString()}) &amp; deduplicates references.
+              </span>
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setPlanCheckoutDraft(null)}
+                  className="px-4 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] text-xs font-semibold transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={subPurchasing || subReceiptReference.trim().length < 6}
+                  className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 whitespace-nowrap"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>
+                    {subPurchasing
+                      ? 'Submitting Receipt...'
+                      : `Submit ${planCheckoutDraft.planName} Receipt`}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </form>
+        )}
+
+        {/* Subscription Payment & Activation Ledger */}
+        <div className="bg-[#F5F5F7] rounded-3xl p-5 sm:p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="font-display text-lg font-bold text-[#0B0B0B]">
+                Subscription Payment &amp; Activation Ledger
+              </h3>
+              <p className="text-xs text-[#71717A]">
+                All paid tier activations are backed by verified Paystack callbacks or approved manual payment receipts.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void refreshBillingTelemetry()}
+              disabled={subPaymentsLoading}
+              className="px-3.5 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${subPaymentsLoading ? 'animate-spin' : ''}`} />
+              <span>Refresh</span>
+            </button>
+          </div>
+
+          {subPayments.length === 0 ? (
+            <p className="text-xs text-[#71717A] bg-white rounded-2xl px-4 py-3 border border-[#E5E5EA]">
+              No subscription payment records yet. Select Pro Organizer or Enterprise above to subscribe.
+            </p>
+          ) : (
+            <div className="bg-white rounded-2xl border border-[#E5E5EA] overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-[#E5E5EA] bg-[#F5F5F7] text-[#71717A] font-semibold">
+                    <th className="py-2.5 px-4">Date</th>
+                    <th className="py-2.5 px-4">Plan &amp; Cycle</th>
+                    <th className="py-2.5 px-4">Amount</th>
+                    <th className="py-2.5 px-4">Reference</th>
+                    <th className="py-2.5 px-4">Status</th>
+                    <th className="py-2.5 px-4 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E5E5EA]">
+                  {subPayments.map((sp) => {
+                    const badgeClass =
+                      sp.status === 'active'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : sp.status === 'pending_verification' || sp.status === 'pending_payment'
+                          ? 'bg-amber-50 text-amber-800 border-amber-200'
+                          : 'bg-red-50 text-red-700 border-red-200';
+                    const statusLabel =
+                      sp.status === 'active'
+                        ? 'Activated'
+                        : sp.status === 'pending_verification'
+                          ? 'Pending Verification'
+                          : sp.status === 'pending_payment'
+                            ? 'Awaiting Paystack'
+                            : sp.status === 'rejected'
+                              ? 'Rejected'
+                              : 'Failed';
+                    return (
+                      <tr key={sp.id} className="hover:bg-[#F5F5F7]/50">
+                        <td className="py-2.5 px-4 text-[#71717A] whitespace-nowrap tabular-nums">
+                          {new Date(sp.createdAt).toLocaleDateString()}
+                        </td>
+                        <td className="py-2.5 px-4 font-semibold text-[#0B0B0B]">
+                          <div>
+                            {sp.planName} ({sp.billingCycle})
+                          </div>
+                          <div className="text-[11px] font-normal text-[#71717A]">
+                            {sp.paymentChannel}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-4 font-mono text-[#0B0B0B] tabular-nums">
+                          GH₵ {sp.amountGhs.toLocaleString()} (${sp.amountUsd})
+                        </td>
+                        <td className="py-2.5 px-4 font-mono text-[#0B0B0B]">{sp.reference}</td>
+                        <td className="py-2.5 px-4">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border text-[11px] font-semibold ${badgeClass}`}
+                          >
+                            {(sp.status === 'pending_verification' || sp.status === 'pending_payment') && (
+                              <Clock className="w-3 h-3" />
+                            )}
+                            {statusLabel}
+                          </span>
+                          {sp.rejectionReason && (
+                            <p className="text-[11px] text-red-600 mt-1">{sp.rejectionReason}</p>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                          {sp.provider === 'paystack' && sp.status === 'pending_payment' && (
+                            <button
+                              type="button"
+                              disabled={verifyingSubRef === sp.reference}
+                              onClick={() => void handleVerifySubscriptionPaystack(sp.reference)}
+                              className="px-3 py-1 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold hover:bg-zinc-800 disabled:opacity-50"
+                            >
+                              {verifyingSubRef === sp.reference ? 'Verifying...' : 'Verify Paystack'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </section>
 
@@ -688,7 +1226,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             <div className="flex items-center">
               <button
                 type="button"
-                onClick={() => void refreshArkeselStatus()}
+                onClick={() => void refreshBillingTelemetry()}
                 disabled={arkeselLoading}
                 className="w-full h-full min-h-[54px] px-4 py-2 rounded-2xl bg-white hover:bg-[#0B0B0B] hover:text-white text-[#0B0B0B] border border-[#E5E5EA] text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60 whitespace-nowrap"
               >
@@ -700,71 +1238,68 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {CREDIT_BUNDLES.map((pack) => {
-            const numericAmount = Number(pack.priceGhs.replace(/[^0-9.]/g, '')) || 0;
-            return (
-              <div
-                key={pack.id}
-                className={`rounded-3xl p-6 flex flex-col justify-between gap-5 transition-all ${
-                  pack.featured
-                    ? 'bg-white border border-[#E5E5EA] shadow-sm'
-                    : 'bg-[#F5F5F7] hover:bg-white hover:border hover:border-[#E5E5EA]'
-                }`}
-              >
-                <div className="space-y-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-base font-bold text-[#0B0B0B]">{pack.name}</span>
-                    <span
-                      className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold tabular-nums ${
-                        pack.featured
-                          ? 'bg-[#0B0B0B] text-white'
-                          : 'bg-white text-[#0B0B0B]'
-                      }`}
-                    >
-                      {pack.featured ? 'Best Value' : `${pack.credits.toLocaleString()} SMS`}
-                    </span>
-                  </div>
-
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="font-display text-[30px] leading-none font-bold text-[#0B0B0B] tabular-nums">
-                      {pack.priceGhs}
-                    </span>
-                    <span className="text-xs text-[#71717A] tabular-nums">{pack.approxUsd}</span>
-                  </div>
-
-                  <div className="flex items-center gap-2 text-xs font-semibold text-[#444748]">
-                    <span className="tabular-nums">{pack.unitRate}</span>
-                    {pack.savings && (
-                      <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-[10px]">
-                        {pack.savings}
-                      </span>
-                    )}
-                  </div>
-
-                  <p className="text-xs text-[#71717A] leading-relaxed">{pack.desc}</p>
+          {SMS_BUNDLE_CATALOG.map((pack) => (
+            <div
+              key={pack.id}
+              className={`rounded-3xl p-6 flex flex-col justify-between gap-5 transition-all ${
+                pack.featured
+                  ? 'bg-white border border-[#E5E5EA] shadow-sm'
+                  : 'bg-[#F5F5F7] hover:bg-white hover:border hover:border-[#E5E5EA]'
+              }`}
+            >
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-base font-bold text-[#0B0B0B]">{pack.name}</span>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold tabular-nums ${
+                      pack.featured
+                        ? 'bg-[#0B0B0B] text-white'
+                        : 'bg-white text-[#0B0B0B]'
+                    }`}
+                  >
+                    {pack.featured ? 'Best Value' : `${pack.credits.toLocaleString()} SMS`}
+                  </span>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() =>
-                    openBundleCheckout({
-                      bundleId: pack.id,
-                      bundleName: pack.name,
-                      credits: pack.credits,
-                      amountGhs: numericAmount,
-                    })
-                  }
-                  className={`w-full py-2.5 px-4 rounded-full text-xs font-semibold transition-colors whitespace-nowrap ${
-                    pack.featured
-                      ? 'bg-[#0B0B0B] hover:bg-zinc-800 text-white'
-                      : 'bg-white hover:bg-[#0B0B0B] hover:text-white text-[#0B0B0B] border border-[#E5E5EA]'
-                  }`}
-                >
-                  Purchase {pack.credits.toLocaleString()} SMS via Arkesel
-                </button>
+                <div className="flex items-baseline gap-1.5">
+                  <span className="font-display text-[30px] leading-none font-bold text-[#0B0B0B] tabular-nums">
+                    GH₵ {pack.amountGhs.toLocaleString()}
+                  </span>
+                  <span className="text-xs text-[#71717A] tabular-nums">{pack.approxUsd}</span>
+                </div>
+
+                <div className="flex items-center gap-2 text-xs font-semibold text-[#444748]">
+                  <span className="tabular-nums">GH₵ {pack.unitRateGhs} per SMS</span>
+                  {pack.savings && (
+                    <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-[10px]">
+                      {pack.savings}
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-xs text-[#71717A] leading-relaxed">{pack.desc}</p>
               </div>
-            );
-          })}
+
+              <button
+                type="button"
+                onClick={() =>
+                  openBundleCheckout({
+                    bundleId: pack.id,
+                    bundleName: pack.name,
+                    credits: pack.credits,
+                    amountGhs: pack.amountGhs,
+                  })
+                }
+                className={`w-full py-2.5 px-4 rounded-full text-xs font-semibold transition-colors whitespace-nowrap ${
+                  pack.featured
+                    ? 'bg-[#0B0B0B] hover:bg-zinc-800 text-white'
+                    : 'bg-white hover:bg-[#0B0B0B] hover:text-white text-[#0B0B0B] border border-[#E5E5EA]'
+                }`}
+              >
+                Buy {pack.credits.toLocaleString()} SMS Credits
+              </button>
+            </div>
+          ))}
         </div>
 
         {/* Custom Quantity Slider */}
@@ -829,7 +1364,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
           </div>
         </div>
 
-        {/* Arkesel Bundle Checkout Confirmation Drawer / Inline Panel */}
+        {/* Verified Bundle Checkout Drawer */}
         {checkoutDraft && (
           <form
             onSubmit={handleConfirmBundlePurchase}
@@ -838,14 +1373,14 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             <div className="flex items-start justify-between gap-4">
               <div>
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-[#71717A]">
-                  Arkesel SMS Bundle Checkout
+                  Verified SMS Bundle Checkout
                 </span>
                 <h3 className="font-display text-xl font-bold text-[#0B0B0B] mt-0.5">
                   {checkoutDraft.bundleName} — {checkoutDraft.credits.toLocaleString()} SMS (GH₵{' '}
                   {checkoutDraft.amountGhs.toLocaleString()})
                 </h3>
                 <p className="text-xs text-[#71717A] mt-1 leading-relaxed max-w-2xl">
-                  Arkesel handles direct bundle billing on the Arkesel Merchant Portal. Complete payment on{' '}
+                  Pay instantly with Mobile Money or Card via Paystack, or pay directly on{' '}
                   <a
                     href="https://sms.arkesel.com"
                     target="_blank"
@@ -854,16 +1389,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                   >
                     sms.arkesel.com
                   </a>{' '}
-                  (API reference:{' '}
-                  <a
-                    href="https://sms.arkesel.com/user/sms-api/info"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-semibold text-[#0B0B0B] underline underline-offset-2"
-                  >
-                    sms.arkesel.com/user/sms-api/info
-                  </a>
-                  ), then credit your workspace below.
+                  and submit your transaction receipt reference below.
                 </p>
               </div>
               <button
@@ -876,7 +1402,46 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Instant Paystack Gateway Option */}
+            <div className="rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <CreditCard className="w-4 h-4 text-[#0B0B0B]" />
+                  <span className="text-xs font-bold text-[#0B0B0B]">
+                    Instant MoMo &amp; Card Checkout (Paystack)
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                      arkeselStatus?.paystackConfigured
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'bg-white text-[#71717A] border border-[#E5E5EA]'
+                    }`}
+                  >
+                    {arkeselStatus?.paystackConfigured ? 'Auto-Credits on Payment' : 'Not Configured'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#71717A] leading-relaxed">
+                  {arkeselStatus?.paystackConfigured
+                    ? 'Verified server-side with Paystack before crediting SMS units atomically.'
+                    : 'Set PAYSTACK_SECRET_KEY on the server to enable automated MTN MoMo, Telecel Cash & Card settlement.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={!arkeselStatus?.paystackConfigured || paystackInitializing}
+                onClick={() => void handlePayWithPaystack()}
+                className="px-4 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-45 whitespace-nowrap shrink-0"
+              >
+                <CreditCard className="w-3.5 h-3.5" />
+                <span>
+                  {paystackInitializing
+                    ? 'Starting Paystack...'
+                    : `Pay GH₵ ${checkoutDraft.amountGhs.toLocaleString()} Online`}
+                </span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-[#0B0B0B]">Arkesel Payment Channel</label>
                 <select
@@ -894,16 +1459,28 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
 
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-[#0B0B0B]">
-                  Arkesel Receipt / Transaction Ref (optional)
+                  Transaction Receipt / Arkesel Reference <span className="text-red-600">*</span>
                 </label>
                 <input
                   type="text"
+                  required
+                  minLength={6}
+                  maxLength={80}
                   value={arkeselReference}
                   onChange={(e) => setArkeselReference(e.target.value)}
-                  placeholder="e.g. ARK-TX-904218"
+                  placeholder="Required (6+ chars, e.g. ARK-TX-904218)"
                   className="w-full px-4 py-2.5 rounded-2xl bg-[#F5F5F7] border border-transparent focus:border-[#0B0B0B] text-xs font-mono text-[#0B0B0B] outline-none"
                 />
               </div>
+            </div>
+
+            <div className="rounded-2xl bg-[#F5F5F7] px-4 py-3 text-[11px] text-[#52525B] flex items-start gap-2">
+              <ShieldCheck className="w-4 h-4 text-[#0B0B0B] shrink-0 mt-0.5" />
+              <span>
+                {arkeselStatus?.mode === 'sandbox'
+                  ? 'Sandbox Mode active: valid receipt references credit test SMS bundles immediately.'
+                  : 'Live Carrier Protection: manual Arkesel/MoMo receipt references are logged as Pending Verification until verified and approved in the Apps Creator Console.'}
+              </span>
             </div>
 
             {checkoutError && (
@@ -919,7 +1496,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                 rel="noopener noreferrer"
                 className="px-4 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
               >
-                <span>1. Pay on Arkesel Platform</span>
+                <span>Open Arkesel Portal</span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
 
@@ -933,20 +1510,128 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={purchasing}
-                  className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-60 whitespace-nowrap"
+                  disabled={purchasing || arkeselReference.trim().length < 6}
+                  className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 whitespace-nowrap"
                 >
                   <Zap className="w-3.5 h-3.5" />
                   <span>
                     {purchasing
-                      ? 'Syncing Credits...'
-                      : `2. Confirm & Credit +${checkoutDraft.credits.toLocaleString()} SMS`}
+                      ? 'Submitting Receipt...'
+                      : arkeselStatus?.mode === 'sandbox'
+                        ? `Credit +${checkoutDraft.credits.toLocaleString()} SMS (Sandbox)`
+                        : `Submit Receipt (+${checkoutDraft.credits.toLocaleString()} SMS)`}
                   </span>
                 </button>
               </div>
             </div>
           </form>
         )}
+
+        {/* SMS Bundle Purchase & Verification Ledger */}
+        <div className="bg-[#F5F5F7] rounded-3xl p-5 sm:p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="font-display text-lg font-bold text-[#0B0B0B]">
+                SMS Bundle Purchase &amp; Verification Ledger
+              </h3>
+              <p className="text-xs text-[#71717A]">
+                Idempotent transaction receipts — duplicate references cannot double-credit your workspace.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void refreshBillingTelemetry()}
+              disabled={purchasesLoading}
+              className="px-3.5 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${purchasesLoading ? 'animate-spin' : ''}`} />
+              <span>Refresh Ledger</span>
+            </button>
+          </div>
+
+          {purchases.length === 0 ? (
+            <p className="text-xs text-[#71717A] bg-white rounded-2xl px-4 py-3 border border-[#E5E5EA]">
+              No SMS bundle purchases recorded yet.
+            </p>
+          ) : (
+            <div className="bg-white rounded-2xl border border-[#E5E5EA] overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-[#E5E5EA] bg-[#F5F5F7] text-[#71717A] font-semibold">
+                    <th className="py-2.5 px-4">Date</th>
+                    <th className="py-2.5 px-4">Bundle</th>
+                    <th className="py-2.5 px-4">Credits</th>
+                    <th className="py-2.5 px-4">Amount</th>
+                    <th className="py-2.5 px-4">Reference</th>
+                    <th className="py-2.5 px-4">Status</th>
+                    <th className="py-2.5 px-4 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E5E5EA]">
+                  {purchases.map((p) => {
+                    const badgeClass =
+                      p.status === 'credited'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : p.status === 'pending_verification' || p.status === 'pending_payment'
+                          ? 'bg-amber-50 text-amber-800 border-amber-200'
+                          : 'bg-red-50 text-red-700 border-red-200';
+                    const statusLabel =
+                      p.status === 'credited'
+                        ? 'Credited'
+                        : p.status === 'pending_verification'
+                          ? 'Pending Verification'
+                          : p.status === 'pending_payment'
+                            ? 'Awaiting Paystack'
+                            : p.status === 'rejected'
+                              ? 'Rejected'
+                              : 'Failed';
+                    return (
+                      <tr key={p.id} className="hover:bg-[#F5F5F7]/50">
+                        <td className="py-2.5 px-4 text-[#71717A] whitespace-nowrap tabular-nums">
+                          {new Date(p.createdAt).toLocaleDateString()}
+                        </td>
+                        <td className="py-2.5 px-4 font-semibold text-[#0B0B0B]">
+                          <div>{p.bundleName}</div>
+                          <div className="text-[11px] font-normal text-[#71717A]">{p.paymentChannel}</div>
+                        </td>
+                        <td className="py-2.5 px-4 font-mono font-semibold text-[#0B0B0B] tabular-nums">
+                          +{p.credits.toLocaleString()} SMS
+                        </td>
+                        <td className="py-2.5 px-4 font-mono text-[#0B0B0B] tabular-nums">
+                          GH₵ {p.amountGhs.toLocaleString()}
+                        </td>
+                        <td className="py-2.5 px-4 font-mono text-[#0B0B0B]">{p.reference}</td>
+                        <td className="py-2.5 px-4">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border text-[11px] font-semibold ${badgeClass}`}
+                          >
+                            {p.status === 'pending_verification' && <Clock className="w-3 h-3" />}
+                            {statusLabel}
+                          </span>
+                          {p.rejectionReason && (
+                            <p className="text-[11px] text-red-600 mt-1">{p.rejectionReason}</p>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                          {p.provider === 'paystack' && p.status === 'pending_payment' && (
+                            <button
+                              type="button"
+                              disabled={verifyingRef === p.reference}
+                              onClick={() => void handleVerifyPaystack(p.reference)}
+                              className="px-3 py-1 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold hover:bg-zinc-800 disabled:opacity-50"
+                            >
+                              {verifyingRef === p.reference ? 'Verifying...' : 'Verify Paystack'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </section>
 
       {/* SECTION: SPECIFICATION MATRIX */}
@@ -986,7 +1671,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
         </div>
       </section>
 
-      {/* SANDBOX CONTROLS FOOTER */}
+      {/* SUBSCRIPTION ENFORCEMENT FOOTER */}
       <section className="bg-[#F5F5F7] rounded-3xl p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-start gap-3.5">
           <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-[#0B0B0B] shrink-0">
@@ -994,25 +1679,27 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-sm font-bold text-[#0B0B0B]">Billing Engine Sandbox Mode</span>
+              <span className="text-sm font-bold text-[#0B0B0B]">Strict Subscription Enforcement</span>
               <span className="px-2.5 py-0.5 rounded-full bg-white text-[#0B0B0B] text-[11px] font-semibold">
-                Live State Sync
+                {effectivePlan}
               </span>
             </div>
             <p className="text-xs text-[#71717A] mt-1 max-w-2xl leading-relaxed">
-              Upgrades and SMS top-ups update your organizer profile plan and Arkesel balance across the entire Creator Studio in real time.
+              Plan entitlements and Arkesel SMS bundle credits are protected by database triggers and verified payment ledgers across the entire Creator Studio.
             </p>
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handleResetFreeTier}
-          className="px-4 py-2.5 rounded-full bg-white hover:bg-[#EEEEF0] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 shadow-sm transition-colors whitespace-nowrap shrink-0 self-end md:self-auto"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          <span>Reset to Default Free Tier</span>
-        </button>
+        {isPro && (
+          <button
+            type="button"
+            onClick={() => setDowngradeConfirmOpen(true)}
+            className="px-4 py-2.5 rounded-full bg-white hover:bg-[#EEEEF0] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 shadow-sm transition-colors whitespace-nowrap shrink-0 self-end md:self-auto"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Downgrade to Starter Free Tier</span>
+          </button>
+        )}
       </section>
     </div>
   );

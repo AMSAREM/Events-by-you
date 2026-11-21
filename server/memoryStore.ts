@@ -10,6 +10,18 @@ import {
   normalizePhoneE164,
 } from '../src/data/initialData.ts';
 import { normalizeHexColor } from '../src/lib/themeColors.ts';
+import {
+  PLAN_MRR_USD,
+  DEFAULT_SHARED_SENDER_ID,
+  STARTER_MAX_ACTIVE_EVENTS,
+  STARTER_MAX_ATTENDEES_PER_EVENT,
+  computePlanExpiresAtIso,
+  getEffectiveEventCapacity,
+  getPlanEntitlements,
+  hasCustomMessageOverrides,
+  hasCustomSenderIdValue,
+  isActiveEventStatus,
+} from '../src/lib/subscriptionPlans.ts';
 import type {
   AppRole,
   Attendee,
@@ -36,10 +48,13 @@ import type {
   GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
+  SmsBundlePurchase,
   SmsDispatchLogEntry,
+  SubscriptionPayment,
   SystemAlert,
   WebhookTriggerEvent,
 } from '../src/types/events.ts';
+import { isPaystackConfigured } from './paystack.ts';
 
 export interface MemoryUser {
   id: string;
@@ -81,13 +96,9 @@ interface MemoryDatabase {
   rollSettings: Map<string, DisposableRollSettings>;
   creatorApps: Map<string, StoredCreatorAppRecord>;
   creatorAppLogs: Map<string, CreatorAppLog>;
+  smsPurchases: Map<string, SmsBundlePurchase>;
+  subscriptionPayments: Map<string, SubscriptionPayment>;
 }
-
-const PLAN_MRR_USD: Record<OrganizerProfile['plan'], number> = {
-  Starter: 0,
-  'Pro Organizer': 29,
-  Enterprise: 99,
-};
 
 const SMS_UNIT_COST_USD = 0.012;
 const STORAGE_COST_PER_MB_USD = 0.08;
@@ -108,6 +119,8 @@ export const platformRuntime = {
   duplicateBlocksByEvent: new Map<string, number>(),
   diagnosticFailures: [] as BuilderDiagnosticFailure[],
   smsDispatches: [] as SmsDispatchLogEntry[],
+  fallbackSmsPurchases: new Map<string, SmsBundlePurchase>(),
+  fallbackSubscriptionPayments: new Map<string, SubscriptionPayment>(),
 
   getEffectiveArkeselSenderId(explicit?: string): {
     senderId: string;
@@ -206,6 +219,7 @@ export const platformRuntime = {
       arkeselSenderIdValue: sender.senderId,
       RESEND_API_KEY: Boolean((process.env.RESEND_API_KEY || '').trim()),
       RESEND_FROM_EMAIL: Boolean((process.env.RESEND_FROM_EMAIL || '').trim()),
+      PAYSTACK_SECRET_KEY: isPaystackConfigured(),
       CREATOR_PASSWORD: Boolean((process.env.CREATOR_PASSWORD || '').trim()),
       CREATOR_EMAIL: (process.env.CREATOR_EMAIL || 'amoakoimml@gmail.com').trim().toLowerCase(),
     };
@@ -273,6 +287,8 @@ const db: MemoryDatabase = {
   rollSettings: new Map(),
   creatorApps: new Map(),
   creatorAppLogs: new Map(),
+  smsPurchases: new Map(),
+  subscriptionPayments: new Map(),
 };
 
 function estimateShotBytes(dataUrl: string): number {
@@ -657,10 +673,15 @@ export const memoryStore = {
   getPublicEvents(): EventItem[] {
     return Array.from(db.events.values())
       .filter((e) => e.status === 'live' || e.status === 'upcoming')
-      .map(({ organizerId: _org, ...rest }) => {
-        if (!rest.extraDataConfig?.attendantLinks) return rest;
-        const { attendantLinks: _att, ...extraRest } = rest.extraDataConfig;
-        return { ...rest, extraDataConfig: extraRest };
+      .map(({ organizerId, ...rest }) => {
+        const ownerEnt = getPlanEntitlements(db.users.get(organizerId)?.profile);
+        const withBrand: EventItem = {
+          ...rest,
+          whiteLabel: ownerEnt.whiteLabelPublicEvent,
+        };
+        if (!withBrand.extraDataConfig?.attendantLinks) return withBrand;
+        const { attendantLinks: _att, ...extraRest } = withBrand.extraDataConfig;
+        return { ...withBrand, extraDataConfig: extraRest };
       })
       .sort((a, b) => {
         const aCustom = a.flyerUrl?.startsWith('data:') ? 1 : 0;
@@ -676,10 +697,15 @@ export const memoryStore = {
         (evt.status === 'live' || evt.status === 'upcoming') &&
         (evt.id.toLowerCase() === target || evt.slug.toLowerCase() === target)
       ) {
-        const { organizerId: _org, ...rest } = evt;
-        if (!rest.extraDataConfig?.attendantLinks) return rest;
-        const { attendantLinks: _att, ...extraRest } = rest.extraDataConfig;
-        return { ...rest, extraDataConfig: extraRest };
+        const { organizerId, ...rest } = evt;
+        const ownerEnt = getPlanEntitlements(db.users.get(organizerId)?.profile);
+        const withBrand: EventItem = {
+          ...rest,
+          whiteLabel: ownerEnt.whiteLabelPublicEvent,
+        };
+        if (!withBrand.extraDataConfig?.attendantLinks) return withBrand;
+        const { attendantLinks: _att, ...extraRest } = withBrand.extraDataConfig;
+        return { ...withBrand, extraDataConfig: extraRest };
       }
     }
     return null;
@@ -689,27 +715,38 @@ export const memoryStore = {
     const target = slugOrId.trim().toLowerCase();
     for (const evt of db.events.values()) {
       if (evt.id.toLowerCase() === target || evt.slug.toLowerCase() === target) {
-        const { organizerId: _org, ...rest } = evt;
-        return rest;
+        const { organizerId, ...rest } = evt;
+        const ownerEnt = getPlanEntitlements(db.users.get(organizerId)?.profile);
+        return { ...rest, whiteLabel: ownerEnt.whiteLabelPublicEvent };
       }
     }
     return null;
   },
 
-  getEventOrganizerDefaults(slugOrId: string): { organizerId?: string; replyToEmail?: string; senderId?: string; smsCredits: number } {
+  getEventOrganizerDefaults(slugOrId: string): {
+    organizerId?: string;
+    replyToEmail?: string;
+    senderId?: string;
+    smsCredits: number;
+    plan: OrganizerProfile['plan'];
+    allowCustomSenderId: boolean;
+  } {
     const target = slugOrId.trim().toLowerCase();
     for (const evt of db.events.values()) {
       if (evt.id.toLowerCase() === target || evt.slug.toLowerCase() === target) {
         const owner = db.users.get(evt.organizerId);
+        const ownerEnt = getPlanEntitlements(owner?.profile);
         return {
           organizerId: evt.organizerId,
           replyToEmail: owner?.profile.replyToEmail,
-          senderId: owner?.profile.senderId,
+          senderId: ownerEnt.allowCustomSenderId ? owner?.profile.senderId : DEFAULT_SHARED_SENDER_ID,
           smsCredits: owner?.profile.smsCredits ?? 0,
+          plan: ownerEnt.plan,
+          allowCustomSenderId: ownerEnt.allowCustomSenderId,
         };
       }
     }
-    return { smsCredits: 0 };
+    return { smsCredits: 0, plan: 'Starter', allowCustomSenderId: false };
   },
 
   getSmsCredits(userId: string): number {
@@ -721,6 +758,431 @@ export const memoryStore = {
     if (!user) throw new Error('User not found.');
     const delta = Math.max(0, Math.round(credits));
     user.profile = { ...user.profile, smsCredits: user.profile.smsCredits + delta };
+    return user.profile;
+  },
+
+  listSmsPurchases(userId: string): SmsBundlePurchase[] {
+    return Array.from(db.smsPurchases.values())
+      .filter((p) => p.organizerId === userId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  },
+
+  findSmsPurchaseByReference(reference: string): SmsBundlePurchase | null {
+    const target = reference.trim().toLowerCase();
+    for (const item of db.smsPurchases.values()) {
+      if (item.reference.trim().toLowerCase() === target) {
+        return item;
+      }
+    }
+    return null;
+  },
+
+  createPaystackPendingPurchase(
+    userId: string,
+    payload: {
+      bundleId: string;
+      bundleName: string;
+      credits: number;
+      amountGhs: number;
+      reference: string;
+    }
+  ): SmsBundlePurchase {
+    const user = db.users.get(userId);
+    if (!user) throw Object.assign(new Error('Organizer profile not found.'), { status: 404 });
+    if (this.findSmsPurchaseByReference(payload.reference)) {
+      throw Object.assign(new Error('Duplicate payment reference.'), { status: 409 });
+    }
+    const item: SmsBundlePurchase = {
+      id: `smsp-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+      organizerId: userId,
+      organizerName: user.profile.name,
+      organizerEmail: user.email || user.profile.email,
+      bundleId: payload.bundleId,
+      bundleName: payload.bundleName,
+      credits: payload.credits,
+      amountGhs: Number(payload.amountGhs.toFixed(2)),
+      paymentChannel: 'Paystack Checkout',
+      provider: 'paystack',
+      reference: payload.reference,
+      status: 'pending_payment',
+      createdAt: new Date().toISOString(),
+    };
+    db.smsPurchases.set(item.id, item);
+    return item;
+  },
+
+  completePaystackPurchase(
+    userId: string,
+    reference: string,
+    channel?: string
+  ): { alreadyCredited: boolean; purchase: SmsBundlePurchase; profile: OrganizerProfile } {
+    const existing = this.findSmsPurchaseByReference(reference);
+    if (!existing) {
+      throw Object.assign(new Error(`Payment reference "${reference}" not found.`), { status: 404 });
+    }
+    if (existing.organizerId !== userId) {
+      throw Object.assign(new Error('Payment reference belongs to a different organizer account.'), { status: 403 });
+    }
+    const user = db.users.get(userId);
+    if (!user) throw Object.assign(new Error('Organizer profile not found.'), { status: 404 });
+
+    if (existing.status === 'credited') {
+      return { alreadyCredited: true, purchase: existing, profile: user.profile };
+    }
+    if (existing.status === 'rejected') {
+      throw Object.assign(new Error('This purchase has been rejected and cannot be credited.'), { status: 400 });
+    }
+
+    const updated: SmsBundlePurchase = {
+      ...existing,
+      paymentChannel: channel ? `Paystack (${channel})` : existing.paymentChannel,
+      status: 'credited',
+      verifiedAt: new Date().toISOString(),
+    };
+    db.smsPurchases.set(updated.id, updated);
+    const profile = this.addSmsCredits(userId, updated.credits);
+    return { alreadyCredited: false, purchase: updated, profile };
+  },
+
+  markPaystackPurchaseFailed(reference: string, reason?: string): SmsBundlePurchase | null {
+    const existing = this.findSmsPurchaseByReference(reference);
+    if (!existing || existing.status === 'credited') return existing;
+    const updated: SmsBundlePurchase = {
+      ...existing,
+      status: 'failed',
+      rejectionReason: reason,
+    };
+    db.smsPurchases.set(updated.id, updated);
+    return updated;
+  },
+
+  submitManualSmsBundlePurchase(
+    userId: string,
+    payload: {
+      bundleId: string;
+      bundleName: string;
+      credits: number;
+      amountGhs: number;
+      paymentChannel: string;
+      reference: string;
+      smsMode: 'live' | 'sandbox';
+    }
+  ): {
+    purchase: SmsBundlePurchase;
+    profile: OrganizerProfile;
+    addedCredits: number;
+    pendingVerification: boolean;
+  } {
+    const user = db.users.get(userId);
+    if (!user) throw Object.assign(new Error('Organizer profile not found.'), { status: 404 });
+    if (this.findSmsPurchaseByReference(payload.reference)) {
+      throw Object.assign(
+        new Error(
+          `Transaction reference "${payload.reference}" has already been submitted. Duplicate redemptions are blocked.`
+        ),
+        { status: 409 }
+      );
+    }
+
+    const isSandbox = payload.smsMode === 'sandbox';
+    const nowIso = new Date().toISOString();
+    const item: SmsBundlePurchase = {
+      id: `smsp-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+      organizerId: userId,
+      organizerName: user.profile.name,
+      organizerEmail: user.email || user.profile.email,
+      bundleId: payload.bundleId,
+      bundleName: payload.bundleName,
+      credits: payload.credits,
+      amountGhs: Number(payload.amountGhs.toFixed(2)),
+      paymentChannel: payload.paymentChannel,
+      provider: isSandbox ? 'sandbox' : 'arkesel_manual',
+      reference: payload.reference,
+      status: isSandbox ? 'credited' : 'pending_verification',
+      createdAt: nowIso,
+      verifiedAt: isSandbox ? nowIso : undefined,
+    };
+    db.smsPurchases.set(item.id, item);
+
+    const profile = isSandbox ? this.addSmsCredits(userId, payload.credits) : user.profile;
+    return {
+      purchase: item,
+      profile,
+      addedCredits: isSandbox ? payload.credits : 0,
+      pendingVerification: !isSandbox,
+    };
+  },
+
+  resolveSmsBundlePurchase(
+    purchaseId: string,
+    action: 'approve' | 'reject',
+    reason?: string
+  ): { purchase: SmsBundlePurchase; smsCredits: number; alreadyCredited: boolean } {
+    const existing = db.smsPurchases.get(purchaseId);
+    if (!existing) {
+      throw Object.assign(new Error('SMS bundle purchase record not found.'), { status: 404 });
+    }
+    const user = db.users.get(existing.organizerId);
+    if (!user) {
+      throw Object.assign(new Error('Organizer profile not found.'), { status: 404 });
+    }
+    if (existing.status === 'credited') {
+      return { purchase: existing, smsCredits: user.profile.smsCredits, alreadyCredited: true };
+    }
+    if (action === 'reject') {
+      const rejected: SmsBundlePurchase = {
+        ...existing,
+        status: 'rejected',
+        rejectionReason: reason?.trim() || 'Rejected by creator administrator.',
+        verifiedAt: new Date().toISOString(),
+      };
+      db.smsPurchases.set(rejected.id, rejected);
+      return { purchase: rejected, smsCredits: user.profile.smsCredits, alreadyCredited: false };
+    }
+    const approved: SmsBundlePurchase = {
+      ...existing,
+      status: 'credited',
+      rejectionReason: undefined,
+      verifiedAt: new Date().toISOString(),
+    };
+    db.smsPurchases.set(approved.id, approved);
+    const updatedProf = this.addSmsCredits(existing.organizerId, approved.credits);
+    return { purchase: approved, smsCredits: updatedProf.smsCredits, alreadyCredited: false };
+  },
+
+  listSubscriptionPayments(userId: string): SubscriptionPayment[] {
+    return Array.from(db.subscriptionPayments.values())
+      .filter((p) => p.organizerId === userId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  },
+
+  findSubscriptionPaymentByReference(reference: string): SubscriptionPayment | null {
+    const target = reference.trim().toLowerCase();
+    for (const item of db.subscriptionPayments.values()) {
+      if (item.reference.trim().toLowerCase() === target) return item;
+    }
+    return null;
+  },
+
+  createPaystackPendingSubscription(
+    userId: string,
+    payload: {
+      planId: 'pro' | 'enterprise';
+      planName: 'Pro Organizer' | 'Enterprise';
+      billingCycle: 'monthly' | 'annual';
+      amountUsd: number;
+      amountGhs: number;
+      reference: string;
+    }
+  ): SubscriptionPayment {
+    const user = db.users.get(userId);
+    if (!user) throw Object.assign(new Error('Organizer profile not found.'), { status: 404 });
+    if (this.findSubscriptionPaymentByReference(payload.reference)) {
+      throw Object.assign(new Error('Duplicate payment reference.'), { status: 409 });
+    }
+    const item: SubscriptionPayment = {
+      id: `subp-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+      organizerId: userId,
+      organizerName: user.profile.name,
+      organizerEmail: user.email || user.profile.email,
+      planId: payload.planId,
+      planName: payload.planName,
+      billingCycle: payload.billingCycle,
+      amountUsd: payload.amountUsd,
+      amountGhs: Number(payload.amountGhs.toFixed(2)),
+      paymentChannel: 'Paystack Checkout',
+      provider: 'paystack',
+      reference: payload.reference,
+      status: 'pending_payment',
+      createdAt: new Date().toISOString(),
+    };
+    db.subscriptionPayments.set(item.id, item);
+    return item;
+  },
+
+  completePaystackSubscription(
+    userId: string,
+    reference: string,
+    channel?: string
+  ): { alreadyActivated: boolean; payment: SubscriptionPayment; profile: OrganizerProfile } {
+    const existing = this.findSubscriptionPaymentByReference(reference);
+    if (!existing) {
+      throw Object.assign(new Error(`Payment reference "${reference}" not found.`), { status: 404 });
+    }
+    if (existing.organizerId !== userId) {
+      throw Object.assign(new Error('Payment reference belongs to a different organizer account.'), { status: 403 });
+    }
+    const user = db.users.get(userId);
+    if (!user) throw Object.assign(new Error('Organizer profile not found.'), { status: 404 });
+
+    if (existing.status === 'active') {
+      return { alreadyActivated: true, payment: existing, profile: user.profile };
+    }
+    if (existing.status === 'rejected') {
+      throw Object.assign(new Error('This subscription payment has been rejected and cannot be activated.'), { status: 400 });
+    }
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const expiresIso = computePlanExpiresAtIso(existing.billingCycle, now);
+    const updated: SubscriptionPayment = {
+      ...existing,
+      paymentChannel: channel ? `Paystack (${channel})` : existing.paymentChannel,
+      status: 'active',
+      periodStart: nowIso,
+      periodEnd: expiresIso,
+      verifiedAt: nowIso,
+    };
+    db.subscriptionPayments.set(updated.id, updated);
+    user.profile = {
+      ...user.profile,
+      plan: updated.planName,
+      planBillingCycle: updated.billingCycle,
+      planExpiresAt: expiresIso,
+    };
+    return { alreadyActivated: false, payment: updated, profile: user.profile };
+  },
+
+  markPaystackSubscriptionFailed(reference: string, reason?: string): SubscriptionPayment | null {
+    const existing = this.findSubscriptionPaymentByReference(reference);
+    if (!existing || existing.status === 'active') return existing;
+    const updated: SubscriptionPayment = {
+      ...existing,
+      status: 'failed',
+      rejectionReason: reason,
+    };
+    db.subscriptionPayments.set(updated.id, updated);
+    return updated;
+  },
+
+  submitManualSubscriptionPayment(
+    userId: string,
+    payload: {
+      planId: 'pro' | 'enterprise';
+      planName: 'Pro Organizer' | 'Enterprise';
+      billingCycle: 'monthly' | 'annual';
+      amountUsd: number;
+      amountGhs: number;
+      paymentChannel: string;
+      reference: string;
+      smsMode: 'live' | 'sandbox';
+    }
+  ): {
+    payment: SubscriptionPayment;
+    profile: OrganizerProfile;
+    activated: boolean;
+    pendingVerification: boolean;
+  } {
+    const user = db.users.get(userId);
+    if (!user) throw Object.assign(new Error('Organizer profile not found.'), { status: 404 });
+    if (this.findSubscriptionPaymentByReference(payload.reference)) {
+      throw Object.assign(
+        new Error(
+          `Transaction reference "${payload.reference}" has already been submitted. Duplicate redemptions are blocked.`
+        ),
+        { status: 409 }
+      );
+    }
+
+    const isSandbox = payload.smsMode === 'sandbox';
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const expiresIso = isSandbox ? computePlanExpiresAtIso(payload.billingCycle, now) : undefined;
+    const item: SubscriptionPayment = {
+      id: `subp-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+      organizerId: userId,
+      organizerName: user.profile.name,
+      organizerEmail: user.email || user.profile.email,
+      planId: payload.planId,
+      planName: payload.planName,
+      billingCycle: payload.billingCycle,
+      amountUsd: payload.amountUsd,
+      amountGhs: Number(payload.amountGhs.toFixed(2)),
+      paymentChannel: payload.paymentChannel,
+      provider: isSandbox ? 'sandbox' : 'manual',
+      reference: payload.reference,
+      status: isSandbox ? 'active' : 'pending_verification',
+      periodStart: isSandbox ? nowIso : undefined,
+      periodEnd: expiresIso,
+      createdAt: nowIso,
+      verifiedAt: isSandbox ? nowIso : undefined,
+    };
+    db.subscriptionPayments.set(item.id, item);
+
+    if (isSandbox) {
+      user.profile = {
+        ...user.profile,
+        plan: payload.planName,
+        planBillingCycle: payload.billingCycle,
+        planExpiresAt: expiresIso,
+      };
+    }
+
+    return {
+      payment: item,
+      profile: user.profile,
+      activated: isSandbox,
+      pendingVerification: !isSandbox,
+    };
+  },
+
+  resolveSubscriptionPayment(
+    paymentId: string,
+    action: 'approve' | 'reject',
+    reason?: string
+  ): { payment: SubscriptionPayment; profile: OrganizerProfile; alreadyActivated: boolean } {
+    const existing = db.subscriptionPayments.get(paymentId);
+    if (!existing) {
+      throw Object.assign(new Error('Subscription payment record not found.'), { status: 404 });
+    }
+    const user = db.users.get(existing.organizerId);
+    if (!user) {
+      throw Object.assign(new Error('Organizer profile not found.'), { status: 404 });
+    }
+    if (existing.status === 'active') {
+      return { payment: existing, profile: user.profile, alreadyActivated: true };
+    }
+    if (action === 'reject') {
+      const rejected: SubscriptionPayment = {
+        ...existing,
+        status: 'rejected',
+        rejectionReason: reason?.trim() || 'Rejected by creator administrator.',
+        verifiedAt: new Date().toISOString(),
+      };
+      db.subscriptionPayments.set(rejected.id, rejected);
+      return { payment: rejected, profile: user.profile, alreadyActivated: false };
+    }
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const expiresIso = computePlanExpiresAtIso(existing.billingCycle, now);
+    const approved: SubscriptionPayment = {
+      ...existing,
+      status: 'active',
+      rejectionReason: undefined,
+      periodStart: nowIso,
+      periodEnd: expiresIso,
+      verifiedAt: nowIso,
+    };
+    db.subscriptionPayments.set(approved.id, approved);
+    user.profile = {
+      ...user.profile,
+      plan: approved.planName,
+      planBillingCycle: approved.billingCycle,
+      planExpiresAt: expiresIso,
+    };
+    return { payment: approved, profile: user.profile, alreadyActivated: false };
+  },
+
+  downgradeToStarter(userId: string): OrganizerProfile {
+    const user = db.users.get(userId);
+    if (!user) throw Object.assign(new Error('User not found.'), { status: 404 });
+    user.profile = {
+      ...user.profile,
+      plan: 'Starter',
+      planBillingCycle: 'monthly',
+      planExpiresAt: undefined,
+      senderId: DEFAULT_SHARED_SENDER_ID,
+    };
     return user.profile;
   },
 
@@ -1003,6 +1465,14 @@ export const memoryStore = {
       }
     }
 
+    const owner = db.users.get(evt.organizerId);
+    const effectiveCap = getEffectiveEventCapacity(evt.capacity, owner?.profile);
+    if (evt.registered >= effectiveCap) {
+      throw new Error(
+        `CAPACITY_REACHED:${evt.title} has reached its attendee capacity (${effectiveCap} seats).`
+      );
+    }
+
     const normalizedPhone = normalizePhoneE164(payload.phone);
     const duplicate = Array.from(db.attendees.values()).find(
       (a) =>
@@ -1102,8 +1572,23 @@ export const memoryStore = {
       appRole: _ignoreAppRole,
       phoneVerified: _ignorePhoneVerified,
       smsCredits: _ignoreSmsCredits,
+      plan: _ignorePlan,
+      planBillingCycle: _ignoreCycle,
+      planExpiresAt: _ignoreExpiry,
       ...safePatch
     } = patch;
+    const ent = getPlanEntitlements(user.profile);
+    if (safePatch.senderId !== undefined && !ent.allowCustomSenderId) {
+      if (hasCustomSenderIdValue(safePatch.senderId)) {
+        throw Object.assign(
+          new Error(
+            'Custom Alphanumeric Sender ID requires Pro Organizer or Enterprise plan. Upgrade in Plan & Credits.'
+          ),
+          { status: 403 }
+        );
+      }
+      safePatch.senderId = DEFAULT_SHARED_SENDER_ID;
+    }
     if (typeof safePatch.phone === 'string') {
       const normalized = safePatch.phone.trim() ? normalizePhoneE164(safePatch.phone.trim()) : undefined;
       if (normalized && normalized !== user.profile.phone) {
@@ -1155,6 +1640,13 @@ export const memoryStore = {
       if (al.organizerId === userId) db.alerts.delete(id);
     }
 
+    for (const [id, purchase] of db.smsPurchases) {
+      if (purchase.organizerId === userId) db.smsPurchases.delete(id);
+    }
+    for (const [id, subPay] of db.subscriptionPayments) {
+      if (subPay.organizerId === userId) db.subscriptionPayments.delete(id);
+    }
+
     const ownedAppIds = new Set<string>();
     for (const [id, app] of db.creatorApps) {
       if (app.organizerId === userId) {
@@ -1190,6 +1682,46 @@ export const memoryStore = {
   },
 
   createEvent(userId: string, event: EventItem, blocks: ScheduleBlock[] = []) {
+    const owner = db.users.get(userId);
+    const ent = getPlanEntitlements(owner?.profile);
+
+    if (ent.maxActiveEvents != null && isActiveEventStatus(event.status)) {
+      const activeCount = Array.from(db.events.values()).filter(
+        (e) => e.organizerId === userId && isActiveEventStatus(e.status)
+      ).length;
+      if (activeCount >= ent.maxActiveEvents) {
+        throw Object.assign(
+          new Error(
+            `Starter plan allows at most ${STARTER_MAX_ACTIVE_EVENTS} active (live or upcoming) event. Save as draft or upgrade to Pro Organizer for unlimited concurrent events.`
+          ),
+          { status: 403 }
+        );
+      }
+    }
+
+    if (ent.maxAttendeesPerEvent != null && Number(event.capacity || 0) > ent.maxAttendeesPerEvent) {
+      throw Object.assign(
+        new Error(
+          `Starter plan limits event capacity to ${STARTER_MAX_ATTENDEES_PER_EVENT} attendees per event. Upgrade to Pro Organizer for higher venue capacities.`
+        ),
+        { status: 403 }
+      );
+    }
+
+    if (!ent.allowCustomSenderId && hasCustomSenderIdValue(event.senderId)) {
+      throw Object.assign(
+        new Error('Custom Alphanumeric Sender ID requires Pro Organizer or Enterprise plan.'),
+        { status: 403 }
+      );
+    }
+
+    if (!ent.allowCustomMessages && hasCustomMessageOverrides(event.messageConfig)) {
+      throw Object.assign(
+        new Error('Custom SMS & Email message templates require Pro Organizer or Enterprise plan.'),
+        { status: 403 }
+      );
+    }
+
     const baseSlug =
       (event.slug || event.title)
         .trim()
@@ -1203,10 +1735,21 @@ export const memoryStore = {
     const createdBrandColor = normalizeHexColor(
       event.brandColor ?? event.extraDataConfig?.brandColor
     );
+    const enforcedCapacity =
+      ent.maxAttendeesPerEvent != null
+        ? Math.min(Math.max(1, Number(event.capacity) || 50), ent.maxAttendeesPerEvent)
+        : Math.max(1, Number(event.capacity) || 100);
     const created: EventItem = {
       ...event,
       id: uniqueEventId,
       slug: uniqueSlug,
+      capacity: enforcedCapacity,
+      senderId: ent.allowCustomSenderId ? event.senderId : undefined,
+      messageConfig: ent.allowCustomMessages
+        ? event.messageConfig
+        : event.messageConfig
+          ? { includeCameraLink: event.messageConfig.includeCameraLink !== false }
+          : undefined,
       brandColor: createdBrandColor,
       qrPassPublished: event.status === 'draft' ? false : Boolean(event.qrPassPublished),
     };
@@ -1234,16 +1777,78 @@ export const memoryStore = {
       (err as Error & { status?: number }).status = 403;
       throw err;
     }
+    const owner = db.users.get(userId);
+    const ent = getPlanEntitlements(owner?.profile);
     const nextStatus = updated.status ?? existing.status;
+
+    if (ent.maxActiveEvents != null && isActiveEventStatus(nextStatus) && !isActiveEventStatus(existing.status)) {
+      const otherActiveCount = Array.from(db.events.values()).filter(
+        (e) => e.id !== eventId && e.organizerId === userId && isActiveEventStatus(e.status)
+      ).length;
+      if (otherActiveCount >= ent.maxActiveEvents) {
+        throw Object.assign(
+          new Error(
+            `Starter plan allows at most ${STARTER_MAX_ACTIVE_EVENTS} active (live or upcoming) event. Upgrade to Pro Organizer for unlimited concurrent events.`
+          ),
+          { status: 403 }
+        );
+      }
+    }
+
+    if (
+      ent.maxAttendeesPerEvent != null &&
+      updated.capacity !== undefined &&
+      Number(updated.capacity) > ent.maxAttendeesPerEvent
+    ) {
+      throw Object.assign(
+        new Error(
+          `Starter plan limits event capacity to ${STARTER_MAX_ATTENDEES_PER_EVENT} attendees per event. Upgrade to Pro Organizer to raise venue capacity.`
+        ),
+        { status: 403 }
+      );
+    }
+
+    if (!ent.allowCustomSenderId && updated.senderId !== undefined && hasCustomSenderIdValue(updated.senderId)) {
+      throw Object.assign(
+        new Error('Custom Alphanumeric Sender ID requires Pro Organizer or Enterprise plan.'),
+        { status: 403 }
+      );
+    }
+
+    if (
+      !ent.allowCustomMessages &&
+      hasCustomMessageOverrides(updated.messageConfig, existing.messageConfig)
+    ) {
+      throw Object.assign(
+        new Error('Custom SMS & Email message templates require Pro Organizer or Enterprise plan.'),
+        { status: 403 }
+      );
+    }
+
     const nextBrandColor =
       updated.brandColor === undefined
         ? existing.brandColor
         : normalizeHexColor(updated.brandColor);
+    const nextCapacity =
+      ent.maxAttendeesPerEvent != null
+        ? Math.min(Math.max(1, Number(updated.capacity ?? existing.capacity) || 50), ent.maxAttendeesPerEvent)
+        : Math.max(1, Number(updated.capacity ?? existing.capacity) || 100);
     const next = {
       ...existing,
       ...updated,
       id: eventId,
       organizerId: userId,
+      capacity: nextCapacity,
+      senderId: ent.allowCustomSenderId
+        ? updated.senderId !== undefined
+          ? updated.senderId
+          : existing.senderId
+        : undefined,
+      messageConfig: ent.allowCustomMessages
+        ? updated.messageConfig !== undefined
+          ? updated.messageConfig
+          : existing.messageConfig
+        : existing.messageConfig,
       brandColor: nextBrandColor,
       qrPassPublished:
         nextStatus === 'draft'
@@ -1399,6 +2004,16 @@ export const memoryStore = {
       );
       (err as Error & { status?: number }).status = 403;
       throw err;
+    }
+    const owner = db.users.get(evt.organizerId);
+    const effectiveCap = getEffectiveEventCapacity(evt.capacity, owner?.profile);
+    if (evt.registered >= effectiveCap) {
+      throw Object.assign(
+        new Error(
+          `${evt.title} has reached its attendee capacity (${effectiveCap} seats). Upgrade plan or increase venue capacity to add more attendees.`
+        ),
+        { status: 403 }
+      );
     }
     const normalizedPhone = normalizePhoneE164(attendee.phone);
     const duplicate = Array.from(db.attendees.values()).find(
@@ -2141,6 +2756,12 @@ export const memoryStore = {
         failedQueue,
         recentDispatches: [...platformRuntime.smsDispatches],
       },
+      pendingSmsPurchases: Array.from(db.smsPurchases.values())
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 30),
+      pendingSubscriptionPayments: Array.from(db.subscriptionPayments.values())
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 30),
       tenants,
       eventTraffic,
       totalDuplicateBlocks,
@@ -2192,6 +2813,14 @@ export const memoryStore = {
     const user = db.users.get(userId);
     if (!user) throw new Error('Organiser account not found.');
     user.profile.plan = plan;
+    if (plan === 'Starter') {
+      user.profile.planBillingCycle = 'monthly';
+      user.profile.planExpiresAt = undefined;
+      user.profile.senderId = DEFAULT_SHARED_SENDER_ID;
+    } else if (!user.profile.planExpiresAt) {
+      user.profile.planBillingCycle = user.profile.planBillingCycle || 'monthly';
+      user.profile.planExpiresAt = computePlanExpiresAtIso(user.profile.planBillingCycle);
+    }
     return buildTenantSummary(user);
   },
 

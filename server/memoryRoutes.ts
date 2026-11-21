@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import express, { type NextFunction, type Response } from 'express';
 import type { User } from '@supabase/supabase-js';
 import {
@@ -34,6 +35,21 @@ import {
   sendEventPassEmail,
 } from './resend.ts';
 import { calculateSmsCredits, resolveEventMessage } from '../src/lib/eventMessages.ts';
+import {
+  resolveAuthoritativeSmsBundle,
+  validateReceiptReference,
+} from '../src/lib/smsBundles.ts';
+import {
+  DEFAULT_SHARED_SENDER_ID,
+  getPlanEntitlements,
+  hasCustomSenderIdValue,
+  resolveAuthoritativeSubscriptionQuote,
+} from '../src/lib/subscriptionPlans.ts';
+import {
+  initializePaystackTransaction,
+  isPaystackConfigured,
+  verifyPaystackTransaction,
+} from './paystack.ts';
 import {
   clearPendingSignup,
   consumePendingSignup,
@@ -667,7 +683,9 @@ export function createMemoryRouter() {
               normalizedPhone,
               targetEvent?.title ?? 'Events App',
               finalCode,
-              targetEvent?.senderId || orgDefaults.senderId,
+              orgDefaults.allowCustomSenderId
+                ? targetEvent?.senderId || orgDefaults.senderId
+                : DEFAULT_SHARED_SENDER_ID,
               resolvedMsg?.text
             )
           : Promise.resolve('Pending' as const),
@@ -737,6 +755,11 @@ export function createMemoryRouter() {
       if (msg.includes('QR_PASS_NOT_PUBLISHED:')) {
         return res.status(403).json({
           error: 'Check-in QR passes have not been published by the event creator yet.',
+        });
+      }
+      if (msg.includes('CAPACITY_REACHED:')) {
+        return res.status(403).json({
+          error: msg.split('CAPACITY_REACHED:')[1],
         });
       }
       if (msg.includes('INVALID_INVITE_CODE:')) {
@@ -850,7 +873,8 @@ export function createMemoryRouter() {
       const profile = memoryStore.updateProfile(req.user!.id, req.body as Partial<OrganizerProfile>);
       return res.json({ profile });
     } catch (err) {
-      return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to update profile.' });
+      const status = (err as { status?: number })?.status || 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to update profile.' });
     }
   });
 
@@ -882,17 +906,26 @@ export function createMemoryRouter() {
     }
     try {
       const currentProfile = req.memoryUser!.profile;
+      const ent = getPlanEntitlements(currentProfile);
+      if (!ent.allowCustomSenderId && hasCustomSenderIdValue(senderId)) {
+        return res.status(403).json({
+          error: 'Custom Alphanumeric Sender ID requires Pro Organizer or Enterprise plan.',
+        });
+      }
       if (currentProfile.smsCredits < 1) {
         return res.status(402).json({
           error: 'Insufficient SMS credits (0 remaining). Purchase an SMS bundle in Plan & Credits to send SMS.',
         });
       }
       const testCode = String(Math.floor(100000 + Math.random() * 899999));
+      const effectiveSenderId = ent.allowCustomSenderId
+        ? (senderId || '').trim() || currentProfile.senderId
+        : DEFAULT_SHARED_SENDER_ID;
       const dispatch = await sendArkeselSmsOtp({
         phone: phoneCheck.normalized,
         code: testCode,
         purpose: 'test',
-        senderId: (senderId || '').trim() || currentProfile.senderId,
+        senderId: effectiveSenderId,
       });
       if (!dispatch.ok) {
         return res.status(400).json({ error: dispatch.error || 'Arkesel SMS test dispatch failed.' });
@@ -919,6 +952,7 @@ export function createMemoryRouter() {
       const bal = await fetchArkeselGatewayBalance();
       return res.json({
         configured: isArkeselConfigured(),
+        paystackConfigured: isPaystackConfigured(),
         mode: platformRuntime.flags.smsMode,
         live: bal.ok,
         smsBalance: bal.ok && typeof bal.credits === 'number' ? bal.credits : null,
@@ -936,43 +970,174 @@ export function createMemoryRouter() {
     }
   });
 
-  router.post('/studio/sms/purchase-bundle', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
-    const { bundleId, bundleName, credits, amountGhs, paymentChannel, arkeselReference } = req.body as {
+  router.get('/studio/sms/purchases', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    const purchases = memoryStore.listSmsPurchases(req.user!.id);
+    return res.json({
+      purchases,
+      paystackConfigured: isPaystackConfigured(),
+      mode: platformRuntime.flags.smsMode,
+    });
+  });
+
+  router.post('/studio/sms/paystack/initialize', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    if (!isPaystackConfigured()) {
+      return res.status(503).json({
+        error: 'Paystack checkout is not configured on the server yet. Set PAYSTACK_SECRET_KEY or submit a verified Arkesel receipt reference.',
+      });
+    }
+    const { bundleId, credits, amountGhs, callbackUrl } = req.body as {
       bundleId?: string;
-      bundleName?: string;
       credits?: number;
       amountGhs?: number;
-      paymentChannel?: string;
-      arkeselReference?: string;
+      callbackUrl?: string;
     };
 
-    const parsedCredits = Math.round(Number(credits ?? 0));
-    const parsedAmount = Number(amountGhs ?? 0);
-    if (!Number.isFinite(parsedCredits) || parsedCredits < 10 || parsedCredits > 100000) {
-      return res.status(400).json({ error: 'Bundle credits must be between 10 and 100,000 SMS.' });
-    }
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      return res.status(400).json({ error: 'Bundle purchase amount (GH₵) must be greater than 0.' });
+    let quote;
+    try {
+      quote = resolveAuthoritativeSmsBundle({
+        bundleId,
+        credits,
+        expectedAmountGhs: amountGhs,
+      });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid SMS bundle selection.' });
     }
 
-    const updatedProfile = memoryStore.addSmsCredits(req.user!.id, parsedCredits);
-    const nextCredits = updatedProfile.smsCredits;
-    const senderInfo = platformRuntime.getEffectiveArkeselSenderId(updatedProfile.senderId);
-    const bal = await fetchArkeselGatewayBalance();
-    const cleanRef = (arkeselReference || '').trim() || `ARK-${Date.now().toString(36).toUpperCase()}`;
+    const email = (req.memoryUser?.email || req.memoryUser?.profile.email || '').trim();
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({
+        error: 'Add a valid email address in Account Settings before starting Paystack card/MoMo checkout.',
+      });
+    }
+
+    const reference = `EBY-SMS-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const originHeader =
+      (typeof req.headers.origin === 'string' && /^https?:\/\//i.test(req.headers.origin)
+        ? req.headers.origin
+        : (process.env.APP_URL || '').trim().replace(/\/+$/, '')) || 'http://localhost:3000';
+    const safeCallback =
+      typeof callbackUrl === 'string' && /^https?:\/\//i.test(callbackUrl)
+        ? callbackUrl
+        : `${originHeader}/?paystack_ref=${encodeURIComponent(reference)}`;
+
+    const pending = memoryStore.createPaystackPendingPurchase(req.user!.id, {
+      bundleId: quote.bundleId,
+      bundleName: quote.bundleName,
+      credits: quote.credits,
+      amountGhs: quote.amountGhs,
+      reference,
+    });
+
+    const initRes = await initializePaystackTransaction({
+      email,
+      amountGhs: quote.amountGhs,
+      reference,
+      callbackUrl: safeCallback,
+      metadata: {
+        userId: req.user!.id,
+        purchaseId: pending.id,
+        bundleId: quote.bundleId,
+        credits: quote.credits,
+      },
+    });
+
+    if (!initRes.ok || !initRes.authorizationUrl) {
+      memoryStore.markPaystackPurchaseFailed(reference, initRes.error);
+      return res.status(400).json({ error: initRes.error || 'Paystack initialization failed.' });
+    }
 
     return res.json({
       ok: true,
-      profile: updatedProfile,
-      bundleId: bundleId || 'custom',
-      bundleName: (bundleName || `${parsedCredits.toLocaleString()} SMS Bundle`).trim(),
-      addedCredits: parsedCredits,
-      amountGhs: Number(parsedAmount.toFixed(2)),
-      paymentChannel: (paymentChannel || 'Arkesel Portal Wallet').trim(),
-      arkeselReference: cleanRef,
-      portalPurchaseRequired: true,
+      reference: initRes.reference,
+      authorizationUrl: initRes.authorizationUrl,
+      accessCode: initRes.accessCode,
+      purchase: pending,
+      quote,
+    });
+  });
+
+  router.get('/studio/sms/paystack/verify/:reference', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    if (!isPaystackConfigured()) {
+      return res.status(503).json({ error: 'PAYSTACK_SECRET_KEY is not configured on the server.' });
+    }
+    const reference = (req.params.reference || '').trim();
+    if (!reference) {
+      return res.status(400).json({ error: 'Payment reference is required.' });
+    }
+
+    const existing = memoryStore.findSmsPurchaseByReference(reference);
+    if (!existing) {
+      return res.status(404).json({ error: `Purchase record for reference "${reference}" not found.` });
+    }
+    if (existing.organizerId !== req.user!.id && req.memoryUser?.profile.appRole !== 'creator') {
+      return res.status(403).json({ error: 'Forbidden: payment reference belongs to another organizer.' });
+    }
+
+    if (existing.status === 'credited') {
+      const bal = await fetchArkeselGatewayBalance();
+      const senderInfo = platformRuntime.getEffectiveArkeselSenderId(req.memoryUser!.profile.senderId);
+      return res.json({
+        ok: true,
+        alreadyCredited: true,
+        profile: req.memoryUser!.profile,
+        purchase: existing,
+        arkeselStatus: {
+          configured: isArkeselConfigured(),
+          paystackConfigured: true,
+          mode: platformRuntime.flags.smsMode,
+          live: bal.ok,
+          smsBalance: bal.ok && typeof bal.credits === 'number' ? bal.credits : null,
+          mainBalance: bal.ok && typeof bal.mainBalance === 'number' ? bal.mainBalance : null,
+          error: bal.ok ? null : (bal.error || null),
+          senderId: senderInfo.senderId,
+          isDefaultUnverifiedSender: senderInfo.isDefaultUnverifiedWarning,
+          organizerCredits: req.memoryUser!.profile.smsCredits,
+          apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
+          rechargeUrl: 'https://sms.arkesel.com',
+          checkedAt: new Date().toISOString(),
+        },
+        message: `Payment ${reference} was already verified and credited (+${existing.credits.toLocaleString()} SMS).`,
+      });
+    }
+
+    const verify = await verifyPaystackTransaction(reference);
+    if (!verify.ok) {
+      return res.status(400).json({ error: verify.error || 'Paystack verification failed.' });
+    }
+    if (!verify.paid) {
+      if (verify.gatewayStatus === 'failed' || verify.gatewayStatus === 'abandoned') {
+        memoryStore.markPaystackPurchaseFailed(reference, `Gateway status: ${verify.gatewayStatus}`);
+      }
+      return res.status(402).json({
+        error: `Payment ${reference} has status "${verify.gatewayStatus}" on Paystack and has not settled.`,
+      });
+    }
+    if (verify.currency !== 'GHS') {
+      return res.status(400).json({ error: `Expected GHS currency from Paystack, got ${verify.currency}.` });
+    }
+    const expectedPesewas = Math.round(existing.amountGhs * 100);
+    if (verify.amountPesewas < expectedPesewas) {
+      return res.status(400).json({
+        error: `Underpayment detected: paid GH₵ ${(verify.amountPesewas / 100).toFixed(2)}, expected GH₵ ${existing.amountGhs.toFixed(2)}.`,
+      });
+    }
+    const metaUserId = verify.metadata?.userId ? String(verify.metadata.userId) : undefined;
+    if (metaUserId && metaUserId !== existing.organizerId) {
+      return res.status(403).json({ error: 'Paystack transaction metadata does not match this organizer.' });
+    }
+
+    const completed = memoryStore.completePaystackPurchase(existing.organizerId, reference, verify.channel);
+    const bal = await fetchArkeselGatewayBalance();
+    const senderInfo = platformRuntime.getEffectiveArkeselSenderId(completed.profile.senderId);
+
+    return res.json({
+      ok: true,
+      alreadyCredited: completed.alreadyCredited,
+      profile: completed.profile,
+      purchase: completed.purchase,
       arkeselStatus: {
         configured: isArkeselConfigured(),
+        paystackConfigured: true,
         mode: platformRuntime.flags.smsMode,
         live: bal.ok,
         smsBalance: bal.ok && typeof bal.credits === 'number' ? bal.credits : null,
@@ -980,13 +1145,315 @@ export function createMemoryRouter() {
         error: bal.ok ? null : (bal.error || null),
         senderId: senderInfo.senderId,
         isDefaultUnverifiedSender: senderInfo.isDefaultUnverifiedWarning,
-        organizerCredits: nextCredits,
+        organizerCredits: completed.profile.smsCredits,
         apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
         rechargeUrl: 'https://sms.arkesel.com',
         checkedAt: new Date().toISOString(),
       },
-      message: `${parsedCredits.toLocaleString()} SMS credits allocated to your workspace (Ref: ${cleanRef}).`,
+      message: `Paystack payment verified (${reference}). +${completed.purchase.credits.toLocaleString()} SMS credits added to your workspace.`,
     });
+  });
+
+  router.post('/studio/sms/purchase-bundle', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    const { bundleId, credits, amountGhs, paymentChannel, arkeselReference } = req.body as {
+      bundleId?: string;
+      credits?: number;
+      amountGhs?: number;
+      paymentChannel?: string;
+      arkeselReference?: string;
+    };
+
+    let quote;
+    try {
+      quote = resolveAuthoritativeSmsBundle({
+        bundleId,
+        credits,
+        expectedAmountGhs: amountGhs,
+      });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid SMS bundle selection.' });
+    }
+
+    const refCheck = validateReceiptReference(arkeselReference);
+    if (!refCheck.ok) {
+      return res.status(400).json({ error: refCheck.error });
+    }
+    const cleanRef = refCheck.normalized;
+
+    try {
+      const channel = (paymentChannel || 'Arkesel Portal Wallet').trim().slice(0, 64);
+      const outcome = memoryStore.submitManualSmsBundlePurchase(req.user!.id, {
+        bundleId: quote.bundleId,
+        bundleName: quote.bundleName,
+        credits: quote.credits,
+        amountGhs: quote.amountGhs,
+        paymentChannel: channel,
+        reference: cleanRef,
+        smsMode: platformRuntime.flags.smsMode,
+      });
+
+      const senderInfo = platformRuntime.getEffectiveArkeselSenderId(outcome.profile.senderId);
+      const bal = await fetchArkeselGatewayBalance();
+
+      return res.status(outcome.pendingVerification ? 202 : 200).json({
+        ok: true,
+        profile: outcome.profile,
+        purchase: outcome.purchase,
+        bundleId: quote.bundleId,
+        bundleName: quote.bundleName,
+        addedCredits: outcome.addedCredits,
+        amountGhs: quote.amountGhs,
+        paymentChannel: channel,
+        arkeselReference: cleanRef,
+        pendingVerification: outcome.pendingVerification,
+        portalPurchaseRequired: true,
+        arkeselStatus: {
+          configured: isArkeselConfigured(),
+          paystackConfigured: isPaystackConfigured(),
+          mode: platformRuntime.flags.smsMode,
+          live: bal.ok,
+          smsBalance: bal.ok && typeof bal.credits === 'number' ? bal.credits : null,
+          mainBalance: bal.ok && typeof bal.mainBalance === 'number' ? bal.mainBalance : null,
+          error: bal.ok ? null : (bal.error || null),
+          senderId: senderInfo.senderId,
+          isDefaultUnverifiedSender: senderInfo.isDefaultUnverifiedWarning,
+          organizerCredits: outcome.profile.smsCredits,
+          apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
+          rechargeUrl: 'https://sms.arkesel.com',
+          checkedAt: new Date().toISOString(),
+        },
+        message: outcome.pendingVerification
+          ? `Receipt ${cleanRef} for ${quote.bundleName} (GH₵ ${quote.amountGhs.toFixed(2)}) is queued for payment verification before +${quote.credits.toLocaleString()} SMS are credited.`
+          : `Sandbox Mode: +${quote.credits.toLocaleString()} SMS credits allocated for ${quote.bundleName} (Ref: ${cleanRef}).`,
+      });
+    } catch (err) {
+      const status = (err as Error & { status?: number })?.status ?? 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'SMS bundle purchase failed.' });
+    }
+  });
+
+  router.get('/studio/subscription/payments', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    const payments = memoryStore.listSubscriptionPayments(req.user!.id);
+    return res.json({
+      payments,
+      paystackConfigured: isPaystackConfigured(),
+      mode: platformRuntime.flags.smsMode,
+    });
+  });
+
+  router.post('/studio/subscription/paystack/initialize', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    if (!isPaystackConfigured()) {
+      return res.status(503).json({
+        error: 'Paystack checkout is not configured on the server yet. Set PAYSTACK_SECRET_KEY or submit a verified payment receipt reference.',
+      });
+    }
+    const { planId, planName, billingCycle, amountGhs, callbackUrl } = req.body as {
+      planId?: string;
+      planName?: string;
+      billingCycle?: string;
+      amountGhs?: number;
+      callbackUrl?: string;
+    };
+
+    let quote;
+    try {
+      quote = resolveAuthoritativeSubscriptionQuote({
+        planId,
+        planName,
+        billingCycle,
+        expectedAmountGhs: amountGhs,
+      });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid subscription plan.' });
+    }
+
+    const email = (req.memoryUser?.email || req.memoryUser?.profile.email || '').trim();
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({
+        error: 'Add a valid email address in Account Settings before starting Paystack card/MoMo checkout.',
+      });
+    }
+
+    const reference = `EBY-SUB-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const originHeader =
+      (typeof req.headers.origin === 'string' && /^https?:\/\//i.test(req.headers.origin)
+        ? req.headers.origin
+        : (process.env.APP_URL || '').trim().replace(/\/+$/, '')) || 'http://localhost:3000';
+    const safeCallback =
+      typeof callbackUrl === 'string' && /^https?:\/\//i.test(callbackUrl)
+        ? callbackUrl
+        : `${originHeader}/?sub_ref=${encodeURIComponent(reference)}`;
+
+    const pending = memoryStore.createPaystackPendingSubscription(req.user!.id, {
+      planId: quote.planId,
+      planName: quote.planName,
+      billingCycle: quote.billingCycle,
+      amountUsd: quote.amountUsd,
+      amountGhs: quote.amountGhs,
+      reference,
+    });
+
+    const initRes = await initializePaystackTransaction({
+      email,
+      amountGhs: quote.amountGhs,
+      reference,
+      callbackUrl: safeCallback,
+      metadata: {
+        type: 'subscription',
+        userId: req.user!.id,
+        paymentId: pending.id,
+        planId: quote.planId,
+        planName: quote.planName,
+        billingCycle: quote.billingCycle,
+      },
+    });
+
+    if (!initRes.ok || !initRes.authorizationUrl) {
+      memoryStore.markPaystackSubscriptionFailed(reference, initRes.error);
+      return res.status(400).json({ error: initRes.error || 'Paystack initialization failed.' });
+    }
+
+    return res.json({
+      ok: true,
+      reference: initRes.reference,
+      authorizationUrl: initRes.authorizationUrl,
+      accessCode: initRes.accessCode,
+      payment: pending,
+      quote,
+    });
+  });
+
+  router.get('/studio/subscription/paystack/verify/:reference', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    if (!isPaystackConfigured()) {
+      return res.status(503).json({ error: 'PAYSTACK_SECRET_KEY is not configured on the server.' });
+    }
+    const reference = (req.params.reference || '').trim();
+    if (!reference) {
+      return res.status(400).json({ error: 'Payment reference is required.' });
+    }
+
+    const existing = memoryStore.findSubscriptionPaymentByReference(reference);
+    if (!existing) {
+      return res.status(404).json({ error: `Subscription payment record for "${reference}" not found.` });
+    }
+    if (existing.organizerId !== req.user!.id && req.memoryUser?.profile.appRole !== 'creator') {
+      return res.status(403).json({ error: 'Forbidden: payment reference belongs to another organizer.' });
+    }
+
+    if (existing.status === 'active') {
+      return res.json({
+        ok: true,
+        alreadyActivated: true,
+        profile: req.memoryUser!.profile,
+        payment: existing,
+        message: `Subscription ${reference} is already active on ${existing.planName}.`,
+      });
+    }
+
+    const verify = await verifyPaystackTransaction(reference);
+    if (!verify.ok) {
+      return res.status(400).json({ error: verify.error || 'Paystack verification failed.' });
+    }
+    if (!verify.paid) {
+      if (verify.gatewayStatus === 'failed' || verify.gatewayStatus === 'abandoned') {
+        memoryStore.markPaystackSubscriptionFailed(reference, `Gateway status: ${verify.gatewayStatus}`);
+      }
+      return res.status(402).json({
+        error: `Payment ${reference} has status "${verify.gatewayStatus}" on Paystack and has not settled.`,
+      });
+    }
+    if (verify.currency !== 'GHS') {
+      return res.status(400).json({ error: `Expected GHS currency from Paystack, got ${verify.currency}.` });
+    }
+    const expectedPesewas = Math.round(existing.amountGhs * 100);
+    if (verify.amountPesewas < expectedPesewas) {
+      return res.status(400).json({
+        error: `Underpayment detected: paid GH₵ ${(verify.amountPesewas / 100).toFixed(2)}, expected GH₵ ${existing.amountGhs.toFixed(2)}.`,
+      });
+    }
+    const metaUserId = verify.metadata?.userId ? String(verify.metadata.userId) : undefined;
+    if (metaUserId && metaUserId !== existing.organizerId) {
+      return res.status(403).json({ error: 'Paystack transaction metadata does not match this organizer.' });
+    }
+
+    const completed = memoryStore.completePaystackSubscription(existing.organizerId, reference, verify.channel);
+    return res.json({
+      ok: true,
+      alreadyActivated: completed.alreadyActivated,
+      profile: completed.profile,
+      payment: completed.payment,
+      message: `Paystack verified (${reference}). ${completed.payment.planName} (${completed.payment.billingCycle}) is now active.`,
+    });
+  });
+
+  router.post('/studio/subscription/purchase', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    const { planId, planName, billingCycle, amountGhs, paymentChannel, receiptReference } = req.body as {
+      planId?: string;
+      planName?: string;
+      billingCycle?: string;
+      amountGhs?: number;
+      paymentChannel?: string;
+      receiptReference?: string;
+    };
+
+    let quote;
+    try {
+      quote = resolveAuthoritativeSubscriptionQuote({
+        planId,
+        planName,
+        billingCycle,
+        expectedAmountGhs: amountGhs,
+      });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid subscription plan.' });
+    }
+
+    const refCheck = validateReceiptReference(receiptReference);
+    if (!refCheck.ok) {
+      return res.status(400).json({ error: refCheck.error });
+    }
+
+    try {
+      const channel = (paymentChannel || 'Mobile Money / Bank Transfer').trim().slice(0, 64);
+      const outcome = memoryStore.submitManualSubscriptionPayment(req.user!.id, {
+        planId: quote.planId,
+        planName: quote.planName,
+        billingCycle: quote.billingCycle,
+        amountUsd: quote.amountUsd,
+        amountGhs: quote.amountGhs,
+        paymentChannel: channel,
+        reference: refCheck.normalized,
+        smsMode: platformRuntime.flags.smsMode,
+      });
+
+      return res.status(outcome.pendingVerification ? 202 : 200).json({
+        ok: true,
+        profile: outcome.profile,
+        payment: outcome.payment,
+        activated: outcome.activated,
+        pendingVerification: outcome.pendingVerification,
+        message: outcome.pendingVerification
+          ? `Payment reference ${refCheck.normalized} for ${quote.planName} (GH₵ ${quote.amountGhs.toFixed(2)}) is queued for administrator verification before activation.`
+          : `Sandbox Mode: ${quote.planName} (${quote.billingCycle}) activated immediately (Ref: ${refCheck.normalized}).`,
+      });
+    } catch (err) {
+      const status = (err as Error & { status?: number })?.status ?? 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Subscription purchase failed.' });
+    }
+  });
+
+  router.post('/studio/subscription/downgrade', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    try {
+      const profile = memoryStore.downgradeToStarter(req.user!.id);
+      return res.json({
+        ok: true,
+        profile,
+        message: 'Workspace downgraded to Starter (Free). Existing events remain intact; Starter quotas now apply.',
+      });
+    } catch (err) {
+      const status = (err as Error & { status?: number })?.status ?? 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Downgrade failed.' });
+    }
   });
 
   router.post('/studio/events', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
@@ -997,7 +1464,8 @@ export function createMemoryRouter() {
     try {
       return res.status(201).json(memoryStore.createEvent(req.user!.id, event, blocks));
     } catch (err) {
-      return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to create event.' });
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to create event.' });
     }
   });
 
@@ -1106,13 +1574,18 @@ export function createMemoryRouter() {
       let smsCreditsRemaining = availableCredits;
       let smsSkippedReason: string | undefined;
 
+      const ownerEnt = getPlanEntitlements(req.memoryUser?.profile);
+      const effectiveSenderId = ownerEnt.allowCustomSenderId
+        ? result.event.senderId || req.memoryUser?.profile.senderId
+        : DEFAULT_SHARED_SENDER_ID;
+
       const [smsDelivery, emailDelivery] = await Promise.all([
         canSendSms
           ? dispatchOptionalArkeselSms(
               result.attendee.phone,
               result.event.title,
               result.attendee.ticketCode,
-              result.event.senderId || req.memoryUser?.profile.senderId,
+              effectiveSenderId,
               resolvedMsg.text
             )
           : Promise.resolve('Pending' as const),
@@ -1241,7 +1714,9 @@ export function createMemoryRouter() {
                   attendee.phone,
                   evt.title,
                   attendee.ticketCode,
-                  evt.senderId || orgDefaults.senderId || req.memoryUser?.profile.senderId,
+                  orgDefaults.allowCustomSenderId
+                    ? evt.senderId || orgDefaults.senderId || req.memoryUser?.profile.senderId
+                    : DEFAULT_SHARED_SENDER_ID,
                   resolved.text
                 )
               : Promise.resolve('Pending' as const),
@@ -1302,10 +1777,11 @@ export function createMemoryRouter() {
   });
 
   router.post('/studio/broadcast', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
-    const { attendeeIds, message } = req.body as {
+    const { attendeeIds, message, channel } = req.body as {
       eventId?: string;
       attendeeIds?: string[];
       message?: string;
+      channel?: 'email' | 'sms' | 'dual';
     };
     const cleanMessage = (message || '').trim();
     if (!cleanMessage) {
@@ -1315,6 +1791,17 @@ export function createMemoryRouter() {
       return res.status(400).json({ error: 'Select at least one recipient for the broadcast.' });
     }
     try {
+      const ownerEnt = getPlanEntitlements(req.memoryUser?.profile);
+      const requestedChannel = channel === 'email' || channel === 'sms' || channel === 'dual' ? channel : undefined;
+      if (!ownerEnt.allowSmsBroadcast && requestedChannel !== 'email') {
+        return res.status(403).json({
+          error:
+            'Bulk SMS & Dual SMS/Email broadcasts require Pro Organizer or Enterprise plan. Starter accounts can send Resend Email broadcasts only.',
+        });
+      }
+      const sendSms = ownerEnt.allowSmsBroadcast && requestedChannel !== 'email';
+      const sendEmail = requestedChannel !== 'sms';
+
       const { attendees: ownedAttendees, eventById } = memoryStore.broadcastOwnedAttendees(
         req.user!.id,
         attendeeIds
@@ -1329,7 +1816,7 @@ export function createMemoryRouter() {
           .replace(/\{name\}/gi, att.name)
           .replace(/\{event\}/gi, evtMapped.title)
           .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode);
-        const smsCost = att.phone ? calculateSmsCredits(personalizedText) : 0;
+        const smsCost = sendSms && att.phone ? calculateSmsCredits(personalizedText) : 0;
         const cameraUrl = `${requestOrigin}/e/${encodeURIComponent(evtMapped.slug || evtMapped.id)}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
         return { att, evtMapped, personalizedText, smsCost, cameraUrl };
       });
@@ -1347,17 +1834,20 @@ export function createMemoryRouter() {
 
       await Promise.all(
         prepared.map(async ({ att, evtMapped, personalizedText, smsCost, cameraUrl }) => {
+          const effectiveSenderId = ownerEnt.allowCustomSenderId
+            ? evtMapped.senderId || req.memoryUser?.profile.senderId
+            : DEFAULT_SHARED_SENDER_ID;
           const [smsRes, emailRes] = await Promise.all([
-            att.phone && smsCost > 0
+            sendSms && att.phone && smsCost > 0
               ? dispatchOptionalArkeselSms(
                   normalizePhoneE164(att.phone),
                   evtMapped.title,
                   att.ticketCode,
-                  evtMapped.senderId || req.memoryUser?.profile.senderId,
+                  effectiveSenderId,
                   personalizedText
                 )
               : Promise.resolve('Pending' as const),
-            isResendConfigured() && att.email?.includes('@')
+            sendEmail && isResendConfigured() && att.email?.includes('@')
               ? sendCheckInWelcomeEmail({
                   to: att.email.trim(),
                   attendeeName: att.name,

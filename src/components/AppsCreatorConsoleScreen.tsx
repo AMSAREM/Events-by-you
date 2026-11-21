@@ -292,6 +292,56 @@ export const AppsCreatorConsoleScreen: React.FC<AppsCreatorConsoleScreenProps> =
     }
   };
 
+  const handleResolveSmsPurchase = async (
+    purchaseId: string,
+    action: 'approve' | 'reject'
+  ) => {
+    setActionBusyId(`purchase-${purchaseId}`);
+    setBuilderError(null);
+    try {
+      const res = await api.builder.resolveSmsPurchase(purchaseId, action);
+      showToast(
+        action === 'approve'
+          ? res.alreadyCredited
+            ? 'Purchase was already credited.'
+            : `Approved & credited +${res.purchase.credits.toLocaleString()} SMS credits.`
+          : 'Purchase receipt rejected.'
+      );
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(
+        err instanceof Error ? err.message : 'Unable to resolve SMS bundle purchase.'
+      );
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleResolveSubscriptionPurchase = async (
+    paymentId: string,
+    action: 'approve' | 'reject'
+  ) => {
+    setActionBusyId(`sub-${paymentId}`);
+    setBuilderError(null);
+    try {
+      const res = await api.builder.resolveSubscriptionPurchase(paymentId, action);
+      showToast(
+        action === 'approve'
+          ? res.alreadyActivated
+            ? 'Subscription payment was already activated.'
+            : `Approved & activated ${res.payment.planName} (${res.payment.billingCycle}).`
+          : 'Subscription receipt rejected.'
+      );
+      await refreshBuilderOverview();
+    } catch (err) {
+      setBuilderError(
+        err instanceof Error ? err.message : 'Unable to resolve subscription payment.'
+      );
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
   const handleClearErrors = async () => {
     setActionBusyId('clear-errors');
     setBuilderError(null);
@@ -1270,6 +1320,227 @@ const { attendee, event } = await response.json();`;
                               >
                                 {actionBusyId === `sms-${item.attendeeId}` ? 'Retrying...' : 'Retry'}
                               </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              {/* Pending Subscription Plan Purchases & Receipt Approvals */}
+              <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h2 className="font-display text-base font-bold text-[#0B0B0B]">
+                      Subscription Plan Purchases &amp; Receipt Approvals
+                    </h2>
+                    <p className="text-xs text-[#71717A]">
+                      Verify manual MoMo/bank receipts or review Paystack subscription upgrades before activating Pro or Enterprise tiers
+                    </p>
+                  </div>
+                  <span className="px-3 py-1 rounded-full bg-[#F5F5F7] text-xs font-mono font-semibold text-[#0B0B0B]">
+                    Pending:{' '}
+                    {(builderOverview.pendingSubscriptionPayments ?? []).filter(
+                      (p) => p.status === 'pending_verification' || p.status === 'pending_payment'
+                    ).length}
+                  </span>
+                </div>
+
+                {!builderOverview.pendingSubscriptionPayments ||
+                builderOverview.pendingSubscriptionPayments.length === 0 ? (
+                  <p className="text-xs text-[#71717A] bg-[#F5F5F7] rounded-2xl px-4 py-3">
+                    No organizer subscription payments logged yet.
+                  </p>
+                ) : (
+                  <div className="rounded-2xl border border-[#E5E5EA] overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-[#E5E5EA] bg-[#F5F5F7] text-[#71717A] font-semibold">
+                          <th className="py-2.5 px-4">Organiser</th>
+                          <th className="py-2.5 px-4">Plan &amp; Cycle</th>
+                          <th className="py-2.5 px-4">Amount</th>
+                          <th className="py-2.5 px-4">Reference</th>
+                          <th className="py-2.5 px-4">Status</th>
+                          <th className="py-2.5 px-4 text-right">Approval</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#E5E5EA]">
+                        {builderOverview.pendingSubscriptionPayments.map((item) => (
+                          <tr key={item.id} className="hover:bg-[#F5F5F7]/60">
+                            <td className="py-2.5 px-4">
+                              <div className="font-semibold text-[#0B0B0B]">
+                                {item.organizerName || item.organizerId}
+                              </div>
+                              <div className="text-[11px] text-[#71717A]">
+                                {item.organizerEmail || item.paymentChannel}
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-4 font-semibold text-[#0B0B0B]">
+                              <div>{item.planName}</div>
+                              <div className="text-[11px] font-mono text-[#71717A] capitalize">
+                                {item.billingCycle}
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-4 font-mono text-[#0B0B0B] tabular-nums">
+                              <div>GH₵ {item.amountGhs.toLocaleString()}</div>
+                              <div className="text-[11px] text-[#71717A]">
+                                ${item.amountUsd.toLocaleString()} USD
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-4 font-mono text-[#0B0B0B]">
+                              {item.reference}
+                            </td>
+                            <td className="py-2.5 px-4">
+                              <span
+                                className={`inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
+                                  item.status === 'active'
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    : item.status === 'pending_verification' ||
+                                        item.status === 'pending_payment'
+                                      ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                      : 'bg-red-50 text-red-700 border-red-200'
+                                }`}
+                              >
+                                {item.status}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-4 text-right whitespace-nowrap space-x-2">
+                              {(item.status === 'pending_verification' ||
+                                item.status === 'pending_payment') && (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={actionBusyId === `sub-${item.id}`}
+                                    onClick={() =>
+                                      void handleResolveSubscriptionPurchase(item.id, 'approve')
+                                    }
+                                    className="px-3 py-1 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold hover:bg-neutral-800 disabled:opacity-50"
+                                  >
+                                    {actionBusyId === `sub-${item.id}`
+                                      ? 'Activating...'
+                                      : 'Approve & Activate Plan'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={actionBusyId === `sub-${item.id}`}
+                                    onClick={() =>
+                                      void handleResolveSubscriptionPurchase(item.id, 'reject')
+                                    }
+                                    className="px-3 py-1 rounded-full border border-[#E5E5EA] hover:border-red-500 text-[11px] font-semibold text-red-600 disabled:opacity-50"
+                                  >
+                                    Reject
+                                  </button>
+                                </>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              {/* SMS Bundle Purchases & Receipt Approvals */}
+              <section className="rounded-3xl border border-[#E5E5EA] bg-white p-5 sm:p-6 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-display text-base font-bold text-[#0B0B0B]">
+                      SMS Bundle Purchases &amp; Receipt Approvals
+                    </h2>
+                    <p className="text-xs text-[#71717A]">
+                      Verify manual Arkesel/Mobile Money receipts in Live mode or inspect Paystack auto-verified top-ups
+                    </p>
+                  </div>
+                  <span className="px-3 py-1 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] font-mono text-xs font-semibold text-[#0B0B0B] tabular-nums">
+                    Pending:{' '}
+                    {(builderOverview.pendingSmsPurchases ?? []).filter(
+                      (p) => p.status === 'pending_verification'
+                    ).length}
+                  </span>
+                </div>
+
+                {!builderOverview.pendingSmsPurchases ||
+                builderOverview.pendingSmsPurchases.length === 0 ? (
+                  <p className="text-xs text-[#71717A] bg-[#F5F5F7] rounded-2xl px-4 py-3">
+                    No organizer SMS bundle purchase receipts logged yet.
+                  </p>
+                ) : (
+                  <div className="rounded-2xl border border-[#E5E5EA] overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-[#E5E5EA] bg-[#F5F5F7] text-[#71717A] font-semibold">
+                          <th className="py-2.5 px-4">Organiser</th>
+                          <th className="py-2.5 px-4">Bundle</th>
+                          <th className="py-2.5 px-4">Amount</th>
+                          <th className="py-2.5 px-4">Reference</th>
+                          <th className="py-2.5 px-4">Status</th>
+                          <th className="py-2.5 px-4 text-right">Approval</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#E5E5EA]">
+                        {builderOverview.pendingSmsPurchases.map((item) => (
+                          <tr key={item.id} className="hover:bg-[#F5F5F7]/60">
+                            <td className="py-2.5 px-4">
+                              <div className="font-semibold text-[#0B0B0B]">
+                                {item.organizerName || item.organizerId}
+                              </div>
+                              <div className="text-[11px] text-[#71717A]">
+                                {item.organizerEmail || item.paymentChannel}
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-4 font-semibold text-[#0B0B0B]">
+                              <div>{item.bundleName}</div>
+                              <div className="text-[11px] font-mono text-[#71717A]">
+                                +{item.credits.toLocaleString()} SMS
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-4 font-mono text-[#0B0B0B] tabular-nums">
+                              GH₵ {item.amountGhs.toLocaleString()}
+                            </td>
+                            <td className="py-2.5 px-4 font-mono text-[#0B0B0B]">
+                              {item.reference}
+                            </td>
+                            <td className="py-2.5 px-4">
+                              <span
+                                className={`inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
+                                  item.status === 'credited'
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    : item.status === 'pending_verification' ||
+                                        item.status === 'pending_payment'
+                                      ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                      : 'bg-red-50 text-red-700 border-red-200'
+                                }`}
+                              >
+                                {item.status}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-4 text-right whitespace-nowrap space-x-2">
+                              {(item.status === 'pending_verification' ||
+                                item.status === 'pending_payment') && (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={actionBusyId === `purchase-${item.id}`}
+                                    onClick={() => void handleResolveSmsPurchase(item.id, 'approve')}
+                                    className="px-3 py-1 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold hover:bg-neutral-800 disabled:opacity-50"
+                                  >
+                                    {actionBusyId === `purchase-${item.id}`
+                                      ? 'Saving...'
+                                      : 'Approve & Credit'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={actionBusyId === `purchase-${item.id}`}
+                                    onClick={() => void handleResolveSmsPurchase(item.id, 'reject')}
+                                    className="px-3 py-1 rounded-full border border-[#E5E5EA] hover:border-red-500 text-[11px] font-semibold text-red-600 disabled:opacity-50"
+                                  >
+                                    Reject
+                                  </button>
+                                </>
+                              )}
                             </td>
                           </tr>
                         ))}

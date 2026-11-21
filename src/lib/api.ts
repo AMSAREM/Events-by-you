@@ -20,6 +20,8 @@ import type {
   GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
+  SmsBundlePurchase,
+  SubscriptionPayment,
   SystemAlert,
   WebhookTriggerEvent,
 } from '../types/events';
@@ -73,6 +75,7 @@ export interface StudioWorkspacePayload {
 
 export interface ArkeselStatusResponse {
   configured: boolean;
+  paystackConfigured?: boolean;
   mode: 'live' | 'sandbox';
   live: boolean;
   smsBalance: number | null;
@@ -88,7 +91,10 @@ export interface ArkeselStatusResponse {
 
 export interface ArkeselBundlePurchaseResponse {
   ok: boolean;
+  alreadyCredited?: boolean;
+  pendingVerification?: boolean;
   profile: OrganizerProfile;
+  purchase?: SmsBundlePurchase;
   bundleId: string;
   bundleName: string;
   addedCredits: number;
@@ -97,6 +103,47 @@ export interface ArkeselBundlePurchaseResponse {
   arkeselReference: string;
   portalPurchaseRequired: boolean;
   arkeselStatus: ArkeselStatusResponse;
+  message: string;
+}
+
+export interface PaystackInitializeResponse {
+  ok: boolean;
+  reference: string;
+  authorizationUrl: string;
+  accessCode?: string;
+  purchase: SmsBundlePurchase;
+  quote: {
+    bundleId: string;
+    bundleName: string;
+    credits: number;
+    amountGhs: number;
+    unitRateGhs: number;
+  };
+}
+
+export interface SubscriptionPaystackInitializeResponse {
+  ok: boolean;
+  reference: string;
+  authorizationUrl: string;
+  accessCode?: string;
+  payment: SubscriptionPayment;
+  quote: {
+    planId: 'pro' | 'enterprise';
+    planName: 'Pro Organizer' | 'Enterprise';
+    billingCycle: 'monthly' | 'annual';
+    amountUsd: number;
+    amountGhs: number;
+    durationDays: number;
+  };
+}
+
+export interface SubscriptionCheckoutResponse {
+  ok: boolean;
+  alreadyActivated?: boolean;
+  activated?: boolean;
+  pendingVerification?: boolean;
+  profile: OrganizerProfile;
+  payment: SubscriptionPayment;
   message: string;
 }
 
@@ -621,17 +668,91 @@ export const api = {
     getArkeselStatus: () =>
       request<ArkeselStatusResponse>('/api/studio/arkesel/status', {}, true),
 
+    getSmsPurchases: () =>
+      request<{
+        purchases: SmsBundlePurchase[];
+        paystackConfigured: boolean;
+        mode: 'live' | 'sandbox';
+      }>('/api/studio/sms/purchases', {}, true),
+
+    initializePaystackBundle: (payload: {
+      bundleId: string;
+      credits: number;
+      amountGhs: number;
+      callbackUrl?: string;
+    }) =>
+      request<PaystackInitializeResponse>(
+        '/api/studio/sms/paystack/initialize',
+        { method: 'POST', body: JSON.stringify(payload) },
+        true
+      ),
+
+    verifyPaystackBundle: (reference: string) =>
+      request<ArkeselBundlePurchaseResponse>(
+        `/api/studio/sms/paystack/verify/${encodeURIComponent(reference)}`,
+        {},
+        true
+      ),
+
     purchaseSmsBundle: (payload: {
       bundleId: string;
       bundleName: string;
       credits: number;
       amountGhs: number;
       paymentChannel: string;
-      arkeselReference?: string;
+      arkeselReference: string;
     }) =>
       request<ArkeselBundlePurchaseResponse>(
         '/api/studio/sms/purchase-bundle',
         { method: 'POST', body: JSON.stringify(payload) },
+        true
+      ),
+
+    getSubscriptionPayments: () =>
+      request<{
+        payments: SubscriptionPayment[];
+        paystackConfigured: boolean;
+        mode: 'live' | 'sandbox';
+      }>('/api/studio/subscription/payments', {}, true),
+
+    initializeSubscriptionPaystack: (payload: {
+      planId: 'pro' | 'enterprise';
+      planName?: 'Pro Organizer' | 'Enterprise';
+      billingCycle: 'monthly' | 'annual';
+      amountGhs?: number;
+      callbackUrl?: string;
+    }) =>
+      request<SubscriptionPaystackInitializeResponse>(
+        '/api/studio/subscription/paystack/initialize',
+        { method: 'POST', body: JSON.stringify(payload) },
+        true
+      ),
+
+    verifySubscriptionPaystack: (reference: string) =>
+      request<SubscriptionCheckoutResponse>(
+        `/api/studio/subscription/paystack/verify/${encodeURIComponent(reference)}`,
+        {},
+        true
+      ),
+
+    purchaseSubscription: (payload: {
+      planId: 'pro' | 'enterprise';
+      planName?: 'Pro Organizer' | 'Enterprise';
+      billingCycle: 'monthly' | 'annual';
+      amountGhs: number;
+      paymentChannel: string;
+      receiptReference: string;
+    }) =>
+      request<SubscriptionCheckoutResponse>(
+        '/api/studio/subscription/purchase',
+        { method: 'POST', body: JSON.stringify(payload) },
+        true
+      ),
+
+    downgradeSubscription: () =>
+      request<{ ok: boolean; profile: OrganizerProfile; message: string }>(
+        '/api/studio/subscription/downgrade',
+        { method: 'POST' },
         true
       ),
 
@@ -761,6 +882,7 @@ export const api = {
       eventId?: string;
       attendeeIds: string[];
       message: string;
+      channel?: 'email' | 'sms' | 'dual';
     }) =>
       request<{
         ok: boolean;
@@ -989,6 +1111,38 @@ export const api = {
       request<{ flags: BuilderFeatureFlags }>(
         '/api/builder/flags',
         { method: 'PATCH', body: JSON.stringify(patch) },
+        true
+      ),
+
+    resolveSmsPurchase: (
+      purchaseId: string,
+      action: 'approve' | 'reject',
+      reason?: string
+    ) =>
+      request<{
+        ok: boolean;
+        alreadyCredited?: boolean;
+        purchase: SmsBundlePurchase;
+        smsCredits: number;
+      }>(
+        `/api/builder/sms-purchases/${encodeURIComponent(purchaseId)}/resolve`,
+        { method: 'POST', body: JSON.stringify({ action, reason }) },
+        true
+      ),
+
+    resolveSubscriptionPurchase: (
+      paymentId: string,
+      action: 'approve' | 'reject',
+      reason?: string
+    ) =>
+      request<{
+        ok: boolean;
+        alreadyActivated?: boolean;
+        payment: SubscriptionPayment;
+        plan?: OrganizerProfile['plan'];
+      }>(
+        `/api/builder/subscription-purchases/${encodeURIComponent(paymentId)}/resolve`,
+        { method: 'POST', body: JSON.stringify({ action, reason }) },
         true
       ),
   },

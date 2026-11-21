@@ -109,6 +109,11 @@ export function mapProfileRow(row: Record<string, unknown>, fallbackEmail = ''):
     phoneVerified,
     studio: String(row.studio ?? 'Events Studio'),
     plan: (row.plan as OrganizerProfile['plan']) || 'Starter',
+    planBillingCycle:
+      row.plan_billing_cycle === 'annual' || row.plan_billing_cycle === 'monthly'
+        ? row.plan_billing_cycle
+        : undefined,
+    planExpiresAt: row.plan_expires_at != null ? String(row.plan_expires_at) : undefined,
     smsCredits: Number(row.sms_credits ?? 0),
     capacityAlertThreshold: Number(row.capacity_alert_threshold ?? 90),
     avatarUrl: row.avatar_url != null ? String(row.avatar_url) : undefined,

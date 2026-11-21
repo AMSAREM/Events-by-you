@@ -1167,10 +1167,19 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   </span>
                 </div>
 
+                {spotsRemaining <= 0 && (
+                  <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 flex items-start gap-2.5 text-red-700 text-xs font-medium">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>
+                      Capacity reached ({selectedEvent.registered} / {selectedEvent.capacity} seats filled). Public registration is currently paused for this event.
+                    </span>
+                  </div>
+                )}
+
                 <button
                   type="submit"
-                  disabled={submitting}
-                  className="w-full h-14 bg-[#0B0B0B] hover:opacity-90 active:scale-[0.99] disabled:opacity-60 text-white text-base font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
+                  disabled={submitting || spotsRemaining <= 0}
+                  className="w-full h-14 bg-[#0B0B0B] hover:opacity-90 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed text-white text-base font-semibold rounded-full flex items-center justify-center gap-2 shadow-lg transition-all"
                   style={
                     customBrand
                       ? { backgroundColor: customBrand, color: customBrandText }
@@ -1178,11 +1187,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   }
                 >
                   <span>
-                    {submitting
-                      ? 'Registering...'
-                      : selectedEvent.ticketPrice === 0
-                        ? 'Validate & Generate QR Pass'
-                        : `Claim Pass ($${selectedEvent.ticketPrice})`}
+                    {spotsRemaining <= 0
+                      ? 'Event Capacity Full'
+                      : submitting
+                        ? 'Registering...'
+                        : selectedEvent.ticketPrice === 0
+                          ? 'Validate & Generate QR Pass'
+                          : `Claim Pass ($${selectedEvent.ticketPrice})`}
                   </span>
                   <ArrowRight className="w-5 h-5" />
                 </button>
@@ -2771,12 +2782,16 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
           {/* Footer Attribution */}
           <footer className="w-full py-4 flex flex-col items-center justify-center gap-1.5 text-center">
-            <span className="text-[11px] text-[#71717A] uppercase tracking-wider">
-              Free Public Tier
-            </span>
-            <span className="text-[11px] text-[#71717A]">
-              Powered by <strong className="text-[#0B0B0B] font-semibold">Events App</strong>
-            </span>
+            {!selectedEvent.whiteLabel && (
+              <>
+                <span className="text-[11px] text-[#71717A] uppercase tracking-wider">
+                  Free Public Tier
+                </span>
+                <span className="text-[11px] text-[#71717A]">
+                  Powered by <strong className="text-[#0B0B0B] font-semibold">Events App</strong>
+                </span>
+              </>
+            )}
             {onOpenLegal && (
               <div className="flex items-center gap-4 text-[11px] text-[#71717A] pt-1">
                 <button

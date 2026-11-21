@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Check, Download, Plus, QrCode, Send, UserPlus, X } from 'lucide-react';
+import { AlertCircle, Check, Download, Lock, Mail, Plus, QrCode, Send, UserPlus, X } from 'lucide-react';
 import {
   Attendee,
   AttendeeTier,
@@ -9,6 +9,7 @@ import {
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
 import { calculateSmsCredits } from '../lib/eventMessages';
+import { getPlanEntitlements } from '../lib/subscriptionPlans';
 import { CircularGauge } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
 
@@ -35,6 +36,7 @@ interface AttendeesScreenProps {
     eventId?: string;
     attendeeIds: string[];
     message: string;
+    channel?: 'email' | 'sms' | 'dual';
   }) => Promise<{
     ok: boolean;
     recipientCount: number;
@@ -75,9 +77,19 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
   const [broadcastMsg, setBroadcastMsg] = useState(
     'Doors open 30 minutes prior to keynote. Keep your pass QR ready at Gate A.'
   );
+  const entitlements = getPlanEntitlements(profile);
+  const [broadcastChannel, setBroadcastChannel] = useState<'email' | 'sms' | 'dual'>(() =>
+    entitlements.allowSmsBroadcast ? 'dual' : 'email'
+  );
   const [broadcastStatus, setBroadcastStatus] = useState<string | null>(null);
   const [broadcastError, setBroadcastError] = useState<string | null>(null);
   const [broadcastSending, setBroadcastSending] = useState(false);
+
+  useEffect(() => {
+    if (!entitlements.allowSmsBroadcast && broadcastChannel !== 'email') {
+      setBroadcastChannel('email');
+    }
+  }, [entitlements.allowSmsBroadcast, broadcastChannel]);
 
   // Walk-in registration modal state
   const [walkInOpen, setWalkInOpen] = useState(false);
@@ -150,13 +162,21 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
   const checkedCount = filtered.filter((a) => a.checkedIn).length;
   const checkInPct = filtered.length > 0 ? Math.round((checkedCount / filtered.length) * 100) : 0;
 
+  const effectiveBroadcastChannel = entitlements.allowSmsBroadcast ? broadcastChannel : 'email';
+
   const phoneRecipients = useMemo(
     () => filtered.filter((a) => Boolean(a.phone && a.phone.trim())),
     [filtered]
   );
+  const emailRecipients = useMemo(
+    () => filtered.filter((a) => Boolean(a.email && a.email.trim())),
+    [filtered]
+  );
   const smsPerRecipientCost = calculateSmsCredits(broadcastMsg);
-  const totalBroadcastSmsCost = phoneRecipients.length * smsPerRecipientCost;
-  const hasEnoughCreditsForBroadcast = profile.smsCredits >= totalBroadcastSmsCost;
+  const totalBroadcastSmsCost =
+    effectiveBroadcastChannel === 'email' ? 0 : phoneRecipients.length * smsPerRecipientCost;
+  const hasEnoughCreditsForBroadcast =
+    effectiveBroadcastChannel === 'email' || profile.smsCredits >= totalBroadcastSmsCost;
 
   const handleBroadcastSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -176,9 +196,12 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
           eventId: eventFilter !== 'all' ? eventFilter : undefined,
           attendeeIds: filtered.map((a) => a.id),
           message: broadcastMsg.trim(),
+          channel: effectiveBroadcastChannel,
         });
         setBroadcastStatus(
-          `Dispatched to ${res.sentCount} of ${res.recipientCount} guests (${(res.creditsUsed ?? totalBroadcastSmsCost).toLocaleString()} SMS credits used).`
+          effectiveBroadcastChannel === 'email'
+            ? `Emailed ${res.sentCount} of ${res.recipientCount} guests via Resend (0 SMS credits used).`
+            : `Dispatched to ${res.sentCount} of ${res.recipientCount} guests (${(res.creditsUsed ?? totalBroadcastSmsCost).toLocaleString()} SMS credits used).`
         );
       } else {
         setBroadcastStatus(`Dispatched update to ${filtered.length} attendees.`);
@@ -231,6 +254,11 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
   };
 
   const handleExportCsv = () => {
+    if (!entitlements.allowCsvExport) {
+      showToast('CSV / TSV exports require Pro Organizer ($19/mo). Opening Billing...');
+      onOpenPlans?.();
+      return;
+    }
     const headers = [
       'Name',
       'Organization',
@@ -797,13 +825,81 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
             </div>
 
             <form onSubmit={handleBroadcastSubmit} className="space-y-4">
-              <div className="p-3.5 rounded-2xl bg-[#F5F5F7] text-xs space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-[#71717A]">SMS cost ({smsPerRecipientCost} SMS × {phoneRecipients.length} phones)</span>
-                  <span className="font-bold text-[#0B0B0B] tabular-nums">
-                    {totalBroadcastSmsCost.toLocaleString()} credits
-                  </span>
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs font-semibold text-[#0B0B0B]">Delivery Channel</span>
+                  {!entitlements.allowSmsBroadcast && onOpenPlans && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBroadcastOpen(false);
+                        onOpenPlans();
+                      }}
+                      className="text-[11px] font-semibold text-[#0B0B0B] underline"
+                    >
+                      Upgrade for SMS Broadcasts
+                    </button>
+                  )}
                 </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      { id: 'email', label: 'Email Only', locked: false },
+                      { id: 'dual', label: 'SMS + Email', locked: !entitlements.allowSmsBroadcast },
+                      { id: 'sms', label: 'SMS Only', locked: !entitlements.allowSmsBroadcast },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        if (opt.locked) {
+                          if (onOpenPlans) {
+                            setBroadcastOpen(false);
+                            onOpenPlans();
+                          }
+                          return;
+                        }
+                        setBroadcastChannel(opt.id);
+                        setBroadcastError(null);
+                      }}
+                      className={`h-9 px-2.5 rounded-xl text-[11px] font-semibold inline-flex items-center justify-center gap-1 border transition-colors ${
+                        effectiveBroadcastChannel === opt.id
+                          ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                          : opt.locked
+                            ? 'bg-[#F5F5F7] text-[#71717A] border-[#E5E5EA] opacity-75'
+                            : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                      }`}
+                    >
+                      {opt.locked ? (
+                        <Lock className="w-3 h-3" />
+                      ) : opt.id === 'email' ? (
+                        <Mail className="w-3 h-3" />
+                      ) : null}
+                      <span>{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-[#F5F5F7] text-xs space-y-1">
+                {effectiveBroadcastChannel === 'email' ? (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[#71717A]">
+                      Resend Email blast ({emailRecipients.length} addresses)
+                    </span>
+                    <span className="font-bold text-emerald-700 tabular-nums">0 SMS credits</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[#71717A]">
+                      SMS cost ({smsPerRecipientCost} SMS × {phoneRecipients.length} phones)
+                    </span>
+                    <span className="font-bold text-[#0B0B0B] tabular-nums">
+                      {totalBroadcastSmsCost.toLocaleString()} credits
+                    </span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <span className="text-[#71717A]">Your bundle balance</span>
                   <span
@@ -866,11 +962,16 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                     broadcastSending ||
                     filtered.length === 0 ||
                     !broadcastMsg.trim() ||
+                    (effectiveBroadcastChannel === 'email' && emailRecipients.length === 0) ||
                     (totalBroadcastSmsCost > 0 && !hasEnoughCreditsForBroadcast)
                   }
                   className="px-5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
                 >
-                  {broadcastSending ? 'Dispatching...' : 'Send Dispatch'}
+                  {broadcastSending
+                    ? 'Dispatching...'
+                    : effectiveBroadcastChannel === 'email'
+                      ? 'Send Email Blast'
+                      : 'Send Dispatch'}
                 </button>
               </div>
             </form>

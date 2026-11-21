@@ -241,6 +241,29 @@ export default function App() {
     () => parseInvitationFromLocation().desk
   );
   const [publicEventsLoading, setPublicEventsLoading] = useState<boolean>(true);
+  const [selectedCheckoutBundleId, setSelectedCheckoutBundleId] = useState<string | null>(null);
+  const [pendingPaystackRef, setPendingPaystackRef] = useState<string | null>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('sub_ref')) return null;
+      const ref =
+        params.get('paystack_ref') || params.get('reference') || params.get('trxref') || null;
+      return ref && !ref.startsWith('EBY-SUB-') ? ref : null;
+    } catch {
+      return null;
+    }
+  });
+  const [pendingSubscriptionRef, setPendingSubscriptionRef] = useState<string | null>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const subRef = params.get('sub_ref');
+      if (subRef) return subRef;
+      const ref = params.get('reference') || params.get('trxref') || null;
+      return ref && ref.startsWith('EBY-SUB-') ? ref : null;
+    } catch {
+      return null;
+    }
+  });
 
   const notifyError = useCallback((err: unknown, fallback: string) => {
     const msg = err instanceof Error ? err.message : fallback;
@@ -339,9 +362,24 @@ export default function App() {
 
       const activeSession = oauthSession ?? getStoredSession();
       if (activeSession) {
-        await hydrateStudioWorkspace();
-        if (oauthSession && !cancelled) {
-          setRoute('studio');
+        const ok = await hydrateStudioWorkspace();
+        if (!cancelled && ok) {
+          if (pendingPaystackRef || pendingSubscriptionRef) {
+            setActiveScreen('billing');
+            setRoute('studio');
+            try {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('paystack_ref');
+              url.searchParams.delete('sub_ref');
+              url.searchParams.delete('reference');
+              url.searchParams.delete('trxref');
+              window.history.replaceState(null, '', url.pathname + url.search);
+            } catch {
+              // Ignore history cleanup error
+            }
+          } else if (oauthSession) {
+            setRoute('studio');
+          }
         }
       }
       if (!cancelled) {
@@ -835,7 +873,10 @@ export default function App() {
     });
   };
 
-  const openBillingScreen = () => {
+  const openBillingScreen = (bundleId?: unknown) => {
+    if (typeof bundleId === 'string' && bundleId.trim()) {
+      setSelectedCheckoutBundleId(bundleId.trim());
+    }
     requireSignedIn({
       route: 'studio',
       screen: 'billing',
@@ -1116,6 +1157,7 @@ export default function App() {
     eventId?: string;
     attendeeIds: string[];
     message: string;
+    channel?: 'email' | 'sms' | 'dual';
   }) => {
     const res = await api.studio.broadcastUpdate(payload);
     if (typeof res.smsCredits === 'number') {
@@ -2350,6 +2392,12 @@ export default function App() {
                   events={safeEvents}
                   onUpdateProfile={handleUpdateProfile}
                   onSyncProfile={setProfile}
+                  initialCheckoutBundleId={selectedCheckoutBundleId}
+                  onConsumeInitialBundle={() => setSelectedCheckoutBundleId(null)}
+                  pendingPaystackRef={pendingPaystackRef}
+                  onConsumePaystackRef={() => setPendingPaystackRef(null)}
+                  pendingSubscriptionRef={pendingSubscriptionRef}
+                  onConsumeSubscriptionRef={() => setPendingSubscriptionRef(null)}
                 />
               )}
 
@@ -2376,6 +2424,8 @@ export default function App() {
       {selectedEvent && (
         <EventDetailModal
           event={selectedEvent}
+          events={safeEvents}
+          profile={profile}
           scheduleBlocks={safeScheduleBlocks}
           capacityThreshold={profile.capacityAlertThreshold}
           canPublishQrPass={effectiveRole !== 'gate_staff'}
@@ -2384,6 +2434,10 @@ export default function App() {
           onUpdateEvent={handleUpdateEvent}
           onDeleteEvent={handleDeleteEvent}
           onOpenAttendees={(id) => handleNavigateAttendees(id)}
+          onOpenBilling={() => {
+            setSelectedEventId(null);
+            openBillingScreen();
+          }}
         />
       )}
 

@@ -182,6 +182,7 @@ export interface EventItem {
   validationConfig?: EventValidationConfig;
   extraDataConfig?: EventExtraDataConfig;
   messageConfig?: EventMessageConfig;
+  whiteLabel?: boolean;
 }
 
 export type AttendeeTier = 'VIP' | 'General' | 'Speaker' | 'Press';
@@ -236,6 +237,8 @@ export interface OrganizerProfile {
   phoneVerified?: boolean;
   studio: string;
   plan: 'Starter' | 'Pro Organizer' | 'Enterprise';
+  planBillingCycle?: 'monthly' | 'annual';
+  planExpiresAt?: string;
   smsCredits: number;
   capacityAlertThreshold: number;
   avatarUrl?: string;
@@ -319,8 +322,66 @@ export interface BuilderEnvStatus {
   arkeselSenderIdValue: string;
   RESEND_API_KEY: boolean;
   RESEND_FROM_EMAIL: boolean;
+  PAYSTACK_SECRET_KEY?: boolean;
   CREATOR_PASSWORD: boolean;
   CREATOR_EMAIL: string;
+}
+
+export type SmsPurchaseStatus =
+  | 'pending_payment'
+  | 'pending_verification'
+  | 'credited'
+  | 'rejected'
+  | 'failed';
+
+export type SmsPurchaseProvider = 'paystack' | 'arkesel_manual' | 'sandbox';
+
+export interface SmsBundlePurchase {
+  id: string;
+  organizerId: string;
+  organizerName?: string;
+  organizerEmail?: string;
+  bundleId: string;
+  bundleName: string;
+  credits: number;
+  amountGhs: number;
+  paymentChannel: string;
+  provider: SmsPurchaseProvider;
+  reference: string;
+  status: SmsPurchaseStatus;
+  createdAt: string;
+  verifiedAt?: string;
+  rejectionReason?: string;
+}
+
+export type SubscriptionPaymentStatus =
+  | 'pending_payment'
+  | 'pending_verification'
+  | 'active'
+  | 'rejected'
+  | 'failed';
+
+export type SubscriptionPaymentProvider = 'paystack' | 'manual' | 'sandbox';
+
+export interface SubscriptionPayment {
+  id: string;
+  organizerId: string;
+  organizerName?: string;
+  organizerEmail?: string;
+  planId: 'pro' | 'enterprise';
+  planName: 'Pro Organizer' | 'Enterprise';
+  billingCycle: 'monthly' | 'annual';
+  amountUsd: number;
+  amountGhs: number;
+  paymentChannel: string;
+  provider: SubscriptionPaymentProvider;
+  reference: string;
+  status: SubscriptionPaymentStatus;
+  periodStart?: string;
+  periodEnd?: string;
+  createdAt: string;
+  verifiedAt?: string;
+  rejectionReason?: string;
 }
 
 export interface SmsDispatchLogEntry {
@@ -463,6 +524,8 @@ export interface BuilderConsoleOverview {
     failedQueue: BuilderSmsQueueItem[];
     recentDispatches: SmsDispatchLogEntry[];
   };
+  pendingSmsPurchases?: SmsBundlePurchase[];
+  pendingSubscriptionPayments?: SubscriptionPayment[];
   emailDiagnostics?: EmailDeliverabilityDiagnostics;
   tenants: BuilderTenantSummary[];
   eventTraffic: BuilderEventTrafficRow[];
@@ -482,4 +545,5 @@ export interface BuilderConsoleOverview {
     perTenant: BuilderTenantUnitEconomics[];
   };
 }
+
 

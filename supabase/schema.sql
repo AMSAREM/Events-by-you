@@ -35,6 +35,12 @@ alter table public.profiles
 alter table public.profiles
   add column if not exists phone_verified boolean not null default false;
 
+alter table public.profiles
+  add column if not exists plan_billing_cycle text default 'monthly' check (plan_billing_cycle in ('monthly', 'annual'));
+
+alter table public.profiles
+  add column if not exists plan_expires_at timestamptz;
+
 create unique index if not exists idx_profiles_unique_phone
   on public.profiles (phone)
   where phone is not null and phone <> '';
@@ -112,6 +118,10 @@ begin
   if auth.uid() is not null and not public.is_creator() then
     new.app_role := old.app_role;
     new.phone_verified := old.phone_verified;
+    new.plan := old.plan;
+    new.plan_billing_cycle := old.plan_billing_cycle;
+    new.plan_expires_at := old.plan_expires_at;
+    new.sms_credits := old.sms_credits;
   end if;
   return new;
 end;
@@ -417,6 +427,9 @@ as $$
 declare
   v_event public.events;
   v_attendee public.attendees;
+  v_owner_plan text;
+  v_owner_expires timestamptz;
+  v_effective_cap integer;
 begin
   select * into v_event from public.events where id = p_event_id and status in ('live', 'upcoming') for update;
   if not found then
@@ -425,6 +438,21 @@ begin
 
   if not v_event.qr_pass_published then
     raise exception 'QR_PASS_NOT_PUBLISHED:%', v_event.title;
+  end if;
+
+  select plan, plan_expires_at into v_owner_plan, v_owner_expires
+  from public.profiles
+  where id = v_event.organizer_id;
+
+  if coalesce(v_owner_plan, 'Starter') = 'Starter'
+     or (v_owner_expires is not null and v_owner_expires < now()) then
+    v_effective_cap := least(greatest(1, coalesce(v_event.capacity, 50)), 50);
+  else
+    v_effective_cap := greatest(1, coalesce(v_event.capacity, 100));
+  end if;
+
+  if coalesce(v_event.registered, 0) >= v_effective_cap then
+    raise exception 'CAPACITY_REACHED:% has reached its attendee limit (% seats).', v_event.title, v_effective_cap;
   end if;
 
   if exists (select 1 from public.attendees where event_id = p_event_id and phone = p_phone) then
@@ -555,5 +583,197 @@ create index if not exists idx_pending_signups_email on public.pending_signups(e
 create index if not exists idx_pending_signups_expires on public.pending_signups(expires_at);
 
 alter table public.pending_signups enable row level security;
+
+-- 12. Arkesel SMS Bundle Purchase Ledger & Atomic Credit Allocation
+create table if not exists public.sms_bundle_purchases (
+  id text primary key,
+  organizer_id uuid not null references public.profiles(id) on delete cascade,
+  bundle_id text not null,
+  bundle_name text not null,
+  credits integer not null check (credits > 0),
+  amount_ghs numeric(10, 2) not null check (amount_ghs > 0),
+  payment_channel text not null,
+  provider text not null check (provider in ('paystack', 'arkesel_manual', 'sandbox')),
+  reference text not null unique,
+  status text not null check (status in ('pending_payment', 'pending_verification', 'credited', 'rejected', 'failed')),
+  rejection_reason text,
+  created_at timestamptz not null default now(),
+  verified_at timestamptz
+);
+
+create index if not exists idx_sms_bundle_purchases_organizer
+  on public.sms_bundle_purchases(organizer_id, created_at desc);
+
+create index if not exists idx_sms_bundle_purchases_status
+  on public.sms_bundle_purchases(status, created_at desc);
+
+alter table public.sms_bundle_purchases enable row level security;
+
+drop policy if exists "Organizers view own SMS bundle purchases" on public.sms_bundle_purchases;
+create policy "Organizers view own SMS bundle purchases" on public.sms_bundle_purchases
+  for select using (auth.uid() = organizer_id or public.is_creator());
+
+create or replace function public.credit_organizer_sms_bundle(
+  p_purchase_id text,
+  p_payment_channel text default null
+)
+returns jsonb
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_purchase public.sms_bundle_purchases;
+  v_profile public.profiles;
+  v_now timestamptz := now();
+begin
+  select * into v_purchase
+  from public.sms_bundle_purchases
+  where id = p_purchase_id
+  for update;
+
+  if not found then
+    raise exception 'PURCHASE_NOT_FOUND';
+  end if;
+
+  if v_purchase.status = 'credited' then
+    select * into v_profile from public.profiles where id = v_purchase.organizer_id;
+    return jsonb_build_object(
+      'alreadyCredited', true,
+      'purchase', to_jsonb(v_purchase),
+      'smsCredits', coalesce(v_profile.sms_credits, 0)
+    );
+  end if;
+
+  if v_purchase.status = 'rejected' then
+    raise exception 'PURCHASE_REJECTED';
+  end if;
+
+  update public.sms_bundle_purchases
+  set
+    status = 'credited',
+    payment_channel = coalesce(nullif(trim(p_payment_channel), ''), payment_channel),
+    verified_at = v_now
+  where id = p_purchase_id
+  returning * into v_purchase;
+
+  update public.profiles
+  set
+    sms_credits = greatest(0, sms_credits) + v_purchase.credits,
+    updated_at = v_now
+  where id = v_purchase.organizer_id
+  returning * into v_profile;
+
+  return jsonb_build_object(
+    'alreadyCredited', false,
+    'purchase', to_jsonb(v_purchase),
+    'smsCredits', coalesce(v_profile.sms_credits, 0)
+  );
+end;
+$$;
+
+grant execute on function public.credit_organizer_sms_bundle(text, text) to service_role;
+
+-- 13. Organizer Subscription Payments Ledger & Atomic Plan Activation
+create table if not exists public.subscription_payments (
+  id text primary key,
+  organizer_id uuid not null references public.profiles(id) on delete cascade,
+  plan_id text not null check (plan_id in ('pro', 'enterprise')),
+  plan_name text not null check (plan_name in ('Pro Organizer', 'Enterprise')),
+  billing_cycle text not null check (billing_cycle in ('monthly', 'annual')),
+  amount_usd numeric(10, 2) not null check (amount_usd > 0),
+  amount_ghs numeric(10, 2) not null check (amount_ghs > 0),
+  payment_channel text not null,
+  provider text not null check (provider in ('paystack', 'manual', 'sandbox')),
+  reference text not null unique,
+  status text not null check (status in ('pending_payment', 'pending_verification', 'active', 'rejected', 'failed')),
+  rejection_reason text,
+  period_start timestamptz,
+  period_end timestamptz,
+  created_at timestamptz not null default now(),
+  verified_at timestamptz
+);
+
+create index if not exists idx_subscription_payments_organizer
+  on public.subscription_payments(organizer_id, created_at desc);
+
+create index if not exists idx_subscription_payments_status
+  on public.subscription_payments(status, created_at desc);
+
+alter table public.subscription_payments enable row level security;
+
+drop policy if exists "Organizers view own subscription payments" on public.subscription_payments;
+create policy "Organizers view own subscription payments" on public.subscription_payments
+  for select using (auth.uid() = organizer_id or public.is_creator());
+
+create or replace function public.activate_organizer_subscription(
+  p_payment_id text,
+  p_payment_channel text default null
+)
+returns jsonb
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_payment public.subscription_payments;
+  v_profile public.profiles;
+  v_now timestamptz := now();
+  v_end timestamptz;
+begin
+  select * into v_payment
+  from public.subscription_payments
+  where id = p_payment_id
+  for update;
+
+  if not found then
+    raise exception 'SUBSCRIPTION_PAYMENT_NOT_FOUND';
+  end if;
+
+  if v_payment.status = 'active' then
+    select * into v_profile from public.profiles where id = v_payment.organizer_id;
+    return jsonb_build_object(
+      'alreadyActivated', true,
+      'payment', to_jsonb(v_payment),
+      'plan', v_profile.plan,
+      'planBillingCycle', v_profile.plan_billing_cycle,
+      'planExpiresAt', v_profile.plan_expires_at
+    );
+  end if;
+
+  if v_payment.status = 'rejected' then
+    raise exception 'SUBSCRIPTION_PAYMENT_REJECTED';
+  end if;
+
+  v_end := v_now + (case when v_payment.billing_cycle = 'annual' then interval '365 days' else interval '30 days' end);
+
+  update public.subscription_payments
+  set
+    status = 'active',
+    payment_channel = coalesce(nullif(trim(p_payment_channel), ''), payment_channel),
+    period_start = v_now,
+    period_end = v_end,
+    verified_at = v_now
+  where id = p_payment_id
+  returning * into v_payment;
+
+  update public.profiles
+  set
+    plan = v_payment.plan_name,
+    plan_billing_cycle = v_payment.billing_cycle,
+    plan_expires_at = v_end,
+    updated_at = v_now
+  where id = v_payment.organizer_id
+  returning * into v_profile;
+
+  return jsonb_build_object(
+    'alreadyActivated', false,
+    'payment', to_jsonb(v_payment),
+    'plan', v_profile.plan,
+    'planBillingCycle', v_profile.plan_billing_cycle,
+    'planExpiresAt', v_profile.plan_expires_at
+  );
+end;
+$$;
+
+grant execute on function public.activate_organizer_subscription(text, text) to service_role;
 
 notify pgrst, 'reload schema';

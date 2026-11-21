@@ -52,6 +52,7 @@ import type {
   GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
+  SmsBundlePurchase,
 } from './src/types/events.ts';
 import {
   dispatchOptionalArkeselSms,
@@ -72,6 +73,15 @@ import {
   sendEventPassEmail,
 } from './server/resend.ts';
 import { calculateSmsCredits, MAX_SHOTS_PER_USER, resolveEventMessage } from './src/lib/eventMessages.ts';
+import {
+  resolveAuthoritativeSmsBundle,
+  validateReceiptReference,
+} from './src/lib/smsBundles.ts';
+import {
+  initializePaystackTransaction,
+  isPaystackConfigured,
+  verifyPaystackTransaction,
+} from './server/paystack.ts';
 import {
   buildSyntheticPhoneEmail,
   clearPendingSignup,
@@ -144,10 +154,16 @@ function generateWebhookSecret(): string {
 
 function isMissingTableError(err: { code?: string; message?: string } | null | undefined): boolean {
   if (!err) return false;
+  const msg = (err.message || '').toLowerCase();
   return (
     err.code === '42P01' ||
     err.code === 'PGRST205' ||
-    Boolean(err.message && err.message.toLowerCase().includes('creator_app'))
+    err.code === 'PGRST202' ||
+    msg.includes('creator_app') ||
+    msg.includes('sms_bundle_purchases') ||
+    msg.includes('credit_organizer_sms_bundle') ||
+    msg.includes('does not exist') ||
+    msg.includes('schema cache')
   );
 }
 
@@ -316,6 +332,152 @@ async function refundSupabaseSmsCredits(
     .update({ sms_credits: next, updated_at: new Date().toISOString() })
     .eq('id', organizerId);
   return next;
+}
+
+function mapSmsPurchaseRow(row: Record<string, unknown>): SmsBundlePurchase {
+  return {
+    id: String(row.id),
+    organizerId: String(row.organizer_id),
+    organizerName: row.organizer_name ? String(row.organizer_name) : undefined,
+    organizerEmail: row.organizer_email ? String(row.organizer_email) : undefined,
+    bundleId: String(row.bundle_id || 'custom'),
+    bundleName: String(row.bundle_name || 'SMS Bundle'),
+    credits: Number(row.credits ?? 0),
+    amountGhs: Number(row.amount_ghs ?? 0),
+    paymentChannel: String(row.payment_channel || 'Arkesel Portal Wallet'),
+    provider:
+      row.provider === 'paystack' || row.provider === 'sandbox'
+        ? row.provider
+        : 'arkesel_manual',
+    reference: String(row.reference || ''),
+    status:
+      row.status === 'pending_payment' ||
+      row.status === 'pending_verification' ||
+      row.status === 'credited' ||
+      row.status === 'rejected' ||
+      row.status === 'failed'
+        ? row.status
+        : 'pending_verification',
+    createdAt: String(row.created_at || new Date().toISOString()),
+    verifiedAt: row.verified_at ? String(row.verified_at) : undefined,
+    rejectionReason: row.rejection_reason ? String(row.rejection_reason) : undefined,
+  };
+}
+
+async function atomicCreditSupabasePurchase(
+  adminClient: SupabaseClient,
+  purchaseId: string,
+  paymentChannel?: string
+): Promise<{ alreadyCredited: boolean; purchase: SmsBundlePurchase; smsCredits: number }> {
+  // Check runtime fallback ledger first if DB table isn't provisioned yet
+  const fallbackItem = platformRuntime.fallbackSmsPurchases.get(purchaseId);
+  if (fallbackItem) {
+    if (fallbackItem.status === 'credited') {
+      const { data: prof } = await adminClient
+        .from('profiles')
+        .select('sms_credits')
+        .eq('id', fallbackItem.organizerId)
+        .single();
+      return {
+        alreadyCredited: true,
+        purchase: fallbackItem,
+        smsCredits: Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0),
+      };
+    }
+    const nextCredits = await refundSupabaseSmsCredits(
+      adminClient,
+      fallbackItem.organizerId,
+      fallbackItem.credits
+    );
+    const updated: SmsBundlePurchase = {
+      ...fallbackItem,
+      paymentChannel: paymentChannel || fallbackItem.paymentChannel,
+      status: 'credited',
+      verifiedAt: new Date().toISOString(),
+    };
+    platformRuntime.fallbackSmsPurchases.set(updated.id, updated);
+    return { alreadyCredited: false, purchase: updated, smsCredits: nextCredits };
+  }
+
+  const rpcRes = await adminClient.rpc('credit_organizer_sms_bundle', {
+    p_purchase_id: purchaseId,
+    p_payment_channel: paymentChannel || null,
+  });
+
+  if (!rpcRes.error && rpcRes.data && typeof rpcRes.data === 'object') {
+    const payload = rpcRes.data as {
+      alreadyCredited?: boolean;
+      purchase?: Record<string, unknown>;
+      smsCredits?: number;
+    };
+    if (payload.purchase) {
+      return {
+        alreadyCredited: Boolean(payload.alreadyCredited),
+        purchase: mapSmsPurchaseRow(payload.purchase),
+        smsCredits: Number(payload.smsCredits ?? 0),
+      };
+    }
+  }
+
+  // Fallback when table exists without RPC or conditional update
+  const { data: row, error: fetchErr } = await adminClient
+    .from('sms_bundle_purchases')
+    .select('*')
+    .eq('id', purchaseId)
+    .single();
+  if (fetchErr || !row) {
+    throw new Error(fetchErr?.message || 'SMS purchase record not found.');
+  }
+  const purchase = mapSmsPurchaseRow(row as Record<string, unknown>);
+  if (purchase.status === 'credited') {
+    const { data: prof } = await adminClient
+      .from('profiles')
+      .select('sms_credits')
+      .eq('id', purchase.organizerId)
+      .single();
+    return {
+      alreadyCredited: true,
+      purchase,
+      smsCredits: Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0),
+    };
+  }
+  const nowIso = new Date().toISOString();
+  const { data: claimed, error: claimErr } = await adminClient
+    .from('sms_bundle_purchases')
+    .update({
+      status: 'credited',
+      payment_channel: paymentChannel || purchase.paymentChannel,
+      verified_at: nowIso,
+    })
+    .eq('id', purchaseId)
+    .neq('status', 'credited')
+    .select('*')
+    .maybeSingle();
+
+  if (claimErr) throw new Error(claimErr.message);
+  if (!claimed) {
+    const { data: prof } = await adminClient
+      .from('profiles')
+      .select('sms_credits')
+      .eq('id', purchase.organizerId)
+      .single();
+    return {
+      alreadyCredited: true,
+      purchase: { ...purchase, status: 'credited' },
+      smsCredits: Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0),
+    };
+  }
+
+  const nextCredits = await refundSupabaseSmsCredits(
+    adminClient,
+    purchase.organizerId,
+    purchase.credits
+  );
+  return {
+    alreadyCredited: false,
+    purchase: mapSmsPurchaseRow(claimed as Record<string, unknown>),
+    smsCredits: nextCredits,
+  };
 }
 
 async function mergeEventAttendeeMeta(
@@ -2967,6 +3129,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       const bal = await fetchArkeselGatewayBalance();
       return res.json({
         configured: isArkeselConfigured(),
+        paystackConfigured: isPaystackConfigured(),
         mode: platformRuntime.flags.smsMode,
         live: bal.ok,
         smsBalance: bal.ok && typeof bal.credits === 'number' ? bal.credits : null,
@@ -2984,24 +3147,356 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
     }
   });
 
-  app.post('/api/studio/sms/purchase-bundle', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
-    const { bundleId, bundleName, credits, amountGhs, paymentChannel, arkeselReference } = req.body as {
+  app.get('/api/studio/sms/purchases', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    try {
+      const client = createServiceSupabaseClient() ?? req.supabase!;
+      const { data, error } = await client
+        .from('sms_bundle_purchases')
+        .select('*')
+        .eq('organizer_id', req.user!.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      let purchases: SmsBundlePurchase[] = [];
+      if (!error && Array.isArray(data)) {
+        purchases = data.map((r) => mapSmsPurchaseRow(r as Record<string, unknown>));
+      } else if (error && !isMissingTableError(error)) {
+        return res.status(400).json({ error: error.message });
+      }
+
+      const runtimeFallback = Array.from(platformRuntime.fallbackSmsPurchases.values())
+        .filter((p) => p.organizerId === req.user!.id)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+      const merged = purchases.length > 0 ? purchases : runtimeFallback;
+      return res.json({
+        purchases: merged,
+        paystackConfigured: isPaystackConfigured(),
+        mode: platformRuntime.flags.smsMode,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load SMS purchases.' });
+    }
+  });
+
+  app.post('/api/studio/sms/paystack/initialize', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    if (!isPaystackConfigured()) {
+      return res.status(503).json({
+        error: 'Paystack checkout is not configured on the server yet. Set PAYSTACK_SECRET_KEY or submit a verified Arkesel receipt reference.',
+      });
+    }
+    const { bundleId, credits, amountGhs, callbackUrl } = req.body as {
       bundleId?: string;
-      bundleName?: string;
+      credits?: number;
+      amountGhs?: number;
+      callbackUrl?: string;
+    };
+
+    let quote;
+    try {
+      quote = resolveAuthoritativeSmsBundle({
+        bundleId,
+        credits,
+        expectedAmountGhs: amountGhs,
+      });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid SMS bundle selection.' });
+    }
+
+    try {
+      const client = req.supabase!;
+      const adminClient = createServiceSupabaseClient() ?? client;
+      const { data: prof } = await adminClient
+        .from('profiles')
+        .select('name, email')
+        .eq('id', req.user!.id)
+        .maybeSingle();
+
+      const email = String(
+        (prof as Record<string, unknown> | null)?.email || req.user!.email || ''
+      ).trim();
+      if (!email || !email.includes('@')) {
+        return res.status(400).json({
+          error: 'Add a valid email address in Account Settings before starting Paystack checkout.',
+        });
+      }
+
+      const reference = `EBY-SMS-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+      const purchaseId = `smsp-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+      const originHeader =
+        (typeof req.headers.origin === 'string' && /^https?:\/\//i.test(req.headers.origin)
+          ? req.headers.origin
+          : (process.env.APP_URL || '').trim().replace(/\/+$/, '')) || 'http://localhost:3000';
+      const safeCallback =
+        typeof callbackUrl === 'string' && /^https?:\/\//i.test(callbackUrl)
+          ? callbackUrl
+          : `${originHeader}/?paystack_ref=${encodeURIComponent(reference)}`;
+
+      const nowIso = new Date().toISOString();
+      const pendingRecord: SmsBundlePurchase = {
+        id: purchaseId,
+        organizerId: req.user!.id,
+        organizerName: String((prof as Record<string, unknown> | null)?.name || ''),
+        organizerEmail: email,
+        bundleId: quote.bundleId,
+        bundleName: quote.bundleName,
+        credits: quote.credits,
+        amountGhs: quote.amountGhs,
+        paymentChannel: 'Paystack Checkout',
+        provider: 'paystack',
+        reference,
+        status: 'pending_payment',
+        createdAt: nowIso,
+      };
+
+      let storedInDb = false;
+      const { error: insErr } = await adminClient.from('sms_bundle_purchases').insert({
+        id: pendingRecord.id,
+        organizer_id: pendingRecord.organizerId,
+        bundle_id: pendingRecord.bundleId,
+        bundle_name: pendingRecord.bundleName,
+        credits: pendingRecord.credits,
+        amount_ghs: pendingRecord.amountGhs,
+        payment_channel: pendingRecord.paymentChannel,
+        provider: pendingRecord.provider,
+        reference: pendingRecord.reference,
+        status: pendingRecord.status,
+        created_at: pendingRecord.createdAt,
+      });
+      if (!insErr) {
+        storedInDb = true;
+      } else if (isMissingTableError(insErr)) {
+        platformRuntime.fallbackSmsPurchases.set(pendingRecord.id, pendingRecord);
+      } else {
+        return res.status(400).json({ error: insErr.message });
+      }
+
+      const initRes = await initializePaystackTransaction({
+        email,
+        amountGhs: quote.amountGhs,
+        reference,
+        callbackUrl: safeCallback,
+        metadata: {
+          userId: req.user!.id,
+          purchaseId,
+          bundleId: quote.bundleId,
+          credits: quote.credits,
+        },
+      });
+
+      if (!initRes.ok || !initRes.authorizationUrl) {
+        if (storedInDb) {
+          await adminClient
+            .from('sms_bundle_purchases')
+            .update({ status: 'failed', rejection_reason: initRes.error || 'Initialization failed' })
+            .eq('id', purchaseId);
+        } else {
+          platformRuntime.fallbackSmsPurchases.set(purchaseId, {
+            ...pendingRecord,
+            status: 'failed',
+            rejectionReason: initRes.error || 'Initialization failed',
+          });
+        }
+        return res.status(400).json({ error: initRes.error || 'Paystack initialization failed.' });
+      }
+
+      return res.json({
+        ok: true,
+        reference: initRes.reference,
+        authorizationUrl: initRes.authorizationUrl,
+        accessCode: initRes.accessCode,
+        purchase: pendingRecord,
+        quote,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'Paystack initialization failed.' });
+    }
+  });
+
+  app.get('/api/studio/sms/paystack/verify/:reference', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    if (!isPaystackConfigured()) {
+      return res.status(503).json({ error: 'PAYSTACK_SECRET_KEY is not configured on the server.' });
+    }
+    const reference = (req.params.reference || '').trim();
+    if (!reference) {
+      return res.status(400).json({ error: 'Payment reference is required.' });
+    }
+
+    try {
+      const client = req.supabase!;
+      const adminClient = createServiceSupabaseClient() ?? client;
+
+      let purchase: SmsBundlePurchase | null = null;
+      let storedInDb = false;
+
+      const { data: row, error: rowErr } = await adminClient
+        .from('sms_bundle_purchases')
+        .select('*')
+        .eq('reference', reference)
+        .maybeSingle();
+
+      if (!rowErr && row) {
+        purchase = mapSmsPurchaseRow(row as Record<string, unknown>);
+        storedInDb = true;
+      } else if (!rowErr || isMissingTableError(rowErr)) {
+        for (const item of platformRuntime.fallbackSmsPurchases.values()) {
+          if (item.reference.toLowerCase() === reference.toLowerCase()) {
+            purchase = item;
+            break;
+          }
+        }
+      } else {
+        return res.status(400).json({ error: rowErr.message });
+      }
+
+      if (!purchase) {
+        return res.status(404).json({ error: `Purchase record for reference "${reference}" not found.` });
+      }
+      if (purchase.organizerId !== req.user!.id && req.appRole !== 'creator') {
+        return res.status(403).json({ error: 'Forbidden: payment reference belongs to another organizer.' });
+      }
+
+      if (purchase.status === 'credited') {
+        const { data: prof } = await adminClient
+          .from('profiles')
+          .select('*')
+          .eq('id', purchase.organizerId)
+          .single();
+        const mappedProfile = mapProfileRow(prof as Record<string, unknown>, req.user!.email || '');
+        const senderInfo = platformRuntime.getEffectiveArkeselSenderId(mappedProfile.senderId);
+        const bal = await fetchArkeselGatewayBalance();
+        return res.json({
+          ok: true,
+          alreadyCredited: true,
+          profile: mappedProfile,
+          purchase,
+          arkeselStatus: {
+            configured: isArkeselConfigured(),
+            paystackConfigured: true,
+            mode: platformRuntime.flags.smsMode,
+            live: bal.ok,
+            smsBalance: bal.ok && typeof bal.credits === 'number' ? bal.credits : null,
+            mainBalance: bal.ok && typeof bal.mainBalance === 'number' ? bal.mainBalance : null,
+            error: bal.ok ? null : (bal.error || null),
+            senderId: senderInfo.senderId,
+            isDefaultUnverifiedSender: senderInfo.isDefaultUnverifiedWarning,
+            organizerCredits: mappedProfile.smsCredits,
+            apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
+            rechargeUrl: 'https://sms.arkesel.com',
+            checkedAt: new Date().toISOString(),
+          },
+          message: `Payment ${reference} was already verified and credited (+${purchase.credits.toLocaleString()} SMS).`,
+        });
+      }
+
+      const verify = await verifyPaystackTransaction(reference);
+      if (!verify.ok) {
+        return res.status(400).json({ error: verify.error || 'Paystack verification failed.' });
+      }
+      if (!verify.paid) {
+        if (verify.gatewayStatus === 'failed' || verify.gatewayStatus === 'abandoned') {
+          if (storedInDb) {
+            await adminClient
+              .from('sms_bundle_purchases')
+              .update({ status: 'failed', rejection_reason: `Gateway status: ${verify.gatewayStatus}` })
+              .eq('id', purchase.id);
+          } else {
+            platformRuntime.fallbackSmsPurchases.set(purchase.id, {
+              ...purchase,
+              status: 'failed',
+              rejectionReason: `Gateway status: ${verify.gatewayStatus}`,
+            });
+          }
+        }
+        return res.status(402).json({
+          error: `Payment ${reference} has status "${verify.gatewayStatus}" on Paystack and has not settled.`,
+        });
+      }
+
+      if (verify.currency !== 'GHS') {
+        return res.status(400).json({ error: `Expected GHS currency from Paystack, got ${verify.currency}.` });
+      }
+      const expectedPesewas = Math.round(purchase.amountGhs * 100);
+      if (verify.amountPesewas < expectedPesewas) {
+        return res.status(400).json({
+          error: `Underpayment detected: paid GH₵ ${(verify.amountPesewas / 100).toFixed(2)}, expected GH₵ ${purchase.amountGhs.toFixed(2)}.`,
+        });
+      }
+      const metaUserId = verify.metadata?.userId ? String(verify.metadata.userId) : undefined;
+      if (metaUserId && metaUserId !== purchase.organizerId) {
+        return res.status(403).json({ error: 'Paystack transaction metadata does not match this organizer.' });
+      }
+
+      const completed = await atomicCreditSupabasePurchase(
+        adminClient,
+        purchase.id,
+        verify.channel ? `Paystack (${verify.channel})` : 'Paystack Checkout'
+      );
+
+      const { data: updatedProf } = await adminClient
+        .from('profiles')
+        .select('*')
+        .eq('id', purchase.organizerId)
+        .single();
+      const mappedProfile = mapProfileRow(
+        updatedProf as Record<string, unknown>,
+        req.user!.email || ''
+      );
+      const senderInfo = platformRuntime.getEffectiveArkeselSenderId(mappedProfile.senderId);
+      const bal = await fetchArkeselGatewayBalance();
+
+      return res.json({
+        ok: true,
+        alreadyCredited: completed.alreadyCredited,
+        profile: mappedProfile,
+        purchase: completed.purchase,
+        arkeselStatus: {
+          configured: isArkeselConfigured(),
+          paystackConfigured: true,
+          mode: platformRuntime.flags.smsMode,
+          live: bal.ok,
+          smsBalance: bal.ok && typeof bal.credits === 'number' ? bal.credits : null,
+          mainBalance: bal.ok && typeof bal.mainBalance === 'number' ? bal.mainBalance : null,
+          error: bal.ok ? null : (bal.error || null),
+          senderId: senderInfo.senderId,
+          isDefaultUnverifiedSender: senderInfo.isDefaultUnverifiedWarning,
+          organizerCredits: mappedProfile.smsCredits,
+          apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
+          rechargeUrl: 'https://sms.arkesel.com',
+          checkedAt: new Date().toISOString(),
+        },
+        message: `Paystack payment verified (${reference}). +${completed.purchase.credits.toLocaleString()} SMS credits added to your workspace.`,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'Paystack verification failed.' });
+    }
+  });
+
+  app.post('/api/studio/sms/purchase-bundle', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    const { bundleId, credits, amountGhs, paymentChannel, arkeselReference } = req.body as {
+      bundleId?: string;
       credits?: number;
       amountGhs?: number;
       paymentChannel?: string;
       arkeselReference?: string;
     };
 
-    const parsedCredits = Math.round(Number(credits ?? 0));
-    const parsedAmount = Number(amountGhs ?? 0);
-    if (!Number.isFinite(parsedCredits) || parsedCredits < 10 || parsedCredits > 100000) {
-      return res.status(400).json({ error: 'Bundle credits must be between 10 and 100,000 SMS.' });
+    let quote;
+    try {
+      quote = resolveAuthoritativeSmsBundle({
+        bundleId,
+        credits,
+        expectedAmountGhs: amountGhs,
+      });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid SMS bundle selection.' });
     }
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      return res.status(400).json({ error: 'Bundle purchase amount (GH₵) must be greater than 0.' });
+
+    const refCheck = validateReceiptReference(arkeselReference);
+    if (!refCheck.ok) {
+      return res.status(400).json({ error: refCheck.error });
     }
+    const cleanRef = refCheck.normalized;
 
     try {
       const client = req.supabase!;
@@ -3015,45 +3510,120 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         return res.status(404).json({ error: 'Organizer profile not found.' });
       }
 
-      const row = prof as Record<string, unknown>;
-      const currentCredits = Number(row.sms_credits ?? 0);
-      const nextCredits = currentCredits + parsedCredits;
+      // Replay check against both Supabase ledger and fallback ledger
+      const { data: dupRow, error: dupErr } = await adminClient
+        .from('sms_bundle_purchases')
+        .select('id')
+        .ilike('reference', cleanRef)
+        .maybeSingle();
 
-      const { data: updatedProf, error: updErr } = await adminClient
-        .from('profiles')
-        .update({
-          sms_credits: nextCredits,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', req.user!.id)
-        .select('*')
-        .single();
-      if (updErr || !updatedProf) {
-        return res.status(400).json({ error: updErr?.message || 'Failed to update organizer SMS credits.' });
+      if (!dupErr && dupRow) {
+        return res.status(409).json({
+          error: `Transaction reference "${cleanRef}" has already been submitted. Duplicate redemptions are blocked.`,
+        });
+      }
+      for (const fallbackItem of platformRuntime.fallbackSmsPurchases.values()) {
+        if (fallbackItem.reference.trim().toLowerCase() === cleanRef.toLowerCase()) {
+          return res.status(409).json({
+            error: `Transaction reference "${cleanRef}" has already been submitted. Duplicate redemptions are blocked.`,
+          });
+        }
       }
 
-      const senderInfo = platformRuntime.getEffectiveArkeselSenderId(
-        typeof row.sender_id === 'string' ? row.sender_id : undefined
-      );
-      const bal = await fetchArkeselGatewayBalance();
+      const isSandbox = platformRuntime.flags.smsMode === 'sandbox';
+      const nowIso = new Date().toISOString();
+      const channel = (paymentChannel || 'Arkesel Portal Wallet').trim().slice(0, 64);
+      const purchaseId = `smsp-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+      const profRec = prof as Record<string, unknown>;
+
+      let purchaseRecord: SmsBundlePurchase = {
+        id: purchaseId,
+        organizerId: req.user!.id,
+        organizerName: String(profRec.name || ''),
+        organizerEmail: String(profRec.email || req.user!.email || ''),
+        bundleId: quote.bundleId,
+        bundleName: quote.bundleName,
+        credits: quote.credits,
+        amountGhs: quote.amountGhs,
+        paymentChannel: channel,
+        provider: isSandbox ? 'sandbox' : 'arkesel_manual',
+        reference: cleanRef,
+        status: isSandbox ? 'credited' : 'pending_verification',
+        createdAt: nowIso,
+        verifiedAt: isSandbox ? nowIso : undefined,
+      };
+
+      const { error: insErr } = await adminClient.from('sms_bundle_purchases').insert({
+        id: purchaseRecord.id,
+        organizer_id: purchaseRecord.organizerId,
+        bundle_id: purchaseRecord.bundleId,
+        bundle_name: purchaseRecord.bundleName,
+        credits: purchaseRecord.credits,
+        amount_ghs: purchaseRecord.amountGhs,
+        payment_channel: purchaseRecord.paymentChannel,
+        provider: purchaseRecord.provider,
+        reference: purchaseRecord.reference,
+        status: isSandbox ? 'pending_verification' : 'pending_verification',
+        created_at: purchaseRecord.createdAt,
+      });
+
+      if (insErr) {
+        if (insErr.code === '23505') {
+          return res.status(409).json({
+            error: `Transaction reference "${cleanRef}" has already been submitted. Duplicate redemptions are blocked.`,
+          });
+        }
+        if (isMissingTableError(insErr)) {
+          platformRuntime.fallbackSmsPurchases.set(purchaseRecord.id, {
+            ...purchaseRecord,
+            status: 'pending_verification',
+            verifiedAt: undefined,
+          });
+        } else {
+          return res.status(400).json({ error: insErr.message });
+        }
+      }
+
+      let addedCredits = 0;
+      let latestCredits = Number(profRec.sms_credits ?? 0);
+
+      if (isSandbox) {
+        const credited = await atomicCreditSupabasePurchase(adminClient, purchaseRecord.id, channel);
+        purchaseRecord = credited.purchase;
+        addedCredits = credited.alreadyCredited ? 0 : quote.credits;
+        latestCredits = credited.smsCredits;
+      }
+
+      const { data: latestProf } = await adminClient
+        .from('profiles')
+        .select('*')
+        .eq('id', req.user!.id)
+        .single();
       const mappedProfile = mapProfileRow(
-        updatedProf as Record<string, unknown>,
+        (latestProf ?? prof) as Record<string, unknown>,
         req.user!.email || ''
       );
-      const cleanRef = (arkeselReference || '').trim() || `ARK-${Date.now().toString(36).toUpperCase()}`;
+      mappedProfile.smsCredits = latestCredits;
 
-      return res.json({
+      const senderInfo = platformRuntime.getEffectiveArkeselSenderId(mappedProfile.senderId);
+      const bal = await fetchArkeselGatewayBalance();
+      const pendingVerification = !isSandbox;
+
+      return res.status(pendingVerification ? 202 : 200).json({
         ok: true,
         profile: mappedProfile,
-        bundleId: bundleId || 'custom',
-        bundleName: (bundleName || `${parsedCredits.toLocaleString()} SMS Bundle`).trim(),
-        addedCredits: parsedCredits,
-        amountGhs: Number(parsedAmount.toFixed(2)),
-        paymentChannel: (paymentChannel || 'Arkesel Portal Wallet').trim(),
+        purchase: purchaseRecord,
+        bundleId: quote.bundleId,
+        bundleName: quote.bundleName,
+        addedCredits,
+        amountGhs: quote.amountGhs,
+        paymentChannel: channel,
         arkeselReference: cleanRef,
+        pendingVerification,
         portalPurchaseRequired: true,
         arkeselStatus: {
           configured: isArkeselConfigured(),
+          paystackConfigured: isPaystackConfigured(),
           mode: platformRuntime.flags.smsMode,
           live: bal.ok,
           smsBalance: bal.ok && typeof bal.credits === 'number' ? bal.credits : null,
@@ -3061,12 +3631,14 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           error: bal.ok ? null : (bal.error || null),
           senderId: senderInfo.senderId,
           isDefaultUnverifiedSender: senderInfo.isDefaultUnverifiedWarning,
-          organizerCredits: nextCredits,
+          organizerCredits: latestCredits,
           apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
           rechargeUrl: 'https://sms.arkesel.com',
           checkedAt: new Date().toISOString(),
         },
-        message: `${parsedCredits.toLocaleString()} SMS credits allocated to your workspace (Ref: ${cleanRef}). Ensure your Arkesel merchant wallet has matching balance.`,
+        message: pendingVerification
+          ? `Receipt ${cleanRef} for ${quote.bundleName} (GH₵ ${quote.amountGhs.toFixed(2)}) is queued for payment verification before +${quote.credits.toLocaleString()} SMS are credited.`
+          : `Sandbox Mode: +${quote.credits.toLocaleString()} SMS credits allocated for ${quote.bundleName} (Ref: ${cleanRef}).`,
       });
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : 'SMS bundle purchase failed.' });

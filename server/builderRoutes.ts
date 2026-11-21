@@ -11,7 +11,14 @@ import type {
   BuilderTenantSummary,
   BuilderTenantUnitEconomics,
   OrganizerProfile,
+  SmsBundlePurchase,
+  SubscriptionPayment,
 } from '../src/types/events.ts';
+import {
+  DEFAULT_SHARED_SENDER_ID,
+  PLAN_MRR_USD,
+  computePlanExpiresAtIso,
+} from '../src/lib/subscriptionPlans.ts';
 import {
   dispatchOptionalArkeselSms,
   getBearerToken,
@@ -30,11 +37,109 @@ import {
   mapEventRow,
 } from './supabase.ts';
 
-const PLAN_MRR_USD: Record<OrganizerProfile['plan'], number> = {
-  Starter: 0,
-  'Pro Organizer': 29,
-  Enterprise: 99,
-};
+function isMissingPurchaseTableError(err: { message?: string; code?: string } | null | undefined): boolean {
+  if (!err) return false;
+  const code = (err.code || '').trim();
+  const msg = (err.message || '').toLowerCase();
+  return (
+    code === '42P01' ||
+    code === 'PGRST205' ||
+    code === '42883' ||
+    code === 'PGRST202' ||
+    msg.includes('sms_bundle_purchases') ||
+    msg.includes('credit_organizer_sms_bundle') ||
+    msg.includes('subscription_payments') ||
+    msg.includes('activate_organizer_subscription') ||
+    msg.includes('schema cache')
+  );
+}
+
+function mapPurchaseRow(
+  row: Record<string, unknown>,
+  profileById?: Map<string, Record<string, unknown>>
+): SmsBundlePurchase {
+  const organizerId = String(row.organizer_id);
+  const prof = profileById?.get(organizerId);
+  return {
+    id: String(row.id),
+    organizerId,
+    organizerName: row.organizer_name
+      ? String(row.organizer_name)
+      : prof?.name
+        ? String(prof.name)
+        : undefined,
+    organizerEmail: row.organizer_email
+      ? String(row.organizer_email)
+      : prof?.email
+        ? String(prof.email)
+        : undefined,
+    bundleId: String(row.bundle_id || 'custom'),
+    bundleName: String(row.bundle_name || 'SMS Bundle'),
+    credits: Number(row.credits ?? 0),
+    amountGhs: Number(row.amount_ghs ?? 0),
+    paymentChannel: String(row.payment_channel || 'Arkesel Portal Wallet'),
+    provider:
+      row.provider === 'paystack' || row.provider === 'sandbox'
+        ? row.provider
+        : 'arkesel_manual',
+    reference: String(row.reference || ''),
+    status:
+      row.status === 'pending_payment' ||
+      row.status === 'pending_verification' ||
+      row.status === 'credited' ||
+      row.status === 'rejected' ||
+      row.status === 'failed'
+        ? row.status
+        : 'pending_verification',
+    createdAt: String(row.created_at || new Date().toISOString()),
+    verifiedAt: row.verified_at ? String(row.verified_at) : undefined,
+    rejectionReason: row.rejection_reason ? String(row.rejection_reason) : undefined,
+  };
+}
+
+function mapSubscriptionPaymentRow(
+  row: Record<string, unknown>,
+  profileById?: Map<string, Record<string, unknown>>
+): SubscriptionPayment {
+  const organizerId = String(row.organizer_id);
+  const prof = profileById?.get(organizerId);
+  return {
+    id: String(row.id),
+    organizerId,
+    organizerName: row.organizer_name
+      ? String(row.organizer_name)
+      : prof?.name
+        ? String(prof.name)
+        : undefined,
+    organizerEmail: row.organizer_email
+      ? String(row.organizer_email)
+      : prof?.email
+        ? String(prof.email)
+        : undefined,
+    planId: row.plan_id === 'enterprise' ? 'enterprise' : 'pro',
+    planName: row.plan_name === 'Enterprise' ? 'Enterprise' : 'Pro Organizer',
+    billingCycle: row.billing_cycle === 'annual' ? 'annual' : 'monthly',
+    amountUsd: Number(row.amount_usd ?? 0),
+    amountGhs: Number(row.amount_ghs ?? 0),
+    paymentChannel: String(row.payment_channel || 'Mobile Money / Bank Transfer'),
+    provider:
+      row.provider === 'paystack' || row.provider === 'sandbox' ? row.provider : 'manual',
+    reference: String(row.reference || ''),
+    status:
+      row.status === 'pending_payment' ||
+      row.status === 'pending_verification' ||
+      row.status === 'active' ||
+      row.status === 'rejected' ||
+      row.status === 'failed'
+        ? row.status
+        : 'pending_verification',
+    periodStart: row.period_start ? String(row.period_start) : undefined,
+    periodEnd: row.period_end ? String(row.period_end) : undefined,
+    createdAt: String(row.created_at || new Date().toISOString()),
+    verifiedAt: row.verified_at ? String(row.verified_at) : undefined,
+    rejectionReason: row.rejection_reason ? String(row.rejection_reason) : undefined,
+  };
+}
 
 async function requireBuilderAuth(req: AuthedRequest, res: Response, next: NextFunction) {
   const token = getBearerToken(req);
@@ -94,12 +199,22 @@ export function createBuilderRouter() {
     const started = Date.now();
     try {
       const client = createServiceSupabaseClient() ?? req.supabase!;
-      const [profRes, evtRes, attRes, shotRes, appRes, , emailDiagnostics] = await Promise.all([
+      const [profRes, evtRes, attRes, shotRes, appRes, purchaseRes, subPayRes, , emailDiagnostics] = await Promise.all([
         client.from('profiles').select('*'),
         client.from('events').select('*'),
         client.from('attendees').select('*'),
         client.from('disposable_shots').select('id,event_id,data_url'),
         client.from('creator_apps').select('id'),
+        client
+          .from('sms_bundle_purchases')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(50),
+        client
+          .from('subscription_payments')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(50),
         fetchArkeselGatewayBalance(),
         getEmailDeliverabilityDiagnostics(),
       ]);
@@ -109,12 +224,61 @@ export function createBuilderRouter() {
       for (const r of [profRes, evtRes, attRes, shotRes]) {
         if (r.error) platformRuntime.recordError('builder/overview', r.error.message);
       }
+      if (purchaseRes.error && !isMissingPurchaseTableError(purchaseRes.error)) {
+        platformRuntime.recordError('builder/overview', purchaseRes.error.message);
+      }
+      if (subPayRes.error && !isMissingPurchaseTableError(subPayRes.error)) {
+        platformRuntime.recordError('builder/overview', subPayRes.error.message);
+      }
 
       const profiles = (profRes.data ?? []) as Record<string, unknown>[];
       const events = (evtRes.data ?? []) as Record<string, unknown>[];
       const attendees = (attRes.data ?? []) as Record<string, unknown>[];
       const shots = (shotRes.data ?? []) as Record<string, unknown>[];
       const apps = (appRes.data ?? []) as Record<string, unknown>[];
+      const profileById = new Map(profiles.map((p) => [String(p.id), p]));
+
+      const purchaseById = new Map<string, SmsBundlePurchase>();
+      if (!purchaseRes.error && Array.isArray(purchaseRes.data)) {
+        for (const row of purchaseRes.data) {
+          const mapped = mapPurchaseRow(row as Record<string, unknown>, profileById);
+          purchaseById.set(mapped.id, mapped);
+        }
+      }
+      for (const fallback of platformRuntime.fallbackSmsPurchases.values()) {
+        if (!purchaseById.has(fallback.id)) {
+          const prof = profileById.get(fallback.organizerId);
+          purchaseById.set(fallback.id, {
+            ...fallback,
+            organizerName: fallback.organizerName || (prof?.name ? String(prof.name) : undefined),
+            organizerEmail: fallback.organizerEmail || (prof?.email ? String(prof.email) : undefined),
+          });
+        }
+      }
+      const pendingSmsPurchases = Array.from(purchaseById.values())
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 30);
+
+      const subById = new Map<string, SubscriptionPayment>();
+      if (!subPayRes.error && Array.isArray(subPayRes.data)) {
+        for (const row of subPayRes.data) {
+          const mapped = mapSubscriptionPaymentRow(row as Record<string, unknown>, profileById);
+          subById.set(mapped.id, mapped);
+        }
+      }
+      for (const fallback of platformRuntime.fallbackSubscriptionPayments.values()) {
+        if (!subById.has(fallback.id)) {
+          const prof = profileById.get(fallback.organizerId);
+          subById.set(fallback.id, {
+            ...fallback,
+            organizerName: fallback.organizerName || (prof?.name ? String(prof.name) : undefined),
+            organizerEmail: fallback.organizerEmail || (prof?.email ? String(prof.email) : undefined),
+          });
+        }
+      }
+      const pendingSubscriptionPayments = Array.from(subById.values())
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 30);
 
       const eventMap = new Map(events.map((e) => [String(e.id), e]));
       const totalDispatched = events.reduce((acc, e) => acc + Number(e.sms_dispatched ?? 0), 0);
@@ -262,6 +426,8 @@ export function createBuilderRouter() {
           pausedEventIds: [...platformRuntime.flags.pausedEventIds],
         },
         envStatus: platformRuntime.getEnvStatus(),
+        pendingSmsPurchases,
+        pendingSubscriptionPayments,
         unitEconomics: {
           totalMrrUsd,
           totalSmsCostUsd,
@@ -387,10 +553,29 @@ export function createBuilderRouter() {
     }
     try {
       const client = createServiceSupabaseClient() ?? req.supabase!;
-      const { error } = await client
+      const updatePayload: Record<string, unknown> = {
+        plan,
+        updated_at: new Date().toISOString(),
+      };
+      if (plan === 'Starter') {
+        updatePayload.plan_billing_cycle = 'monthly';
+        updatePayload.plan_expires_at = null;
+        updatePayload.sender_id = DEFAULT_SHARED_SENDER_ID;
+      } else {
+        updatePayload.plan_billing_cycle = 'monthly';
+        updatePayload.plan_expires_at = computePlanExpiresAtIso('monthly');
+      }
+      let { error } = await client
         .from('profiles')
-        .update({ plan, updated_at: new Date().toISOString() })
+        .update(updatePayload)
         .eq('id', req.params.userId);
+      if (error && (error.message?.includes('plan_billing_cycle') || error.message?.includes('plan_expires_at') || error.message?.includes('schema cache'))) {
+        const retry = await client
+          .from('profiles')
+          .update({ plan, updated_at: new Date().toISOString() })
+          .eq('id', req.params.userId);
+        error = retry.error;
+      }
       if (error) return res.status(400).json({ error: error.message });
       return res.json({ ok: true, plan });
     } catch (err) {
@@ -525,6 +710,398 @@ export function createBuilderRouter() {
   router.patch('/flags', (req, res) => {
     const flags = platformRuntime.updateFlags(req.body as Partial<BuilderFeatureFlags>);
     return res.json({ flags });
+  });
+
+  router.post('/sms-purchases/:id/resolve', async (req: AuthedRequest, res) => {
+    const { action, reason } = req.body as { action?: 'approve' | 'reject'; reason?: string };
+    if (action !== 'approve' && action !== 'reject') {
+      return res.status(400).json({ error: 'Action must be "approve" or "reject".' });
+    }
+    const purchaseId = req.params.id;
+    if (!isSupabaseConfigured()) {
+      try {
+        const result = memoryStore.resolveSmsBundlePurchase(purchaseId, action, reason);
+        return res.json({ ok: true, ...result });
+      } catch (err) {
+        const status = (err as { status?: number })?.status || 400;
+        return res.status(status).json({ error: err instanceof Error ? err.message : 'Unable to resolve purchase.' });
+      }
+    }
+
+    try {
+      const client = createServiceSupabaseClient() ?? req.supabase!;
+      const fallbackItem = platformRuntime.fallbackSmsPurchases.get(purchaseId);
+      if (fallbackItem) {
+        if (fallbackItem.status === 'credited') {
+          const { data: prof } = await client
+            .from('profiles')
+            .select('sms_credits')
+            .eq('id', fallbackItem.organizerId)
+            .single();
+          return res.json({
+            ok: true,
+            alreadyCredited: true,
+            purchase: fallbackItem,
+            smsCredits: Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0),
+          });
+        }
+        if (action === 'reject') {
+          const rejected: SmsBundlePurchase = {
+            ...fallbackItem,
+            status: 'rejected',
+            rejectionReason: reason?.trim() || 'Rejected by creator administrator.',
+            verifiedAt: new Date().toISOString(),
+          };
+          platformRuntime.fallbackSmsPurchases.set(rejected.id, rejected);
+          const { data: prof } = await client
+            .from('profiles')
+            .select('sms_credits')
+            .eq('id', fallbackItem.organizerId)
+            .maybeSingle();
+          return res.json({
+            ok: true,
+            alreadyCredited: false,
+            purchase: rejected,
+            smsCredits: Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0),
+          });
+        }
+
+        const { data: prof, error: profErr } = await client
+          .from('profiles')
+          .select('sms_credits')
+          .eq('id', fallbackItem.organizerId)
+          .single();
+        if (profErr || !prof) return res.status(404).json({ error: 'Organizer profile not found.' });
+        const nextCredits = Number((prof as Record<string, unknown>).sms_credits ?? 0) + fallbackItem.credits;
+        const { error: updErr } = await client
+          .from('profiles')
+          .update({ sms_credits: nextCredits, updated_at: new Date().toISOString() })
+          .eq('id', fallbackItem.organizerId);
+        if (updErr) return res.status(400).json({ error: updErr.message });
+
+        const approved: SmsBundlePurchase = {
+          ...fallbackItem,
+          status: 'credited',
+          rejectionReason: undefined,
+          verifiedAt: new Date().toISOString(),
+        };
+        platformRuntime.fallbackSmsPurchases.set(approved.id, approved);
+        return res.json({
+          ok: true,
+          alreadyCredited: false,
+          purchase: approved,
+          smsCredits: nextCredits,
+        });
+      }
+
+      const { data: row, error: fetchErr } = await client
+        .from('sms_bundle_purchases')
+        .select('*')
+        .eq('id', purchaseId)
+        .single();
+      if (fetchErr || !row) {
+        return res.status(404).json({ error: 'SMS bundle purchase record not found.' });
+      }
+      const existing = mapPurchaseRow(row as Record<string, unknown>);
+      if (existing.status === 'credited') {
+        const { data: prof } = await client
+          .from('profiles')
+          .select('sms_credits')
+          .eq('id', existing.organizerId)
+          .single();
+        return res.json({
+          ok: true,
+          alreadyCredited: true,
+          purchase: existing,
+          smsCredits: Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0),
+        });
+      }
+
+      if (action === 'reject') {
+        const nowIso = new Date().toISOString();
+        const rejectReason = reason?.trim() || 'Rejected by creator administrator.';
+        const { data: updated, error: rejErr } = await client
+          .from('sms_bundle_purchases')
+          .update({
+            status: 'rejected',
+            rejection_reason: rejectReason,
+            verified_at: nowIso,
+          })
+          .eq('id', purchaseId)
+          .neq('status', 'credited')
+          .select('*')
+          .maybeSingle();
+        if (rejErr) return res.status(400).json({ error: rejErr.message });
+        const { data: prof } = await client
+          .from('profiles')
+          .select('sms_credits')
+          .eq('id', existing.organizerId)
+          .maybeSingle();
+        return res.json({
+          ok: true,
+          alreadyCredited: false,
+          purchase: updated ? mapPurchaseRow(updated as Record<string, unknown>) : { ...existing, status: 'rejected' as const, rejectionReason: rejectReason, verifiedAt: nowIso },
+          smsCredits: Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0),
+        });
+      }
+
+      // Approve & atomically credit
+      const rpcRes = await client.rpc('credit_organizer_sms_bundle', {
+        p_purchase_id: purchaseId,
+        p_payment_channel: null,
+      });
+      if (!rpcRes.error && rpcRes.data && typeof rpcRes.data === 'object') {
+        const payload = rpcRes.data as {
+          alreadyCredited?: boolean;
+          purchase?: Record<string, unknown>;
+          smsCredits?: number;
+        };
+        if (payload.purchase) {
+          return res.json({
+            ok: true,
+            alreadyCredited: Boolean(payload.alreadyCredited),
+            purchase: mapPurchaseRow(payload.purchase),
+            smsCredits: Number(payload.smsCredits ?? 0),
+          });
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      const { data: claimed, error: claimErr } = await client
+        .from('sms_bundle_purchases')
+        .update({ status: 'credited', verified_at: nowIso })
+        .eq('id', purchaseId)
+        .neq('status', 'credited')
+        .select('*')
+        .maybeSingle();
+      if (claimErr) return res.status(400).json({ error: claimErr.message });
+      if (!claimed) {
+        const { data: prof } = await client
+          .from('profiles')
+          .select('sms_credits')
+          .eq('id', existing.organizerId)
+          .single();
+        return res.json({
+          ok: true,
+          alreadyCredited: true,
+          purchase: { ...existing, status: 'credited' as const },
+          smsCredits: Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0),
+        });
+      }
+
+      const { data: prof } = await client
+        .from('profiles')
+        .select('sms_credits')
+        .eq('id', existing.organizerId)
+        .single();
+      const nextCredits = Number((prof as Record<string, unknown> | null)?.sms_credits ?? 0) + existing.credits;
+      await client
+        .from('profiles')
+        .update({ sms_credits: nextCredits, updated_at: nowIso })
+        .eq('id', existing.organizerId);
+
+      return res.json({
+        ok: true,
+        alreadyCredited: false,
+        purchase: mapPurchaseRow(claimed as Record<string, unknown>),
+        smsCredits: nextCredits,
+      });
+    } catch (err) {
+      platformRuntime.recordError('builder/sms-purchases/resolve', err);
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to resolve SMS purchase.' });
+    }
+  });
+
+  router.post('/subscription-purchases/:id/resolve', async (req: AuthedRequest, res) => {
+    const { action, reason } = req.body as { action?: 'approve' | 'reject'; reason?: string };
+    if (action !== 'approve' && action !== 'reject') {
+      return res.status(400).json({ error: 'Action must be "approve" or "reject".' });
+    }
+    const paymentId = req.params.id;
+    if (!isSupabaseConfigured()) {
+      try {
+        const result = memoryStore.resolveSubscriptionPayment(paymentId, action, reason);
+        return res.json({ ok: true, ...result });
+      } catch (err) {
+        const status = (err as { status?: number })?.status || 400;
+        return res.status(status).json({ error: err instanceof Error ? err.message : 'Unable to resolve subscription payment.' });
+      }
+    }
+
+    try {
+      const client = createServiceSupabaseClient() ?? req.supabase!;
+      const fallbackItem = platformRuntime.fallbackSubscriptionPayments.get(paymentId);
+      if (fallbackItem) {
+        if (fallbackItem.status === 'active') {
+          return res.json({
+            ok: true,
+            alreadyActivated: true,
+            payment: fallbackItem,
+            plan: fallbackItem.planName,
+          });
+        }
+        if (action === 'reject') {
+          const rejected: SubscriptionPayment = {
+            ...fallbackItem,
+            status: 'rejected',
+            rejectionReason: reason?.trim() || 'Rejected by creator administrator.',
+            verifiedAt: new Date().toISOString(),
+          };
+          platformRuntime.fallbackSubscriptionPayments.set(rejected.id, rejected);
+          return res.json({
+            ok: true,
+            alreadyActivated: false,
+            payment: rejected,
+          });
+        }
+
+        const now = new Date();
+        const nowIso = now.toISOString();
+        const expiresIso = computePlanExpiresAtIso(fallbackItem.billingCycle, now);
+        let { error: updErr } = await client
+          .from('profiles')
+          .update({
+            plan: fallbackItem.planName,
+            plan_billing_cycle: fallbackItem.billingCycle,
+            plan_expires_at: expiresIso,
+            updated_at: nowIso,
+          })
+          .eq('id', fallbackItem.organizerId);
+        if (updErr && (updErr.message?.includes('plan_billing_cycle') || updErr.message?.includes('schema cache'))) {
+          const retry = await client
+            .from('profiles')
+            .update({ plan: fallbackItem.planName, updated_at: nowIso })
+            .eq('id', fallbackItem.organizerId);
+          updErr = retry.error;
+        }
+        if (updErr) return res.status(400).json({ error: updErr.message });
+
+        const approved: SubscriptionPayment = {
+          ...fallbackItem,
+          status: 'active',
+          rejectionReason: undefined,
+          periodStart: nowIso,
+          periodEnd: expiresIso,
+          verifiedAt: nowIso,
+        };
+        platformRuntime.fallbackSubscriptionPayments.set(approved.id, approved);
+        return res.json({
+          ok: true,
+          alreadyActivated: false,
+          payment: approved,
+          plan: approved.planName,
+        });
+      }
+
+      const { data: row, error: fetchErr } = await client
+        .from('subscription_payments')
+        .select('*')
+        .eq('id', paymentId)
+        .single();
+      if (fetchErr || !row) {
+        return res.status(404).json({ error: 'Subscription payment record not found.' });
+      }
+      const existing = mapSubscriptionPaymentRow(row as Record<string, unknown>);
+      if (existing.status === 'active') {
+        return res.json({
+          ok: true,
+          alreadyActivated: true,
+          payment: existing,
+          plan: existing.planName,
+        });
+      }
+
+      if (action === 'reject') {
+        const nowIso = new Date().toISOString();
+        const rejectReason = reason?.trim() || 'Rejected by creator administrator.';
+        const { data: updated, error: rejErr } = await client
+          .from('subscription_payments')
+          .update({
+            status: 'rejected',
+            rejection_reason: rejectReason,
+            verified_at: nowIso,
+          })
+          .eq('id', paymentId)
+          .neq('status', 'active')
+          .select('*')
+          .maybeSingle();
+        if (rejErr) return res.status(400).json({ error: rejErr.message });
+        return res.json({
+          ok: true,
+          alreadyActivated: false,
+          payment: updated
+            ? mapSubscriptionPaymentRow(updated as Record<string, unknown>)
+            : { ...existing, status: 'rejected' as const, rejectionReason: rejectReason, verifiedAt: nowIso },
+        });
+      }
+
+      const rpcRes = await client.rpc('activate_organizer_subscription', {
+        p_payment_id: paymentId,
+        p_payment_channel: null,
+      });
+      if (!rpcRes.error && rpcRes.data && typeof rpcRes.data === 'object') {
+        const payload = rpcRes.data as {
+          alreadyActivated?: boolean;
+          payment?: Record<string, unknown>;
+          plan?: string;
+        };
+        if (payload.payment) {
+          return res.json({
+            ok: true,
+            alreadyActivated: Boolean(payload.alreadyActivated),
+            payment: mapSubscriptionPaymentRow(payload.payment),
+            plan: payload.plan || existing.planName,
+          });
+        }
+      }
+
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const expiresIso = computePlanExpiresAtIso(existing.billingCycle, now);
+      const { data: claimed, error: claimErr } = await client
+        .from('subscription_payments')
+        .update({
+          status: 'active',
+          period_start: nowIso,
+          period_end: expiresIso,
+          verified_at: nowIso,
+        })
+        .eq('id', paymentId)
+        .neq('status', 'active')
+        .select('*')
+        .maybeSingle();
+      if (claimErr) return res.status(400).json({ error: claimErr.message });
+      if (!claimed) {
+        return res.json({
+          ok: true,
+          alreadyActivated: true,
+          payment: { ...existing, status: 'active' as const },
+          plan: existing.planName,
+        });
+      }
+
+      await client
+        .from('profiles')
+        .update({
+          plan: existing.planName,
+          plan_billing_cycle: existing.billingCycle,
+          plan_expires_at: expiresIso,
+          updated_at: nowIso,
+        })
+        .eq('id', existing.organizerId);
+
+      return res.json({
+        ok: true,
+        alreadyActivated: false,
+        payment: mapSubscriptionPaymentRow(claimed as Record<string, unknown>),
+        plan: existing.planName,
+      });
+    } catch (err) {
+      platformRuntime.recordError('builder/subscription-purchases/resolve', err);
+      return res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to resolve subscription payment.',
+      });
+    }
   });
 
   return router;

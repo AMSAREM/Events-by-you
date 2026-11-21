@@ -1,9 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="112" fill="#0B0B0B" />
-  <rect x="28" y="28" width="456" height="456" rx="90" fill="none" stroke="#FFFFFF" stroke-opacity="0.16" stroke-width="4" />
-  <path
-    d="M150 144 H324 V196 H208 V232 H304 V282 H208 V316 H326 V368 H150 Z"
-    fill="#FFFFFF"
-  />
-  <circle cx="372" cy="342" r="28" fill="#FFFFFF" />
+  <defs>
+    <linearGradient id="ebyBadgeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#AEFC3B" />
+      <stop offset="52%" stop-color="#7BF66E" />
+      <stop offset="100%" stop-color="#48F09F" />
+    </linearGradient>
+    <clipPath id="ebyPinClip">
+      <path d="M256 124C202.98 124 160 166.98 160 220C160 278.5 224.5 349.5 248.8 380.2C252.5 384.9 259.5 384.9 263.2 380.2C287.5 349.5 352 278.5 352 220C352 166.98 309.02 124 256 124Z" />
+    </clipPath>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#ebyBadgeGrad)" />
+  <g clip-path="url(#ebyPinClip)">
+    <path
+      fill-rule="evenodd"
+      clip-rule="evenodd"
+      d="M256 124C202.98 124 160 166.98 160 220C160 278.5 224.5 349.5 248.8 380.2C252.5 384.9 259.5 384.9 263.2 380.2C287.5 349.5 352 278.5 352 220C352 166.98 309.02 124 256 124ZM256 262C232.8 262 214 243.2 214 220C214 196.8 232.8 178 256 178C279.2 178 298 196.8 298 220C298 243.2 279.2 262 256 262Z"
+      fill="#0D3822"
+    />
+    <path
+      d="M256 262C232.8 262 214 243.2 214 220C214 258 230 306 256 385C244 334 246 290 256 262Z"
+      fill="#072214"
+      fill-opacity="0.55"
+    />
+  </g>
 </svg>

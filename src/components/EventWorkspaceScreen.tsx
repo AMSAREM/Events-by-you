@@ -15,6 +15,8 @@ import {
   ImagePlus,
   LayoutGrid,
   Link2,
+  Lock,
+  Mail,
   MapPin,
   MessageSquare,
   Plus,
@@ -48,6 +50,11 @@ import {
   getDefaultMessageConfig,
   resolveEventMessage,
 } from '../lib/eventMessages';
+import {
+  DEFAULT_SHARED_SENDER_ID,
+  getPlanEntitlements,
+  STARTER_MAX_ATTENDEES_PER_EVENT,
+} from '../lib/subscriptionPlans';
 import { compressFlyerImageFile } from '../lib/flyerUpload';
 import {
   buildEventInvitationUrl,
@@ -88,6 +95,7 @@ interface EventWorkspaceScreenProps {
     eventId?: string;
     attendeeIds: string[];
     message: string;
+    channel?: 'email' | 'sms' | 'dual';
   }) => Promise<{
     ok: boolean;
     recipientCount: number;
@@ -191,16 +199,22 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const [giftDeskMessage, setGiftDeskMessage] = useState('');
   const [savingGiftDesk, setSavingGiftDesk] = useState(false);
 
+  const entitlements = getPlanEntitlements(profile);
+  const effectiveSenderId = entitlements.allowCustomSenderId
+    ? event.senderId || profile.senderId || DEFAULT_SHARED_SENDER_ID
+    : DEFAULT_SHARED_SENDER_ID;
+
   // Message automations state
   const defaultMsgs = getDefaultMessageConfig(event);
-  const [senderIdDraft, setSenderIdDraft] = useState(
-    event.senderId || profile.senderId || 'EVENTSAPP'
-  );
+  const [senderIdDraft, setSenderIdDraft] = useState(effectiveSenderId);
   const [confirmationTemplate, setConfirmationTemplate] = useState(defaultMsgs.confirmationMessage);
   const [reminderTemplate, setReminderTemplate] = useState(defaultMsgs.reminderMessage);
   const [checkInTemplate, setCheckInTemplate] = useState(defaultMsgs.checkInMessage);
   const [thankYouTemplate, setThankYouTemplate] = useState(defaultMsgs.thankYouMessage);
   const [includeCameraLink, setIncludeCameraLink] = useState(defaultMsgs.includeCameraLink);
+  const [thankYouChannel, setThankYouChannel] = useState<'email' | 'sms' | 'dual'>(() =>
+    entitlements.allowSmsBroadcast ? 'dual' : 'email'
+  );
   const [savingMessages, setSavingMessages] = useState(false);
   const [editingReminder, setEditingReminder] = useState(false);
   const [thankYouSent, setThankYouSent] = useState(false);
@@ -208,7 +222,11 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
 
   useEffect(() => {
     const cfg = getDefaultMessageConfig(event);
-    setSenderIdDraft(event.senderId || profile.senderId || 'EVENTSAPP');
+    setSenderIdDraft(
+      entitlements.allowCustomSenderId
+        ? event.senderId || profile.senderId || DEFAULT_SHARED_SENDER_ID
+        : DEFAULT_SHARED_SENDER_ID
+    );
     setConfirmationTemplate(cfg.confirmationMessage);
     setReminderTemplate(cfg.reminderMessage);
     setCheckInTemplate(cfg.checkInMessage);
@@ -222,7 +240,14 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     event.messageConfig,
     event.flyerUrl,
     profile.senderId,
+    entitlements.allowCustomSenderId,
   ]);
+
+  useEffect(() => {
+    if (!entitlements.allowSmsBroadcast && thankYouChannel !== 'email') {
+      setThankYouChannel('email');
+    }
+  }, [entitlements.allowSmsBroadcast, thankYouChannel]);
 
   const cameraUrlForEvent = useMemo(
     () => buildCameraLinkForOrigin(event.slug || event.id),
@@ -230,12 +255,17 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   );
 
   const handleSaveMessageSettings = async (successToast = 'Event Sender ID & message templates saved') => {
-    const cleanSender =
-      senderIdDraft
-        .trim()
-        .toUpperCase()
-        .replace(/[^A-Z0-9]/g, '')
-        .slice(0, 11) || 'EVENTSAPP';
+    if (!entitlements.allowCustomSenderId && !entitlements.allowCustomMessages) {
+      triggerToast('Upgrade to Pro Organizer ($19/mo) to customize Sender ID & message templates');
+      return;
+    }
+    const cleanSender = entitlements.allowCustomSenderId
+      ? senderIdDraft
+          .trim()
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, '')
+          .slice(0, 11) || DEFAULT_SHARED_SENDER_ID
+      : DEFAULT_SHARED_SENDER_ID;
     setSenderIdDraft(cleanSender);
     if (!onUpdateEvent) {
       triggerToast(successToast);
@@ -246,13 +276,15 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
       await onUpdateEvent({
         ...event,
         senderId: cleanSender,
-        messageConfig: {
-          confirmationMessage: confirmationTemplate.trim(),
-          reminderMessage: reminderTemplate.trim(),
-          checkInMessage: checkInTemplate.trim(),
-          thankYouMessage: thankYouTemplate.trim(),
-          includeCameraLink,
-        },
+        messageConfig: entitlements.allowCustomMessages
+          ? {
+              confirmationMessage: confirmationTemplate.trim(),
+              reminderMessage: reminderTemplate.trim(),
+              checkInMessage: checkInTemplate.trim(),
+              thankYouMessage: thankYouTemplate.trim(),
+              includeCameraLink,
+            }
+          : event.messageConfig,
       });
       triggerToast(successToast);
     } finally {
@@ -1378,24 +1410,56 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 </button>
               </div>
 
+              {(!entitlements.allowCustomSenderId || !entitlements.allowCustomMessages) && (
+                <div className="p-4 rounded-2xl bg-white border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <Lock className="w-4 h-4 text-[#0B0B0B] mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-xs font-semibold text-[#0B0B0B]">
+                        Starter Uses Shared Sender ID ({DEFAULT_SHARED_SENDER_ID}) &amp; Default Templates
+                      </p>
+                      <p className="text-[11px] text-[#71717A]">
+                        Upgrade to Pro Organizer ($19/mo) to register custom Arkesel Sender IDs and personalize confirmation &amp; check-in templates.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onOpenPlans}
+                    className="px-4 py-1.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold shrink-0 self-start sm:self-center"
+                  >
+                    Upgrade to Pro
+                  </button>
+                </div>
+              )}
+
               {/* Event Arkesel Sender ID + Auto Camera Link Toggle */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="p-4 rounded-2xl bg-white space-y-2 border border-[#E5E5EA]/70">
                   <div className="flex items-center justify-between text-xs font-semibold">
-                    <label htmlFor="ws-sender-id">Event Arkesel Sender ID</label>
-                    <span className="font-mono text-[#71717A]">{senderIdDraft.length}/11</span>
+                    <label htmlFor="ws-sender-id" className="inline-flex items-center gap-1.5">
+                      <span>Event Arkesel Sender ID</span>
+                      {!entitlements.allowCustomSenderId && (
+                        <Lock className="w-3 h-3 text-[#71717A]" />
+                      )}
+                    </label>
+                    <span className="font-mono text-[#71717A]">
+                      {(entitlements.allowCustomSenderId ? senderIdDraft : DEFAULT_SHARED_SENDER_ID).length}/11
+                    </span>
                   </div>
                   <input
                     id="ws-sender-id"
                     type="text"
                     maxLength={11}
-                    value={senderIdDraft}
-                    onChange={(e) =>
+                    disabled={!entitlements.allowCustomSenderId}
+                    value={entitlements.allowCustomSenderId ? senderIdDraft : DEFAULT_SHARED_SENDER_ID}
+                    onChange={(e) => {
+                      if (!entitlements.allowCustomSenderId) return;
                       setSenderIdDraft(
                         e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11)
-                      )
-                    }
-                    className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono font-bold tracking-wider uppercase text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                      );
+                    }}
+                    className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono font-bold tracking-wider uppercase text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B] disabled:opacity-60 disabled:cursor-not-allowed"
                   />
                 </div>
 
@@ -1411,11 +1475,12 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   <label className="relative inline-flex items-center cursor-pointer shrink-0">
                     <input
                       type="checkbox"
-                      checked={includeCameraLink}
+                      disabled={!entitlements.allowCustomMessages}
+                      checked={entitlements.allowCustomMessages ? includeCameraLink : true}
                       onChange={(e) => setIncludeCameraLink(e.target.checked)}
                       className="sr-only peer"
                     />
-                    <div className="w-11 h-6 bg-[#E5E5EA] rounded-full peer peer-checked:bg-[#0B0B0B] after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+                    <div className="w-11 h-6 bg-[#E5E5EA] rounded-full peer peer-checked:bg-[#0B0B0B] peer-disabled:opacity-50 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
                   </label>
                 </div>
               </div>
@@ -1430,9 +1495,14 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 </div>
                 <textarea
                   rows={3}
+                  readOnly={!entitlements.allowCustomMessages}
                   value={confirmationTemplate}
-                  onChange={(e) => setConfirmationTemplate(e.target.value)}
-                  className="w-full p-3.5 rounded-2xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                  onChange={(e) => {
+                    if (entitlements.allowCustomMessages) setConfirmationTemplate(e.target.value);
+                  }}
+                  className={`w-full p-3.5 rounded-2xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B] ${
+                    !entitlements.allowCustomMessages ? 'opacity-65 cursor-not-allowed' : ''
+                  }`}
                 />
               </div>
 
@@ -1445,8 +1515,9 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       <button
                         key={tag}
                         type="button"
+                        disabled={!entitlements.allowCustomMessages}
                         onClick={() => setCheckInTemplate((prev) => `${prev} ${tag}`.trim())}
-                        className="px-2 py-0.5 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[10px] font-mono text-[#0B0B0B]"
+                        className="px-2 py-0.5 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[10px] font-mono text-[#0B0B0B] disabled:opacity-45 disabled:cursor-not-allowed"
                       >
                         + {tag}
                       </button>
@@ -1455,9 +1526,14 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 </div>
                 <textarea
                   rows={3}
+                  readOnly={!entitlements.allowCustomMessages}
                   value={checkInTemplate}
-                  onChange={(e) => setCheckInTemplate(e.target.value)}
-                  className="w-full p-3.5 rounded-2xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                  onChange={(e) => {
+                    if (entitlements.allowCustomMessages) setCheckInTemplate(e.target.value);
+                  }}
+                  className={`w-full p-3.5 rounded-2xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B] ${
+                    !entitlements.allowCustomMessages ? 'opacity-65 cursor-not-allowed' : ''
+                  }`}
                 />
                 <div className="p-3 rounded-xl bg-[#F5F5F7] text-[11px] text-[#0B0B0B]">
                   <span className="font-semibold text-[#71717A] block mb-1">
@@ -1481,14 +1557,25 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
               </div>
 
               <div className="flex justify-end">
-                <button
-                  type="button"
-                  disabled={savingMessages}
-                  onClick={() => void handleSaveMessageSettings()}
-                  className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors disabled:opacity-60"
-                >
-                  {savingMessages ? 'Saving...' : 'Save All Message Templates & Sender ID'}
-                </button>
+                {entitlements.allowCustomSenderId || entitlements.allowCustomMessages ? (
+                  <button
+                    type="button"
+                    disabled={savingMessages}
+                    onClick={() => void handleSaveMessageSettings()}
+                    className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors disabled:opacity-60"
+                  >
+                    {savingMessages ? 'Saving...' : 'Save All Message Templates & Sender ID'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onOpenPlans}
+                    className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors inline-flex items-center gap-1.5"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    Upgrade to Customize Messages &amp; Sender ID
+                  </button>
+                )}
               </div>
             </section>
           )}
@@ -1822,22 +1909,26 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   {spotsLeft} Spots Remaining
                 </h3>
                 <p className="text-[13px] text-[#71717A] mt-1 leading-relaxed">
-                  {profile.plan === 'Starter'
-                    ? 'Your free tier limit is capped at 50 attendees. Once full, attendee registration will pause automatically.'
-                    : `Capacity at ${capacityPct}% (${totalRegistered}/${event.capacity}). Upgrade tier for multi-gate unlimited bursts.`}
+                  {entitlements.plan === 'Starter'
+                    ? `Your Starter tier limit is capped at ${STARTER_MAX_ATTENDEES_PER_EVENT} attendees per event. Once full, public RSVP pauses automatically.`
+                    : `Capacity at ${capacityPct}% (${totalRegistered}/${event.capacity}) on ${entitlements.plan}.`}
                 </p>
               </div>
             </div>
             <div className="mt-4 pt-3 flex items-center justify-between gap-2">
               <span className="text-xs font-semibold text-[#0B0B0B]">
-                Upgrade to Pro ($19/mo)
+                {entitlements.plan === 'Starter'
+                  ? 'Upgrade to Pro ($19/mo)'
+                  : entitlements.plan === 'Pro Organizer'
+                    ? 'Pro Organizer Active'
+                    : 'Enterprise Active'}
               </span>
               <button
                 type="button"
                 onClick={onOpenPlans}
                 className="px-4 py-1.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:opacity-90 transition-all shrink-0"
               >
-                Upgrade
+                {entitlements.plan === 'Starter' ? 'Upgrade' : 'Manage Plan'}
               </button>
             </div>
           </section>
@@ -1906,7 +1997,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 <p className="text-[11px] text-[#71717A] mb-1 tabular-nums">
                   Scheduled for {totalRegistered} registered attendees
                 </p>
-                {editingReminder ? (
+                {editingReminder && entitlements.allowCustomMessages ? (
                   <div className="mt-2 space-y-2">
                     <textarea
                       rows={2}
@@ -1929,26 +2020,45 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 ) : (
                   <div className="flex items-center justify-between text-[#71717A] text-[11px] mt-2">
                     <span>Auto-dispatch queued</span>
-                    <button
-                      type="button"
-                      onClick={() => setEditingReminder(true)}
-                      className="text-[#0B0B0B] underline font-semibold"
-                    >
-                      Edit Template
-                    </button>
+                    {entitlements.allowCustomMessages ? (
+                      <button
+                        type="button"
+                        onClick={() => setEditingReminder(true)}
+                        className="text-[#0B0B0B] underline font-semibold"
+                      >
+                        Edit Template
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={onOpenPlans}
+                        className="text-[#0B0B0B] underline font-semibold inline-flex items-center gap-1"
+                      >
+                        <Lock className="w-3 h-3" />
+                        Pro to Edit
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
 
               {/* Flow 3: Post-Event Thank You */}
               {(() => {
+                const effectiveChannel = entitlements.allowSmsBroadcast ? thankYouChannel : 'email';
                 const phoneRecipients = eventAttendees.filter((a) => Boolean(a.phone?.trim()));
+                const emailRecipients = eventAttendees.filter((a) => Boolean(a.email?.trim()));
                 const thankYouSegments = calculateSmsCredits(thankYouTemplate);
-                const thankYouCost = phoneRecipients.length * Math.max(1, thankYouSegments);
-                const hasThankYouCredits = profile.smsCredits >= thankYouCost;
+                const thankYouCost =
+                  effectiveChannel === 'email'
+                    ? 0
+                    : phoneRecipients.length * Math.max(1, thankYouSegments);
+                const hasThankYouCredits =
+                  effectiveChannel === 'email' || profile.smsCredits >= thankYouCost;
+                const activeRecipientCount =
+                  effectiveChannel === 'email' ? emailRecipients.length : phoneRecipients.length;
                 return (
-                  <div className="p-3.5 bg-white rounded-2xl">
-                    <div className="flex items-center justify-between mb-1">
+                  <div className="p-3.5 bg-white rounded-2xl space-y-2.5">
+                    <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-[#0B0B0B]">
                         Post-Event Thank You
                       </span>
@@ -1956,15 +2066,62 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                         {profile.smsCredits.toLocaleString()} credits left
                       </span>
                     </div>
+
+                    <div className="flex flex-wrap gap-1.5">
+                      {(
+                        [
+                          { id: 'email', label: 'Email Only', locked: false },
+                          {
+                            id: 'dual',
+                            label: 'SMS + Email',
+                            locked: !entitlements.allowSmsBroadcast,
+                          },
+                          {
+                            id: 'sms',
+                            label: 'SMS Only',
+                            locked: !entitlements.allowSmsBroadcast,
+                          },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => {
+                            if (opt.locked) {
+                              onOpenPlans();
+                              return;
+                            }
+                            setThankYouChannel(opt.id);
+                          }}
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-semibold inline-flex items-center gap-1 transition-colors ${
+                            effectiveChannel === opt.id
+                              ? 'bg-[#0B0B0B] text-white'
+                              : opt.locked
+                                ? 'bg-[#F5F5F7] text-[#71717A] opacity-75'
+                                : 'bg-[#F5F5F7] text-[#0B0B0B]'
+                          }`}
+                        >
+                          {opt.locked ? (
+                            <Lock className="w-2.5 h-2.5" />
+                          ) : opt.id === 'email' ? (
+                            <Mail className="w-2.5 h-2.5" />
+                          ) : null}
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+
                     <p className="text-[11px] text-[#71717A] tabular-nums">
-                      Target: {phoneRecipients.length} phone recipients · Cost: {thankYouCost.toLocaleString()} SMS credits
+                      {effectiveChannel === 'email'
+                        ? `Target: ${emailRecipients.length} email guests · 0 SMS credits (Resend)`
+                        : `Target: ${phoneRecipients.length} phone recipients · Cost: ${thankYouCost.toLocaleString()} SMS credits`}
                     </p>
-                    <div className="mt-3 flex items-center justify-between gap-2">
+                    <div className="pt-0.5 flex items-center justify-between gap-2">
                       <span className="text-[11px] text-[#71717A]">
                         Status:{' '}
                         {thankYouSent
                           ? 'Dispatched'
-                          : phoneRecipients.length === 0
+                          : activeRecipientCount === 0
                             ? 'No recipients yet'
                             : hasThankYouCredits
                               ? 'Ready to send'
@@ -1981,20 +2138,25 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       ) : (
                         <button
                           type="button"
-                          disabled={savingMessages || thankYouSent || phoneRecipients.length === 0}
+                          disabled={savingMessages || thankYouSent || activeRecipientCount === 0}
                           onClick={async () => {
-                            if (phoneRecipients.length === 0) return;
+                            if (activeRecipientCount === 0) return;
                             try {
-                              await handleSaveMessageSettings('Message templates saved');
+                              if (entitlements.allowCustomMessages) {
+                                await handleSaveMessageSettings('Message templates saved');
+                              }
                               if (onBroadcast) {
                                 const res = await onBroadcast({
                                   eventId: event.id,
                                   attendeeIds: eventAttendees.map((a) => a.id),
                                   message: thankYouTemplate,
+                                  channel: effectiveChannel,
                                 });
                                 setThankYouSent(true);
                                 triggerToast(
-                                  `Thank-you broadcast sent to ${res.sentCount} guests (${(res.creditsUsed ?? thankYouCost).toLocaleString()} SMS credits deducted)`
+                                  effectiveChannel === 'email'
+                                    ? `Thank-you email sent to ${res.sentCount} guests (0 SMS credits spent)`
+                                    : `Thank-you broadcast sent to ${res.sentCount} guests (${(res.creditsUsed ?? thankYouCost).toLocaleString()} SMS credits deducted)`
                                 );
                               } else {
                                 triggerToast('Thank-you template saved');
@@ -2007,7 +2169,11 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                           }}
                           className="px-3 py-1.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:opacity-90 disabled:opacity-45 disabled:cursor-not-allowed"
                         >
-                          {thankYouSent ? 'Dispatched ✓' : 'Send Broadcast'}
+                          {thankYouSent
+                            ? 'Dispatched ✓'
+                            : effectiveChannel === 'email'
+                              ? 'Send Email'
+                              : 'Send Broadcast'}
                         </button>
                       )}
                     </div>

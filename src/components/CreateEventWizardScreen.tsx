@@ -10,6 +10,7 @@ import {
   Gift,
   ImagePlus,
   Link2,
+  Lock,
   Mail,
   MapPin,
   MessageSquare,
@@ -29,6 +30,12 @@ import {
 } from '../types/events';
 import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
 import { buildCameraLinkForOrigin, getDefaultMessageConfig } from '../lib/eventMessages';
+import {
+  DEFAULT_SHARED_SENDER_ID,
+  getPlanEntitlements,
+  isActiveEventStatus,
+  STARTER_MAX_ATTENDEES_PER_EVENT,
+} from '../lib/subscriptionPlans';
 import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
 import { EventFlyerCard } from './EventFlyerCard';
 import { MonochromePoster } from './MonochromeArtwork';
@@ -117,11 +124,21 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const [newBlockStage, setNewBlockStage] = useState('Workshop Lab');
 
   // Step 3: Telecom & Capacity
+  const entitlements = getPlanEntitlements(profile);
+  const isFreePlan = entitlements.maxActiveEvents !== null;
+  const maxActiveEvents = entitlements.maxActiveEvents ?? Number.POSITIVE_INFINITY;
+  const maxAllowedCapacity = entitlements.maxAttendeesPerEvent ?? 25000;
   const defaultMsgCfg = getDefaultMessageConfig();
-  const [senderId, setSenderId] = useState(profile.senderId || 'EVENTSAPP');
+  const [senderId, setSenderId] = useState(
+    entitlements.allowCustomSenderId
+      ? profile.senderId || DEFAULT_SHARED_SENDER_ID
+      : DEFAULT_SHARED_SENDER_ID
+  );
   const [replyEmail, setReplyEmail] = useState(profile.email);
   const [instantDispatch, setInstantDispatch] = useState(true);
-  const [capacity, setCapacity] = useState(profile.plan === 'Starter' ? 50 : 500);
+  const [capacity, setCapacity] = useState(
+    entitlements.maxAttendeesPerEvent ?? 500
+  );
   const [ticketPrice, setTicketPrice] = useState(0);
   const [smsTemplate, setSmsTemplate] = useState(defaultMsgCfg.confirmationMessage);
   const [checkInTemplate, setCheckInTemplate] = useState(defaultMsgCfg.checkInMessage);
@@ -131,13 +148,13 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const [publishQrPass, setPublishQrPass] = useState(true);
   const [copiedSlug, setCopiedSlug] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const isFreePlan = profile.plan === 'Starter';
-  const activeEventsCount = events.filter((e) => e.status === 'live' || e.status === 'upcoming').length;
-  const activeEventSample = events.find((e) => e.status === 'live') ?? events[0];
-  const isAtFreeLimit = isFreePlan && activeEventsCount >= 1;
+  const activeEventsCount = events.filter((e) => isActiveEventStatus(e.status)).length;
+  const activeEventSample = events.find((e) => isActiveEventStatus(e.status)) ?? events[0];
+  const isAtFreeLimit = isFreePlan && activeEventsCount >= maxActiveEvents;
 
   const handleTitleChange = (val: string) => {
     setTitle(val);
@@ -235,10 +252,20 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
 
   const handleFinish = async (publishStatus: 'upcoming' | 'draft') => {
     if (submitting) return;
+    if (publishStatus === 'upcoming' && isAtFreeLimit) {
+      setPublishError(
+        `Starter allows up to ${entitlements.maxActiveEvents ?? 1} active event at a time. Save as Draft or upgrade to Pro Organizer.`
+      );
+      setStep(4);
+      return;
+    }
+    setPublishError(null);
     setSubmitting(true);
     try {
       const eventId = `evt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-      const finalCap = isFreePlan ? Math.min(50, Math.max(10, capacity)) : Math.max(10, capacity);
+      const finalCap = entitlements.maxAttendeesPerEvent
+        ? Math.min(entitlements.maxAttendeesPerEvent, Math.max(10, capacity))
+        : Math.max(10, capacity);
       const parsedOptions = validationOptionsText
         .split(',')
         .map((s) => s.trim())
@@ -285,18 +312,25 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
           customFields,
         },
         venueFormat,
-        senderId:
-          senderId
-            .trim()
-            .toUpperCase()
-            .replace(/[^A-Z0-9]/g, '')
-            .slice(0, 11) || 'EVENTSAPP',
+        senderId: entitlements.allowCustomSenderId
+          ? senderId
+              .trim()
+              .toUpperCase()
+              .replace(/[^A-Z0-9]/g, '')
+              .slice(0, 11) || DEFAULT_SHARED_SENDER_ID
+          : DEFAULT_SHARED_SENDER_ID,
         qrPassPublished: publishStatus === 'draft' ? false : publishQrPass,
-        messageConfig: {
-          confirmationMessage: smsTemplate.trim() || defaultMsgCfg.confirmationMessage,
-          checkInMessage: checkInTemplate.trim() || defaultMsgCfg.checkInMessage,
-          includeCameraLink,
-        },
+        messageConfig: entitlements.allowCustomMessages
+          ? {
+              confirmationMessage: smsTemplate.trim() || defaultMsgCfg.confirmationMessage,
+              checkInMessage: checkInTemplate.trim() || defaultMsgCfg.checkInMessage,
+              includeCameraLink,
+            }
+          : {
+              confirmationMessage: defaultMsgCfg.confirmationMessage,
+              checkInMessage: defaultMsgCfg.checkInMessage,
+              includeCameraLink: true,
+            },
       };
 
       const createdBlocks: ScheduleBlock[] = draftBlocks.map((blk, i) => ({
@@ -403,11 +437,18 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
           </button>
           <button
             type="button"
+            disabled={submitting || isAtFreeLimit}
             onClick={() => handleFinish('upcoming')}
-            className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold shadow-sm transition-colors inline-flex items-center gap-1.5 whitespace-nowrap"
+            title={
+              isAtFreeLimit
+                ? 'Starter active event limit reached — Save as Draft or Upgrade to Pro'
+                : undefined
+            }
+            className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold shadow-sm transition-colors inline-flex items-center gap-1.5 whitespace-nowrap disabled:opacity-45 disabled:cursor-not-allowed"
           >
-            <span>Publish Event</span>
-            <ArrowRight className="w-3.5 h-3.5" />
+            {isAtFreeLimit && <Lock className="w-3.5 h-3.5" />}
+            <span>{isAtFreeLimit ? 'Limit Reached (Save Draft)' : 'Publish Event'}</span>
+            {!isAtFreeLimit && <ArrowRight className="w-3.5 h-3.5" />}
           </button>
         </div>
       </div>
@@ -1112,44 +1153,73 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                   <div className="flex items-center justify-between mb-1.5">
                     <label
                       htmlFor="wiz-sender-id"
-                      className="text-xs font-semibold text-[#0B0B0B]"
+                      className="text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5"
                     >
-                      Arkesel SMS Sender ID
+                      <span>Arkesel SMS Sender ID</span>
+                      {!entitlements.allowCustomSenderId && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-[#E5E5EA] text-[10px] font-semibold text-[#71717A]">
+                          <Lock className="w-2.5 h-2.5" /> Pro+
+                        </span>
+                      )}
                     </label>
                     <span className="text-[10px] font-mono text-[#71717A] tabular-nums">
-                      {senderId.length}/11 alphanumeric
+                      {(entitlements.allowCustomSenderId ? senderId : DEFAULT_SHARED_SENDER_ID).length}/11 alphanumeric
                     </span>
                   </div>
                   <input
                     id="wiz-sender-id"
                     type="text"
                     maxLength={11}
-                    value={senderId}
-                    onChange={(e) =>
+                    disabled={!entitlements.allowCustomSenderId}
+                    value={entitlements.allowCustomSenderId ? senderId : DEFAULT_SHARED_SENDER_ID}
+                    onChange={(e) => {
+                      if (!entitlements.allowCustomSenderId) return;
                       setSenderId(
                         e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11)
-                      )
-                    }
+                      );
+                    }}
                     placeholder="e.g. TECHLEADERS"
-                    className="w-full h-11 px-4 rounded-2xl bg-white text-xs sm:text-sm font-mono font-bold tracking-wider text-[#0B0B0B] uppercase shadow-sm focus:outline-none"
+                    className="w-full h-11 px-4 rounded-2xl bg-white text-xs sm:text-sm font-mono font-bold tracking-wider text-[#0B0B0B] uppercase shadow-sm focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
                   />
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     {Array.from(
-                      new Set([profile.senderId || 'EVENTSAPP', 'TECHLEADERS', 'EVENTSAPP'])
-                    ).map((preset) => (
+                      new Set([
+                        profile.senderId || DEFAULT_SHARED_SENDER_ID,
+                        'TECHLEADERS',
+                        DEFAULT_SHARED_SENDER_ID,
+                      ])
+                    ).map((preset) => {
+                      const lockedPreset =
+                        !entitlements.allowCustomSenderId && preset !== DEFAULT_SHARED_SENDER_ID;
+                      return (
+                        <button
+                          key={preset}
+                          type="button"
+                          disabled={lockedPreset}
+                          onClick={() => {
+                            if (!lockedPreset) setSenderId(preset);
+                          }}
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold border transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${
+                            (entitlements.allowCustomSenderId
+                              ? senderId
+                              : DEFAULT_SHARED_SENDER_ID) === preset
+                              ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                              : 'bg-white text-[#71717A] border-[#E5E5EA] hover:text-[#0B0B0B]'
+                          }`}
+                        >
+                          {preset}
+                        </button>
+                      );
+                    })}
+                    {!entitlements.allowCustomSenderId && (
                       <button
-                        key={preset}
                         type="button"
-                        onClick={() => setSenderId(preset)}
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold border transition-colors ${
-                          senderId === preset
-                            ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
-                            : 'bg-white text-[#71717A] border-[#E5E5EA] hover:text-[#0B0B0B]'
-                        }`}
+                        onClick={onNavigateBilling}
+                        className="text-[10px] font-semibold text-[#0B0B0B] underline ml-1"
                       >
-                        {preset}
+                        Unlock custom Sender ID
                       </button>
-                    ))}
+                    )}
                   </div>
                 </div>
                 <div>
@@ -1168,14 +1238,25 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5">
-                    Capacity Ceiling ({isFreePlan ? 'Max 50 on Free Tier' : 'Unlimited on Pro'})
+                    Capacity Ceiling (
+                    {entitlements.maxAttendeesPerEvent
+                      ? `Max ${STARTER_MAX_ATTENDEES_PER_EVENT} on Starter`
+                      : `Unlimited on ${entitlements.plan}`}
+                    )
                   </label>
                   <input
                     type="number"
                     min={10}
-                    max={isFreePlan ? 50 : 25000}
-                    value={capacity}
-                    onChange={(e) => setCapacity(Number(e.target.value))}
+                    max={maxAllowedCapacity}
+                    value={Math.min(maxAllowedCapacity, capacity)}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setCapacity(
+                        entitlements.maxAttendeesPerEvent
+                          ? Math.min(entitlements.maxAttendeesPerEvent, next)
+                          : next
+                      );
+                    }}
                     className="w-full h-11 px-4 rounded-2xl bg-white text-xs sm:text-sm text-[#0B0B0B] font-mono shadow-sm focus:outline-none tabular-nums"
                   />
                 </div>
@@ -1213,6 +1294,29 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 </label>
               </div>
 
+              {!entitlements.allowCustomMessages && (
+                <div className="p-4 rounded-2xl bg-white border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <Lock className="w-4 h-4 text-[#0B0B0B] mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-xs font-semibold text-[#0B0B0B]">
+                        System Default Templates Active on Starter
+                      </p>
+                      <p className="text-[11px] text-[#71717A]">
+                        Starter sends default confirmation and check-in templates. Upgrade to Pro Organizer ($19/mo) to edit SMS &amp; email copy.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onNavigateBilling}
+                    className="px-4 py-1.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold shrink-0 self-start sm:self-center"
+                  >
+                    Upgrade to Pro
+                  </button>
+                </div>
+              )}
+
               <div className="p-4 rounded-2xl bg-white flex items-center justify-between gap-4">
                 <div>
                   <p className="text-xs font-semibold text-[#0B0B0B]">
@@ -1225,11 +1329,12 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 <label className="relative inline-flex items-center cursor-pointer shrink-0">
                   <input
                     type="checkbox"
-                    checked={includeCameraLink}
+                    disabled={!entitlements.allowCustomMessages}
+                    checked={entitlements.allowCustomMessages ? includeCameraLink : true}
                     onChange={(e) => setIncludeCameraLink(e.target.checked)}
                     className="sr-only peer"
                   />
-                  <div className="w-11 h-6 bg-[#E5E5EA] rounded-full peer peer-checked:bg-[#0B0B0B] after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+                  <div className="w-11 h-6 bg-[#E5E5EA] rounded-full peer peer-checked:bg-[#0B0B0B] peer-disabled:opacity-50 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
                 </label>
               </div>
 
@@ -1244,9 +1349,14 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 </div>
                 <textarea
                   rows={3}
-                  value={smsTemplate}
-                  onChange={(e) => setSmsTemplate(e.target.value)}
-                  className="w-full p-4 rounded-2xl bg-white text-xs font-mono text-[#0B0B0B] shadow-sm focus:outline-none resize-none"
+                  readOnly={!entitlements.allowCustomMessages}
+                  value={entitlements.allowCustomMessages ? smsTemplate : defaultMsgCfg.confirmationMessage}
+                  onChange={(e) => {
+                    if (entitlements.allowCustomMessages) setSmsTemplate(e.target.value);
+                  }}
+                  className={`w-full p-4 rounded-2xl bg-white text-xs font-mono text-[#0B0B0B] shadow-sm focus:outline-none resize-none ${
+                    !entitlements.allowCustomMessages ? 'opacity-65 cursor-not-allowed' : ''
+                  }`}
                 />
               </div>
 
@@ -1260,8 +1370,9 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                       <button
                         key={tag}
                         type="button"
+                        disabled={!entitlements.allowCustomMessages}
                         onClick={() => setCheckInTemplate((prev) => `${prev} ${tag}`.trim())}
-                        className="px-2 py-0.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[10px] font-mono text-[#0B0B0B]"
+                        className="px-2 py-0.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[10px] font-mono text-[#0B0B0B] disabled:opacity-45 disabled:cursor-not-allowed"
                       >
                         + {tag}
                       </button>
@@ -1270,9 +1381,16 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 </div>
                 <textarea
                   rows={3}
-                  value={checkInTemplate}
-                  onChange={(e) => setCheckInTemplate(e.target.value)}
-                  className="w-full p-4 rounded-2xl bg-white text-xs font-mono text-[#0B0B0B] shadow-sm focus:outline-none resize-none"
+                  readOnly={!entitlements.allowCustomMessages}
+                  value={
+                    entitlements.allowCustomMessages ? checkInTemplate : defaultMsgCfg.checkInMessage
+                  }
+                  onChange={(e) => {
+                    if (entitlements.allowCustomMessages) setCheckInTemplate(e.target.value);
+                  }}
+                  className={`w-full p-4 rounded-2xl bg-white text-xs font-mono text-[#0B0B0B] shadow-sm focus:outline-none resize-none ${
+                    !entitlements.allowCustomMessages ? 'opacity-65 cursor-not-allowed' : ''
+                  }`}
                 />
                 <p className="text-[11px] text-[#71717A] mt-1.5">
                   Preview Camera URL: <span className="font-mono text-[#0B0B0B]">{buildCameraLinkForOrigin(slug || 'event')}</span>
@@ -1343,6 +1461,22 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 </label>
               </div>
 
+              {(isAtFreeLimit || publishError) && (
+                <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <p className="text-xs text-amber-900">
+                    {publishError ||
+                      `Starter accounts allow ${entitlements.maxActiveEvents ?? 1} active event at a time. Save this production as a Draft or upgrade to Pro Organizer ($19/mo) to publish immediately.`}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onNavigateBilling}
+                    className="px-4 py-1.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold shrink-0 self-start sm:self-center"
+                  >
+                    Upgrade to Pro
+                  </button>
+                </div>
+              )}
+
               <div className="flex flex-wrap items-center justify-end gap-3 pt-2">
                 <button
                   type="button"
@@ -1354,12 +1488,19 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 </button>
                 <button
                   type="button"
-                  disabled={submitting}
+                  disabled={submitting || isAtFreeLimit}
                   onClick={() => handleFinish('upcoming')}
-                  className="px-6 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold shadow-sm inline-flex items-center gap-2 transition-colors disabled:opacity-50"
+                  className="px-6 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold shadow-sm inline-flex items-center gap-2 transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
                 >
-                  <span>{submitting ? 'Publishing...' : 'Publish Event Live'}</span>
-                  <ArrowRight className="w-4 h-4" />
+                  {isAtFreeLimit && <Lock className="w-3.5 h-3.5" />}
+                  <span>
+                    {submitting
+                      ? 'Publishing...'
+                      : isAtFreeLimit
+                        ? 'Publish Locked (Starter Limit)'
+                        : 'Publish Event Live'}
+                  </span>
+                  {!isAtFreeLimit && <ArrowRight className="w-4 h-4" />}
                 </button>
               </div>
             </section>
@@ -1386,18 +1527,18 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
             <div>
               <div className="flex items-baseline justify-between mb-1.5">
                 <span className="text-base font-bold text-[#0B0B0B]">
-                  {isFreePlan ? 'Free Tier' : profile.plan}
+                  {entitlements.plan === 'Starter' ? 'Starter Free Tier' : entitlements.plan}
                 </span>
                 <span className="text-xs text-[#71717A] tabular-nums">
                   {isFreePlan
-                    ? `${activeEventsCount} of 1 Active Events`
+                    ? `${activeEventsCount} of ${entitlements.maxActiveEvents ?? 1} Active Events`
                     : `${activeEventsCount} Active Events (∞)`}
                 </span>
               </div>
               <div className="w-full bg-[#E2E2E4] rounded-full h-2 overflow-hidden">
                 <div
                   className={`h-2 rounded-full ${isAtFreeLimit ? 'bg-[#EF4444]' : 'bg-[#0B0B0B]'}`}
-                  style={{ width: isFreePlan ? '100%' : '28%' }}
+                  style={{ width: isFreePlan ? `${Math.min(100, (activeEventsCount / (entitlements.maxActiveEvents ?? 1)) * 100)}%` : '28%' }}
                 />
               </div>
             </div>

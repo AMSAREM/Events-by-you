@@ -26,6 +26,13 @@ import {
   validateStrictPhoneE164,
 } from '../data/initialData';
 import { api } from '../lib/api';
+import { SMS_BUNDLE_CATALOG } from '../lib/smsBundles';
+import {
+  DEFAULT_SHARED_SENDER_ID,
+  getPlanEntitlements,
+  STARTER_MAX_ACTIVE_EVENTS,
+  STARTER_MAX_ATTENDEES_PER_EVENT,
+} from '../lib/subscriptionPlans';
 import { EventItem, OrganizerProfile, SystemAlert } from '../types/events';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -36,7 +43,7 @@ interface SettingsScreenProps {
   onUpdateProfile: (profile: OrganizerProfile) => void;
   onSyncProfile?: (profile: OrganizerProfile) => void;
   onResolveAlert: (id: string) => void;
-  onOpenPlans: () => void;
+  onOpenPlans: (bundleId?: string) => void;
   onSignOut: () => void;
   onOpenGuide?: () => void;
   onDeleteAccount?: () => Promise<void> | void;
@@ -44,36 +51,6 @@ interface SettingsScreenProps {
 
 const DEFAULT_AVATAR_URL =
   '/src/assets/images/flyer_corporate_gala_1795075792816.jpg';
-
-const TOPUP_BUNDLES = [
-  {
-    id: '100',
-    credits: 100,
-    label: '100 SMS Credits',
-    sub: 'Standard broadcast pack',
-    priceGhs: 'GHS 45',
-    amountGhs: 45,
-    popular: false,
-  },
-  {
-    id: '500',
-    credits: 500,
-    label: '500 SMS Credits',
-    sub: 'Ideal for conference updates',
-    priceGhs: 'GHS 200',
-    amountGhs: 200,
-    popular: true,
-  },
-  {
-    id: '2000',
-    credits: 2000,
-    label: '2,000 SMS Credits',
-    sub: 'Bulk tier (20% savings)',
-    priceGhs: 'GHS 720',
-    amountGhs: 720,
-    popular: false,
-  },
-];
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   profile,
@@ -120,8 +97,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [lastPasswordLabel, setLastPasswordLabel] = useState('Manage your creator account password');
 
   // Wallet & Webhook
-  const [selectedBundleId, setSelectedBundleId] = useState('500');
-  const [purchasingBundle, setPurchasingBundle] = useState(false);
+  const [selectedBundleId, setSelectedBundleId] = useState('growth');
   const [webhookSuffix, setWebhookSuffix] = useState('4F98');
 
   // Account Deletion & Toast controls
@@ -176,12 +152,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       setPhone(phoneCheck.normalized);
     }
 
-    const cleanSender =
-      senderId
-        .trim()
-        .toUpperCase()
-        .replace(/[^A-Z0-9]/g, '')
-        .slice(0, 11) || 'EVENTSAPP';
+    const entitlements = getPlanEntitlements(profile);
+    const cleanSender = !entitlements.allowCustomSenderId
+      ? DEFAULT_SHARED_SENDER_ID
+      : senderId
+          .trim()
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, '')
+          .slice(0, 11) || DEFAULT_SHARED_SENDER_ID;
     setSenderId(cleanSender);
 
     const firstName = name.trim().split(' ')[0] || profile.firstName;
@@ -200,7 +178,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       twoFactorEnabled,
       senderId: cleanSender,
     });
-    showToast('Organiser profile & Sender ID configurations saved.');
+    showToast(
+      entitlements.allowCustomSenderId
+        ? 'Organiser profile & Sender ID configurations saved.'
+        : 'Organiser profile saved (Sender ID remains EVENTSAPP on Starter).'
+    );
   };
 
   const handleDiscard = () => {
@@ -234,12 +216,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   };
 
   const handleSendTestSms = async () => {
-    const cleanSender =
-      senderId
-        .trim()
-        .toUpperCase()
-        .replace(/[^A-Z0-9]/g, '')
-        .slice(0, 11) || 'EVENTSAPP';
+    const entitlements = getPlanEntitlements(profile);
+    const cleanSender = !entitlements.allowCustomSenderId
+      ? DEFAULT_SHARED_SENDER_ID
+      : senderId
+          .trim()
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, '')
+          .slice(0, 11) || DEFAULT_SHARED_SENDER_ID;
     const rawPhone = testPhone.trim();
     if (!rawPhone) {
       showToast('Enter a phone number to dispatch a carrier test SMS.');
@@ -283,29 +267,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     }
   };
 
-  const handleBuyBundle = async () => {
-    if (purchasingBundle) return;
-    const bundle = TOPUP_BUNDLES.find((b) => b.id === selectedBundleId) ?? TOPUP_BUNDLES[1];
-    setPurchasingBundle(true);
-    try {
-      const res = await api.studio.purchaseSmsBundle({
-        bundleId: bundle.id,
-        bundleName: bundle.label,
-        credits: bundle.credits,
-        amountGhs: bundle.amountGhs,
-        paymentChannel: 'Arkesel Portal / MoMo',
-      });
-      if (onSyncProfile) {
-        onSyncProfile(res.profile);
-      } else {
-        onUpdateProfile(res.profile);
-      }
-      showToast(res.message);
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Unable to purchase SMS bundle.');
-    } finally {
-      setPurchasingBundle(false);
-    }
+  const handleBuyBundle = () => {
+    onOpenPlans(selectedBundleId);
   };
 
   const handleCopyWebhook = () => {
@@ -327,11 +290,15 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   };
 
   const unresolved = alerts.filter((a) => !a.resolved);
-  const isFree = profile.plan === 'Starter';
+  const entitlements = getPlanEntitlements(profile);
+  const effectivePlan = entitlements.plan;
+  const isFree = !entitlements.allowCustomSenderId;
   const liveEventCount = events.filter((e) => e.status === 'live' || e.status === 'upcoming').length;
-  const primaryEvent = events[0];
+  const primaryEvent = events.find((e) => e.status === 'live' || e.status === 'upcoming') ?? events[0];
   const primaryRegistered = primaryEvent?.registered ?? 0;
-  const primaryCap = primaryEvent?.capacity ?? (isFree ? 50 : 100);
+  const primaryCap = isFree
+    ? Math.min(primaryEvent?.capacity ?? STARTER_MAX_ATTENDEES_PER_EVENT, STARTER_MAX_ATTENDEES_PER_EVENT)
+    : primaryEvent?.capacity ?? 100;
   const attendeeCapPct = Math.min(100, Math.round((primaryRegistered / Math.max(1, primaryCap)) * 100));
 
   const handleConfirmDeleteAccount = async (e: React.FormEvent) => {
@@ -659,32 +626,58 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 <div className="flex items-center justify-between gap-2">
                   <label
                     htmlFor="org-custom-sender-id"
-                    className="text-xs font-semibold text-[#0B0B0B] uppercase tracking-wider"
+                    className="text-xs font-semibold text-[#0B0B0B] uppercase tracking-wider inline-flex items-center gap-1.5"
                   >
-                    Custom Arkesel SMS Sender ID
+                    <span>Custom Arkesel SMS Sender ID</span>
+                    {isFree && (
+                      <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[#71717A] text-[10px] font-semibold normal-case tracking-normal inline-flex items-center gap-1">
+                        <Lock className="w-3 h-3" />
+                        Pro+ Feature
+                      </span>
+                    )}
                   </label>
                   <span className="text-[11px] font-mono text-[#71717A] tabular-nums">
-                    {senderId.length}/11 chars (A–Z, 0–9)
+                    {(isFree ? DEFAULT_SHARED_SENDER_ID : senderId).length}/11 chars (A–Z, 0–9)
                   </span>
                 </div>
+
+                {isFree && (
+                  <div className="p-3 rounded-xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <p className="text-[11px] text-[#52525B]">
+                      Starter tier dispatches SMS under the shared{' '}
+                      <span className="font-mono font-bold text-[#0B0B0B]">{DEFAULT_SHARED_SENDER_ID}</span> Sender ID.
+                      Upgrade to Pro Organizer or Enterprise to unlock custom 11-character branding.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => onOpenPlans()}
+                      className="px-3 py-1.5 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto"
+                    >
+                      Upgrade to Pro
+                    </button>
+                  </div>
+                )}
+
                 <div className="flex flex-col sm:flex-row gap-2">
                   <input
                     id="org-custom-sender-id"
                     type="text"
                     maxLength={11}
-                    value={senderId}
+                    disabled={isFree}
+                    value={isFree ? DEFAULT_SHARED_SENDER_ID : senderId}
                     onChange={(e) =>
                       setSenderId(
                         e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11)
                       )
                     }
                     placeholder="e.g. GRACECHAPEL"
-                    className="flex-1 h-11 px-4 rounded-xl bg-[#F5F5F7] text-[#0B0B0B] font-mono text-sm font-bold tracking-wider uppercase focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                    className="flex-1 h-11 px-4 rounded-xl bg-[#F5F5F7] text-[#0B0B0B] font-mono text-sm font-bold tracking-wider uppercase focus:outline-none focus:ring-1 focus:ring-[#0B0B0B] disabled:opacity-60 disabled:cursor-not-allowed"
                   />
                   <button
                     type="button"
+                    disabled={isFree}
                     onClick={() => handleSave()}
-                    className="px-5 h-11 rounded-xl bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors whitespace-nowrap"
+                    className="px-5 h-11 rounded-xl bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors whitespace-nowrap disabled:opacity-45 disabled:cursor-not-allowed"
                   >
                     Save Sender ID
                   </button>
@@ -697,18 +690,19 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                         .toUpperCase()
                         .replace(/[^A-Z0-9]/g, '')
                         .slice(0, 11) || 'STUDIO',
-                      'EVENTSAPP',
+                      DEFAULT_SHARED_SENDER_ID,
                     ])
                   ).map((preset) => (
                     <button
                       key={preset}
                       type="button"
+                      disabled={isFree && preset !== DEFAULT_SHARED_SENDER_ID}
                       onClick={() => {
                         setSenderId(preset);
                         showToast(`Sender ID set to ${preset}. Click Save to persist.`);
                       }}
-                      className={`px-2.5 py-1 rounded-full text-[11px] font-mono font-semibold border transition-colors ${
-                        senderId === preset
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-mono font-semibold border transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${
+                        (isFree ? DEFAULT_SHARED_SENDER_ID : senderId) === preset
                           ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
                           : 'bg-[#F5F5F7] text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
                       }`}
@@ -1071,7 +1065,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
               </div>
               <div className="flex justify-between">
                 <span>Active sender route:</span>
-                <span className="font-mono text-[#0B0B0B]">{senderId}</span>
+                <span className="font-mono text-[#0B0B0B]">
+                  {isFree ? DEFAULT_SHARED_SENDER_ID : senderId}
+                </span>
               </div>
               <div className="flex justify-between pt-0.5 text-[11px]">
                 <span>GSM-7 standard rate:</span>
@@ -1082,9 +1078,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             {/* Quick Top Up Packages Selection */}
             <div className="space-y-2 mb-5">
               <div className="text-xs font-semibold text-[#0B0B0B] uppercase tracking-wider">
-                Top-up Bundles (MoMo / Card)
+                SMS Bundle Packs (Paystack MoMo / Card or Receipt)
               </div>
-              {TOPUP_BUNDLES.map((b) => {
+              {SMS_BUNDLE_CATALOG.map((b) => {
                 const selected = selectedBundleId === b.id;
                 return (
                   <label
@@ -1103,18 +1099,22 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                       />
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-[#0B0B0B]">{b.label}</span>
-                          {b.popular && (
+                          <span className="text-sm font-semibold text-[#0B0B0B]">
+                            {b.credits.toLocaleString()} SMS Credits
+                          </span>
+                          {b.featured && (
                             <span className="px-2 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold">
-                              Popular
+                              Best Value
                             </span>
                           )}
                         </div>
-                        <div className="text-[11px] text-[#71717A]">{b.sub}</div>
+                        <div className="text-[11px] text-[#71717A]">
+                          {b.name} · GH₵ {b.unitRateGhs}/SMS{b.savings ? ` (${b.savings})` : ''}
+                        </div>
                       </div>
                     </div>
                     <span className="font-mono font-semibold text-xs text-[#0B0B0B] tabular-nums">
-                      {b.priceGhs}
+                      GH₵ {b.amountGhs.toLocaleString()}
                     </span>
                   </label>
                 );
@@ -1123,12 +1123,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
             <button
               type="button"
-              onClick={() => void handleBuyBundle()}
-              disabled={purchasingBundle}
-              className="w-full py-3 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-60"
+              onClick={handleBuyBundle}
+              className="w-full py-3 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.98] transition-all"
             >
               <Wallet className="w-4 h-4" />
-              <span>{purchasingBundle ? 'Crediting Bundle...' : 'Buy SMS Bundle (Arkesel / MoMo)'}</span>
+              <span>Continue to Verified Bundle Checkout</span>
             </button>
           </section>
 
@@ -1140,7 +1139,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                   Quota Tracker
                 </span>
                 <h2 className="font-display text-[22px] font-bold tracking-[-0.02em] text-[#0B0B0B]">
-                  Current Plan: {profile.plan === 'Starter' ? 'Free Tier' : profile.plan}
+                  Current Plan: {effectivePlan === 'Starter' ? 'Starter Free Tier' : effectivePlan}
                 </h2>
               </div>
               <span className="text-xs font-semibold px-3 py-1 bg-[#EEEEF0] rounded-full text-[#0B0B0B]">
@@ -1154,18 +1153,24 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 <div className="flex justify-between items-center text-xs">
                   <span className="font-semibold text-[#0B0B0B]">Published Active Events</span>
                   <span className="font-mono font-semibold text-[#0B0B0B] tabular-nums">
-                    {isFree ? `${Math.min(1, liveEventCount)} of 1 Maxed` : `${liveEventCount} / Unlimited`}
+                    {isFree
+                      ? `${Math.min(STARTER_MAX_ACTIVE_EVENTS, liveEventCount)} of ${STARTER_MAX_ACTIVE_EVENTS} Max`
+                      : `${liveEventCount} / Unlimited`}
                   </span>
                 </div>
                 <div className="w-full h-2 rounded-full bg-[#E8E8EA] overflow-hidden">
                   <div
                     className="h-full bg-[#0B0B0B] rounded-full"
-                    style={{ width: isFree ? '100%' : '35%' }}
+                    style={{
+                      width: isFree
+                        ? `${Math.min(100, Math.round((liveEventCount / STARTER_MAX_ACTIVE_EVENTS) * 100))}%`
+                        : '35%',
+                    }}
                   />
                 </div>
                 <p className="text-[11px] text-[#71717A]">
                   {isFree
-                    ? 'Free organizers can run 1 live registration page simultaneously.'
+                    ? 'Starter organizers can run 1 live or upcoming registration page simultaneously.'
                     : 'Unlimited concurrent event registrations enabled.'}
                 </p>
               </div>
@@ -1193,13 +1198,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             {/* Feature Capability Matrix */}
             <div className="space-y-1 mb-5">
               {[
-                { label: 'Custom SMS Templates', locked: isFree, tag: 'Locked', okTag: 'Unlocked' },
-                { label: 'Attendee CSV Export', locked: isFree, tag: 'Pro Feature', okTag: 'Unlimited' },
-                { label: 'SMS Post-Event Thank-You', locked: isFree, tag: 'Pro Feature', okTag: 'Active' },
+                { label: 'Custom SMS Sender ID', locked: !entitlements.allowCustomSenderId, tag: 'Locked (EVENTSAPP)', okTag: 'Unlocked' },
+                { label: 'Custom SMS & Email Templates', locked: !entitlements.allowCustomMessages, tag: 'Locked', okTag: 'Unlocked' },
+                { label: 'Attendee CSV Export', locked: !entitlements.allowCsvExport, tag: 'Pro Feature', okTag: 'Unlimited' },
+                { label: 'SMS & Thank-You Broadcasts', locked: !entitlements.allowSmsBroadcast, tag: 'Pro Feature', okTag: 'Active' },
                 {
                   label: 'Public Footer Watermark',
                   locked: false,
-                  tag: isFree ? 'Included (Free)' : 'White-Labeled',
+                  tag: !entitlements.whiteLabelPublicEvent ? 'Included (Free)' : 'White-Labeled',
                   okTag: 'White-Labeled',
                 },
               ].map((row) => (
@@ -1237,12 +1243,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                     {isFree ? 'Scale to Unlimited' : 'Subscription Active'}
                   </span>
                   <div className="font-display text-xl font-bold tracking-tight">
-                    {isFree ? 'Upgrade to Pro' : 'Pro Organizer Active'}
+                    {isFree ? 'Upgrade to Pro' : `${effectivePlan} Active`}
                   </div>
                 </div>
                 <div className="text-right">
                   <span className="font-display text-[32px] font-bold font-mono leading-none tabular-nums">
-                    $19
+                    {effectivePlan === 'Enterprise' ? '$99' : '$19'}
                   </span>
                   <span className="text-[11px] text-zinc-400 block">/ month</span>
                 </div>
@@ -1263,7 +1269,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
               </ul>
               <button
                 type="button"
-                onClick={onOpenPlans}
+                onClick={() => onOpenPlans()}
                 className="w-full mt-2 py-2.5 rounded-full bg-white text-[#0B0B0B] text-xs font-semibold hover:bg-[#EEEEF0] transition-all flex items-center justify-center gap-1.5 shadow-sm"
               >
                 <span>{isFree ? 'Upgrade to Pro Now' : 'Manage Plan & Credits'}</span>

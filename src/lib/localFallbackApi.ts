@@ -12,6 +12,18 @@ import {
   validateStrictPhoneE164,
 } from '../data/initialData';
 import { calculateSmsCredits, resolveEventMessage } from './eventMessages';
+import { resolveAuthoritativeSmsBundle, validateReceiptReference } from './smsBundles';
+import {
+  DEFAULT_SHARED_SENDER_ID,
+  PLAN_MRR_USD,
+  computePlanExpiresAtIso,
+  getEffectiveEventCapacity,
+  getPlanEntitlements,
+  hasCustomMessageOverrides,
+  hasCustomSenderIdValue,
+  isActiveEventStatus,
+  resolveAuthoritativeSubscriptionQuote,
+} from './subscriptionPlans';
 import type {
   AppRole,
   Attendee,
@@ -37,6 +49,8 @@ import type {
   GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
+  SmsBundlePurchase,
+  SubscriptionPayment,
   SystemAlert,
   WebhookTriggerEvent,
 } from '../types/events';
@@ -44,12 +58,6 @@ import type {
 const STORAGE_KEY = 'eventsapp_local_backend_v1';
 const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const CREATOR_EMAIL = 'amoakoimml@gmail.com';
-
-const PLAN_MRR_USD: Record<OrganizerProfile['plan'], number> = {
-  Starter: 0,
-  'Pro Organizer': 29,
-  Enterprise: 99,
-};
 
 export class LocalApiError extends Error {
   status: number;
@@ -107,6 +115,8 @@ interface LocalDatabase {
   rollSettings: Record<string, DisposableRollSettings>;
   creatorApps: StoredCreatorAppRecord[];
   creatorAppLogs: CreatorAppLog[];
+  smsPurchases: SmsBundlePurchase[];
+  subscriptionPayments: SubscriptionPayment[];
   flags: BuilderFeatureFlags;
   recentErrors: BuilderErrorEntry[];
   duplicateBlocksByEvent: Record<string, number>;
@@ -189,6 +199,8 @@ function createInitialDb(): LocalDatabase {
     rollSettings: {},
     creatorApps: [],
     creatorAppLogs: [],
+    smsPurchases: [],
+    subscriptionPayments: [],
     flags: {
       publicRegistrationsPaused: false,
       pausedEventIds: [],
@@ -212,6 +224,12 @@ function loadDb(): LocalDatabase {
     if (raw) {
       const parsed = JSON.parse(raw) as LocalDatabase;
       if (parsed && typeof parsed === 'object' && parsed.users) {
+        if (!Array.isArray(parsed.smsPurchases)) {
+          parsed.smsPurchases = [];
+        }
+        if (!Array.isArray(parsed.subscriptionPayments)) {
+          parsed.subscriptionPayments = [];
+        }
         memoryFallbackCache = parsed;
         return parsed;
       }
@@ -771,10 +789,12 @@ export async function localFallbackRequest<T>(
 
   // Public events
   const sanitizePublicEventItem = (raw: EventItem & { organizerId?: string }): EventItem => {
+    const owner = raw.organizerId ? db.users[raw.organizerId] : undefined;
+    const whiteLabel = getPlanEntitlements(owner?.profile).whiteLabelPublicEvent;
     const { organizerId: _org, ...rest } = raw;
-    if (!rest.extraDataConfig?.attendantLinks) return rest;
+    if (!rest.extraDataConfig?.attendantLinks) return { ...rest, whiteLabel };
     const { attendantLinks: _att, ...pubExtra } = rest.extraDataConfig;
-    return { ...rest, extraDataConfig: pubExtra };
+    return { ...rest, whiteLabel, extraDataConfig: pubExtra };
   };
 
   if (method === 'GET' && path === '/public/events') {
@@ -831,6 +851,14 @@ export async function localFallbackRequest<T>(
       if (given !== expected) {
         throw new LocalApiError('Invalid invitation passcode for this event.', 403);
       }
+    }
+    const preOwner = db.users[evt.organizerId];
+    const effectiveCap = getEffectiveEventCapacity(evt.capacity, preOwner?.profile);
+    if (evt.registered >= effectiveCap) {
+      throw new LocalApiError(
+        `Event capacity reached (${effectiveCap}/${effectiveCap} seats). Organizer plan limit prevents additional registrations.`,
+        403
+      );
     }
     const normalizedPhone = normalizePhoneE164(phone);
     const duplicate = db.attendees.find(
@@ -899,10 +927,9 @@ export async function localFallbackRequest<T>(
     evt.registered += 1;
     evt.revenue += evt.ticketPrice;
     saveDb(db);
-    const { organizerId: _org, ...cleanEvent } = evt;
     return {
       attendee,
-      event: cleanEvent,
+      event: sanitizePublicEventItem(evt),
       smsCreditsUsed,
       smsCreditsRemaining,
       smsSkippedReason,
@@ -1063,7 +1090,7 @@ export async function localFallbackRequest<T>(
     if (!matched) {
       throw new LocalApiError('Event disposable camera not found.', 404);
     }
-    const { organizerId: _org, ...cleanEvent } = matched;
+    const cleanEvent = sanitizePublicEventItem(matched);
     const shots = db.disposableShots
       .filter((s) => s.eventId === matched.id)
       .sort((a, b) => b.frameNumber - a.frameNumber);
@@ -1158,12 +1185,34 @@ export async function localFallbackRequest<T>(
 
   if (method === 'PATCH' && path === '/studio/profile') {
     requireRoles(user, ['creator', 'organizer']);
+    const incoming = body as Partial<OrganizerProfile>;
+    if (incoming.plan !== undefined && incoming.plan !== user.profile.plan) {
+      throw new LocalApiError(
+        incoming.plan === 'Starter'
+          ? 'Use the Plan & Credits downgrade action to switch back to Starter.'
+          : `Subscription upgrades to ${incoming.plan} require verified checkout payment in Plan & Credits.`,
+        403
+      );
+    }
+    const ent = getPlanEntitlements(user.profile);
+    if (incoming.senderId !== undefined && !ent.allowCustomSenderId && hasCustomSenderIdValue(incoming.senderId)) {
+      throw new LocalApiError(
+        'Custom Alphanumeric Sender ID requires Pro Organizer or Enterprise plan. Starter accounts use EVENTSAPP.',
+        403
+      );
+    }
     const {
       appRole: _ignoreRole,
       phoneVerified: _ignoreVerified,
       smsCredits: _ignoreSmsCredits,
+      plan: _ignorePlan,
+      planBillingCycle: _ignoreCycle,
+      planExpiresAt: _ignoreExp,
       ...safePatch
-    } = body as Partial<OrganizerProfile>;
+    } = incoming;
+    if (safePatch.senderId !== undefined && !ent.allowCustomSenderId) {
+      safePatch.senderId = DEFAULT_SHARED_SENDER_ID;
+    }
     user.profile = { ...user.profile, ...safePatch };
     saveDb(db);
     return { profile: user.profile } as T;
@@ -1174,6 +1223,7 @@ export async function localFallbackRequest<T>(
     const senderId = (user.profile.senderId || 'Arkesel').trim();
     return {
       configured: false,
+      paystackConfigured: false,
       mode: db.flags.smsMode,
       live: false,
       smsBalance: null,
@@ -1188,42 +1238,111 @@ export async function localFallbackRequest<T>(
     } as T;
   }
 
+  if (method === 'GET' && path === '/studio/sms/purchases') {
+    requireRoles(user, ['creator', 'organizer']);
+    const purchases = db.smsPurchases
+      .filter((p) => p.organizerId === user.id)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return {
+      purchases,
+      paystackConfigured: false,
+      mode: db.flags.smsMode,
+    } as T;
+  }
+
+  if (method === 'POST' && path === '/studio/sms/paystack/initialize') {
+    requireRoles(user, ['creator', 'organizer']);
+    throw new LocalApiError(
+      'Online Paystack checkout requires the backend server with PAYSTACK_SECRET_KEY configured.',
+      503
+    );
+  }
+
+  if (method === 'GET' && path.startsWith('/studio/sms/paystack/verify/')) {
+    requireRoles(user, ['creator', 'organizer']);
+    throw new LocalApiError(
+      'Paystack verification requires the backend server with PAYSTACK_SECRET_KEY configured.',
+      503
+    );
+  }
+
   if (method === 'POST' && path === '/studio/sms/purchase-bundle') {
     requireRoles(user, ['creator', 'organizer']);
-    const parsedCredits = Math.round(Number(body.credits ?? 0));
-    const parsedAmount = Number(body.amountGhs ?? 0);
-    if (!Number.isFinite(parsedCredits) || parsedCredits < 10 || parsedCredits > 100000) {
-      throw new LocalApiError('Bundle credits must be between 10 and 100,000 SMS.', 400);
+    let quote;
+    try {
+      quote = resolveAuthoritativeSmsBundle({
+        bundleId: typeof body.bundleId === 'string' ? body.bundleId : undefined,
+        credits: Number(body.credits ?? 0),
+        expectedAmountGhs: Number(body.amountGhs ?? 0),
+      });
+    } catch (err) {
+      throw new LocalApiError(err instanceof Error ? err.message : 'Invalid SMS bundle.', 400);
     }
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      throw new LocalApiError('Bundle purchase amount (GH₵) must be greater than 0.', 400);
+
+    const refCheck = validateReceiptReference(
+      typeof body.arkeselReference === 'string' ? body.arkeselReference : ''
+    );
+    if (!refCheck.ok) {
+      throw new LocalApiError(refCheck.error, 400);
     }
-    const nextCredits = user.profile.smsCredits + parsedCredits;
-    user.profile = { ...user.profile, smsCredits: nextCredits };
+    const cleanRef = refCheck.normalized;
+
+    const duplicate = db.smsPurchases.find(
+      (p) => p.reference.toLowerCase() === cleanRef.toLowerCase()
+    );
+    if (duplicate) {
+      throw new LocalApiError(
+        `Transaction reference "${cleanRef}" has already been submitted (${duplicate.status}).`,
+        409
+      );
+    }
+
+    const isSandbox = db.flags.smsMode === 'sandbox';
+    const nowIso = new Date().toISOString();
+    const channel =
+      typeof body.paymentChannel === 'string' && body.paymentChannel.trim()
+        ? body.paymentChannel.trim()
+        : 'Arkesel Portal Wallet';
+
+    const purchase: SmsBundlePurchase = {
+      id: `smsp-${Date.now()}-${randomHex(3)}`,
+      organizerId: user.id,
+      organizerName: user.profile.name,
+      organizerEmail: user.email || user.profile.email,
+      bundleId: quote.bundleId,
+      bundleName: quote.bundleName,
+      credits: quote.credits,
+      amountGhs: quote.amountGhs,
+      paymentChannel: channel,
+      provider: isSandbox ? 'sandbox' : 'arkesel_manual',
+      reference: cleanRef,
+      status: isSandbox ? 'credited' : 'pending_verification',
+      createdAt: nowIso,
+      verifiedAt: isSandbox ? nowIso : undefined,
+    };
+    db.smsPurchases.unshift(purchase);
+
+    if (isSandbox) {
+      user.profile = { ...user.profile, smsCredits: user.profile.smsCredits + quote.credits };
+    }
     saveDb(db);
+
     const senderId = (user.profile.senderId || 'Arkesel').trim();
-    const cleanRef =
-      typeof body.arkeselReference === 'string' && body.arkeselReference.trim()
-        ? body.arkeselReference.trim()
-        : `ARK-${Date.now().toString(36).toUpperCase()}`;
     return {
       ok: true,
+      pendingVerification: !isSandbox,
       profile: user.profile,
-      bundleId: typeof body.bundleId === 'string' ? body.bundleId : 'custom',
-      bundleName:
-        typeof body.bundleName === 'string' && body.bundleName.trim()
-          ? body.bundleName.trim()
-          : `${parsedCredits.toLocaleString()} SMS Bundle`,
-      addedCredits: parsedCredits,
-      amountGhs: Number.isFinite(parsedAmount) ? Number(parsedAmount.toFixed(2)) : 0,
-      paymentChannel:
-        typeof body.paymentChannel === 'string' && body.paymentChannel.trim()
-          ? body.paymentChannel.trim()
-          : 'Arkesel Portal Wallet',
+      purchase,
+      bundleId: quote.bundleId,
+      bundleName: quote.bundleName,
+      addedCredits: isSandbox ? quote.credits : 0,
+      amountGhs: quote.amountGhs,
+      paymentChannel: channel,
       arkeselReference: cleanRef,
       portalPurchaseRequired: true,
       arkeselStatus: {
         configured: false,
+        paystackConfigured: false,
         mode: db.flags.smsMode,
         live: false,
         smsBalance: null,
@@ -1231,12 +1350,143 @@ export async function localFallbackRequest<T>(
         error: null,
         senderId,
         isDefaultUnverifiedSender: senderId.toLowerCase() === 'arkesel' || senderId.toLowerCase() === 'eventsapp',
-        organizerCredits: nextCredits,
+        organizerCredits: user.profile.smsCredits,
         apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
         rechargeUrl: 'https://sms.arkesel.com',
-        checkedAt: new Date().toISOString(),
+        checkedAt: nowIso,
       },
-      message: `${parsedCredits.toLocaleString()} SMS credits allocated (Ref: ${cleanRef}).`,
+      message: isSandbox
+        ? `[Sandbox] +${quote.credits.toLocaleString()} SMS credits allocated (Ref: ${cleanRef}).`
+        : `Receipt "${cleanRef}" submitted for +${quote.credits.toLocaleString()} SMS (GH₵ ${quote.amountGhs}). Credits are added once verified in Apps Creator Console.`,
+    } as T;
+  }
+
+  if (method === 'GET' && path === '/studio/subscription/payments') {
+    requireRoles(user, ['creator', 'organizer']);
+    const payments = db.subscriptionPayments
+      .filter((p) => p.organizerId === user.id)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return {
+      payments,
+      paystackConfigured: false,
+      mode: db.flags.smsMode,
+    } as T;
+  }
+
+  if (method === 'POST' && path === '/studio/subscription/paystack/initialize') {
+    requireRoles(user, ['creator', 'organizer']);
+    throw new LocalApiError(
+      'Online Paystack checkout requires the backend server with PAYSTACK_SECRET_KEY configured.',
+      503
+    );
+  }
+
+  if (method === 'GET' && path.startsWith('/studio/subscription/paystack/verify/')) {
+    requireRoles(user, ['creator', 'organizer']);
+    throw new LocalApiError(
+      'Paystack verification requires the backend server with PAYSTACK_SECRET_KEY configured.',
+      503
+    );
+  }
+
+  if (method === 'POST' && path === '/studio/subscription/purchase') {
+    requireRoles(user, ['creator', 'organizer']);
+    let quote;
+    try {
+      quote = resolveAuthoritativeSubscriptionQuote({
+        planId: typeof body.planId === 'string' ? body.planId : undefined,
+        planName: typeof body.planName === 'string' ? body.planName : undefined,
+        billingCycle: typeof body.billingCycle === 'string' ? body.billingCycle : undefined,
+        expectedAmountGhs: Number(body.amountGhs ?? 0),
+      });
+    } catch (err) {
+      throw new LocalApiError(err instanceof Error ? err.message : 'Invalid subscription plan.', 400);
+    }
+
+    const refCheck = validateReceiptReference(
+      typeof body.receiptReference === 'string' ? body.receiptReference : ''
+    );
+    if (!refCheck.ok) {
+      throw new LocalApiError(refCheck.error, 400);
+    }
+    const cleanRef = refCheck.normalized;
+
+    const duplicate = db.subscriptionPayments.find(
+      (p) => p.reference.toLowerCase() === cleanRef.toLowerCase()
+    );
+    if (duplicate) {
+      throw new LocalApiError(
+        `Transaction reference "${cleanRef}" has already been submitted (${duplicate.status}).`,
+        409
+      );
+    }
+
+    const isSandbox = db.flags.smsMode === 'sandbox';
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const expiresIso = isSandbox ? computePlanExpiresAtIso(quote.billingCycle, now) : undefined;
+    const channel =
+      typeof body.paymentChannel === 'string' && body.paymentChannel.trim()
+        ? body.paymentChannel.trim()
+        : 'Mobile Money / Bank Transfer';
+
+    const payment: SubscriptionPayment = {
+      id: `subp-${Date.now()}-${randomHex(3)}`,
+      organizerId: user.id,
+      organizerName: user.profile.name,
+      organizerEmail: user.email || user.profile.email,
+      planId: quote.planId,
+      planName: quote.planName,
+      billingCycle: quote.billingCycle,
+      amountUsd: quote.amountUsd,
+      amountGhs: quote.amountGhs,
+      paymentChannel: channel,
+      provider: isSandbox ? 'sandbox' : 'manual',
+      reference: cleanRef,
+      status: isSandbox ? 'active' : 'pending_verification',
+      periodStart: isSandbox ? nowIso : undefined,
+      periodEnd: expiresIso,
+      createdAt: nowIso,
+      verifiedAt: isSandbox ? nowIso : undefined,
+    };
+    db.subscriptionPayments.unshift(payment);
+
+    if (isSandbox) {
+      user.profile = {
+        ...user.profile,
+        plan: quote.planName,
+        planBillingCycle: quote.billingCycle,
+        planExpiresAt: expiresIso,
+      };
+    }
+    saveDb(db);
+
+    return {
+      ok: true,
+      activated: isSandbox,
+      pendingVerification: !isSandbox,
+      profile: user.profile,
+      payment,
+      message: isSandbox
+        ? `Sandbox Mode: ${quote.planName} (${quote.billingCycle}) activated immediately (Ref: ${cleanRef}).`
+        : `Payment reference "${cleanRef}" for ${quote.planName} is queued for administrator verification before activation.`,
+    } as T;
+  }
+
+  if (method === 'POST' && path === '/studio/subscription/downgrade') {
+    requireRoles(user, ['creator', 'organizer']);
+    user.profile = {
+      ...user.profile,
+      plan: 'Starter',
+      planBillingCycle: 'monthly',
+      planExpiresAt: undefined,
+      senderId: DEFAULT_SHARED_SENDER_ID,
+    };
+    saveDb(db);
+    return {
+      ok: true,
+      profile: user.profile,
+      message: 'Workspace downgraded to Starter (Free). Existing events remain intact; Starter quotas now apply.',
     } as T;
   }
 
@@ -1263,6 +1513,8 @@ export async function localFallbackRequest<T>(
     );
     db.creatorApps = db.creatorApps.filter((a) => a.organizerId !== user.id);
     db.creatorAppLogs = db.creatorAppLogs.filter((l) => !ownedAppIds.has(l.appId));
+    db.smsPurchases = db.smsPurchases.filter((p) => p.organizerId !== user.id);
+    db.subscriptionPayments = db.subscriptionPayments.filter((p) => p.organizerId !== user.id);
 
     for (const [tok, sess] of Object.entries(db.sessions)) {
       if (sess.userId === user.id) delete db.sessions[tok];
@@ -1282,6 +1534,10 @@ export async function localFallbackRequest<T>(
 
   if (method === 'POST' && path === '/studio/sms/test') {
     requireRoles(user, ['creator', 'organizer']);
+    const ent = getPlanEntitlements(user.profile);
+    if (!ent.allowCustomSenderId && hasCustomSenderIdValue(typeof body.senderId === 'string' ? body.senderId : undefined)) {
+      throw new LocalApiError('Custom Alphanumeric Sender ID requires Pro Organizer or Enterprise plan.', 403);
+    }
     const phoneCheck = validateStrictPhoneE164(String(body.phone || ''));
     if (!phoneCheck.ok) {
       throw new LocalApiError(phoneCheck.error, 400);
@@ -1292,10 +1548,12 @@ export async function localFallbackRequest<T>(
         402
       );
     }
-    const rawSender = String(body.senderId || user.profile.senderId || db.flags.arkeselSenderId || 'EVENTSAPP')
-      .toUpperCase()
-      .replace(/[^A-Z0-9]/g, '')
-      .slice(0, 11) || 'EVENTSAPP';
+    const rawSender = ent.allowCustomSenderId
+      ? String(body.senderId || user.profile.senderId || db.flags.arkeselSenderId || DEFAULT_SHARED_SENDER_ID)
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, '')
+          .slice(0, 11) || DEFAULT_SHARED_SENDER_ID
+      : DEFAULT_SHARED_SENDER_ID;
     const nextCredits = Math.max(0, user.profile.smsCredits - 1);
     user.profile.smsCredits = nextCredits;
     saveDb(db);
@@ -1316,6 +1574,33 @@ export async function localFallbackRequest<T>(
     const event = body.event as EventItem | undefined;
     const blocks = Array.isArray(body.blocks) ? (body.blocks as ScheduleBlock[]) : [];
     if (!event?.title) throw new LocalApiError('Invalid event payload.', 400);
+    const ent = getPlanEntitlements(user.profile);
+    if (ent.maxActiveEvents != null && isActiveEventStatus(event.status)) {
+      const activeCount = db.events.filter(
+        (e) => e.organizerId === user.id && isActiveEventStatus(e.status)
+      ).length;
+      if (activeCount >= ent.maxActiveEvents) {
+        throw new LocalApiError(
+          `Starter plan allows up to ${ent.maxActiveEvents} active (Live or Upcoming) event. Archive an existing event, save as Draft, or upgrade to Pro Organizer.`,
+          403
+        );
+      }
+    }
+    if (ent.maxAttendeesPerEvent != null && Number(event.capacity) > ent.maxAttendeesPerEvent) {
+      throw new LocalApiError(
+        `Starter plan caps event capacity at ${ent.maxAttendeesPerEvent} attendees per event. Upgrade to Pro Organizer for unlimited capacity.`,
+        403
+      );
+    }
+    if (!ent.allowCustomSenderId && hasCustomSenderIdValue(event.senderId)) {
+      throw new LocalApiError('Custom Alphanumeric Sender ID requires Pro Organizer or Enterprise plan.', 403);
+    }
+    if (!ent.allowCustomMessages && hasCustomMessageOverrides(event.messageConfig)) {
+      throw new LocalApiError(
+        'Custom confirmation & check-in SMS/Email templates require Pro Organizer or Enterprise plan.',
+        403
+      );
+    }
     const baseSlug =
       (event.slug || event.title)
         .trim()
@@ -1329,6 +1614,9 @@ export async function localFallbackRequest<T>(
       ...event,
       id: uniqueEventId,
       slug: uniqueSlug,
+      capacity: getEffectiveEventCapacity(event.capacity, user.profile),
+      senderId: ent.allowCustomSenderId ? event.senderId : DEFAULT_SHARED_SENDER_ID,
+      messageConfig: ent.allowCustomMessages ? event.messageConfig : undefined,
       qrPassPublished: event.status === 'draft' ? false : Boolean(event.qrPassPublished),
     };
     db.events.unshift({ ...created, organizerId: user.id });
@@ -1363,6 +1651,13 @@ export async function localFallbackRequest<T>(
     const eventId = decodeURIComponent(studioAttCreateMatch[1]);
     const evt = db.events.find((e) => e.id === eventId && e.organizerId === user.id);
     if (!evt) throw new LocalApiError('Event not found.', 404);
+    const effectiveCap = getEffectiveEventCapacity(evt.capacity, user.profile);
+    if (evt.registered >= effectiveCap) {
+      throw new LocalApiError(
+        `Event capacity reached (${effectiveCap}/${effectiveCap} attendees). Upgrade your plan or expand capacity before issuing more passes.`,
+        403
+      );
+    }
     const payload = body as unknown as Attendee;
     const normalizedAttPhone = payload.phone ? normalizePhoneE164(payload.phone) : '';
     const resolved = resolveEventMessage({
@@ -1527,7 +1822,45 @@ export async function localFallbackRequest<T>(
     const idx = db.events.findIndex((e) => e.id === eventId && e.organizerId === user.id);
     if (idx === -1) throw new LocalApiError('Event not found.', 404);
     if (method === 'PATCH') {
-      const updated = { ...db.events[idx], ...(body as Partial<EventItem>), id: eventId };
+      const existing = db.events[idx];
+      const patch = body as Partial<EventItem>;
+      const ent = getPlanEntitlements(user.profile);
+      const nextStatus = patch.status ?? existing.status;
+      if (ent.maxActiveEvents != null && isActiveEventStatus(nextStatus)) {
+        const otherActive = db.events.filter(
+          (e) => e.organizerId === user.id && e.id !== eventId && isActiveEventStatus(e.status)
+        ).length;
+        if (otherActive >= ent.maxActiveEvents) {
+          throw new LocalApiError(
+            `Starter plan allows up to ${ent.maxActiveEvents} active (Live or Upcoming) event. Set your other event to Past/Draft or upgrade to Pro Organizer.`,
+            403
+          );
+        }
+      }
+      const nextCapRaw = patch.capacity ?? existing.capacity;
+      if (ent.maxAttendeesPerEvent != null && Number(nextCapRaw) > ent.maxAttendeesPerEvent) {
+        throw new LocalApiError(
+          `Starter plan caps event capacity at ${ent.maxAttendeesPerEvent} attendees per event. Upgrade to Pro Organizer for unlimited capacity.`,
+          403
+        );
+      }
+      if (!ent.allowCustomSenderId && patch.senderId !== existing.senderId && hasCustomSenderIdValue(patch.senderId)) {
+        throw new LocalApiError('Custom Alphanumeric Sender ID requires Pro Organizer or Enterprise plan.', 403);
+      }
+      if (!ent.allowCustomMessages && hasCustomMessageOverrides(patch.messageConfig, existing.messageConfig)) {
+        throw new LocalApiError(
+          'Custom confirmation & check-in SMS/Email templates require Pro Organizer or Enterprise plan.',
+          403
+        );
+      }
+      const updated = {
+        ...existing,
+        ...patch,
+        id: eventId,
+        capacity: getEffectiveEventCapacity(nextCapRaw, user.profile),
+        senderId: ent.allowCustomSenderId ? (patch.senderId ?? existing.senderId) : (existing.senderId || DEFAULT_SHARED_SENDER_ID),
+        messageConfig: ent.allowCustomMessages ? (patch.messageConfig ?? existing.messageConfig) : existing.messageConfig,
+      };
       db.events[idx] = updated;
       saveDb(db);
       const { organizerId: _org, ...clean } = updated;
@@ -1616,10 +1949,20 @@ export async function localFallbackRequest<T>(
     requireRoles(user, ['creator', 'organizer']);
     const message = String(body.message || '').trim();
     const attendeeIds = Array.isArray(body.attendeeIds) ? body.attendeeIds.map(String) : [];
+    const rawChannel = body.channel;
+    const requestedChannel = rawChannel === 'email' || rawChannel === 'sms' || rawChannel === 'dual' ? rawChannel : undefined;
     if (!message) throw new LocalApiError('Broadcast message text is required.', 400);
     if (attendeeIds.length === 0) {
       throw new LocalApiError('Select at least one recipient for the broadcast.', 400);
     }
+    const ent = getPlanEntitlements(user.profile);
+    if (!ent.allowSmsBroadcast && requestedChannel !== 'email') {
+      throw new LocalApiError(
+        'Bulk SMS & Dual SMS/Email broadcasts require Pro Organizer or Enterprise plan. Starter accounts can send Resend Email broadcasts only.',
+        403
+      );
+    }
+    const sendSms = ent.allowSmsBroadcast && requestedChannel !== 'email';
     const ownedEventIds = new Set(
       db.events.filter((e) => e.organizerId === user.id).map((e) => e.id)
     );
@@ -1634,7 +1977,7 @@ export async function localFallbackRequest<T>(
         .replace(/\{name\}/gi, att.name)
         .replace(/\{event\}/gi, evt.title)
         .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode);
-      const smsCost = att.phone?.trim() ? calculateSmsCredits(personalized) : 0;
+      const smsCost = sendSms && att.phone?.trim() ? calculateSmsCredits(personalized) : 0;
       return { att, evt, smsCost };
     });
     const requiredSmsCredits = prepared.reduce((acc, item) => acc + item.smsCost, 0);
@@ -2136,9 +2479,16 @@ export async function localFallbackRequest<T>(
           arkeselSenderIdValue: 'EVENTSAPP',
           RESEND_API_KEY: false,
           RESEND_FROM_EMAIL: false,
+          PAYSTACK_SECRET_KEY: false,
           CREATOR_PASSWORD: false,
           CREATOR_EMAIL,
         },
+        pendingSmsPurchases: [...db.smsPurchases]
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+          .slice(0, 30),
+        pendingSubscriptionPayments: [...db.subscriptionPayments]
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+          .slice(0, 30),
         unitEconomics: {
           totalMrrUsd,
           totalSmsCostUsd,
@@ -2247,7 +2597,16 @@ export async function localFallbackRequest<T>(
         return { tenant: buildTenantSummary(db, targetUser) } as T;
       }
       if (action === 'plan' && method === 'POST') {
-        targetUser.profile.plan = body.plan as OrganizerProfile['plan'];
+        const nextPlan = body.plan as OrganizerProfile['plan'];
+        targetUser.profile.plan = nextPlan;
+        if (nextPlan === 'Starter') {
+          targetUser.profile.planBillingCycle = 'monthly';
+          targetUser.profile.planExpiresAt = undefined;
+          targetUser.profile.senderId = DEFAULT_SHARED_SENDER_ID;
+        } else {
+          targetUser.profile.planBillingCycle = 'monthly';
+          targetUser.profile.planExpiresAt = computePlanExpiresAtIso('monthly');
+        }
         saveDb(db);
         return { tenant: buildTenantSummary(db, targetUser) } as T;
       }
@@ -2294,6 +2653,121 @@ export async function localFallbackRequest<T>(
       item.replayed = true;
       saveDb(db);
       return { item } as T;
+    }
+
+    const resolvePurchaseMatch = path.match(/^\/builder\/sms-purchases\/([^/]+)\/resolve$/);
+    if (method === 'POST' && resolvePurchaseMatch) {
+      const purchaseId = decodeURIComponent(resolvePurchaseMatch[1]);
+      const action = body.action === 'approve' ? 'approve' : body.action === 'reject' ? 'reject' : null;
+      if (!action) throw new LocalApiError('Action must be "approve" or "reject".', 400);
+      const idx = db.smsPurchases.findIndex((p) => p.id === purchaseId);
+      if (idx === -1) throw new LocalApiError('SMS bundle purchase record not found.', 404);
+      const existing = db.smsPurchases[idx];
+      const targetUser = db.users[existing.organizerId];
+      if (!targetUser) throw new LocalApiError('Organizer profile not found.', 404);
+      if (existing.status === 'credited') {
+        return {
+          ok: true,
+          alreadyCredited: true,
+          purchase: existing,
+          smsCredits: targetUser.profile.smsCredits,
+        } as T;
+      }
+      if (action === 'reject') {
+        const rejected: SmsBundlePurchase = {
+          ...existing,
+          status: 'rejected',
+          rejectionReason:
+            typeof body.reason === 'string' && body.reason.trim()
+              ? body.reason.trim()
+              : 'Rejected by creator administrator.',
+          verifiedAt: new Date().toISOString(),
+        };
+        db.smsPurchases[idx] = rejected;
+        saveDb(db);
+        return {
+          ok: true,
+          alreadyCredited: false,
+          purchase: rejected,
+          smsCredits: targetUser.profile.smsCredits,
+        } as T;
+      }
+      const approved: SmsBundlePurchase = {
+        ...existing,
+        status: 'credited',
+        rejectionReason: undefined,
+        verifiedAt: new Date().toISOString(),
+      };
+      db.smsPurchases[idx] = approved;
+      targetUser.profile.smsCredits += approved.credits;
+      saveDb(db);
+      return {
+        ok: true,
+        alreadyCredited: false,
+        purchase: approved,
+        smsCredits: targetUser.profile.smsCredits,
+      } as T;
+    }
+
+    const resolveSubMatch = path.match(/^\/builder\/subscription-purchases\/([^/]+)\/resolve$/);
+    if (method === 'POST' && resolveSubMatch) {
+      const paymentId = decodeURIComponent(resolveSubMatch[1]);
+      const action = body.action === 'approve' ? 'approve' : body.action === 'reject' ? 'reject' : null;
+      if (!action) throw new LocalApiError('Action must be "approve" or "reject".', 400);
+      const idx = db.subscriptionPayments.findIndex((p) => p.id === paymentId);
+      if (idx === -1) throw new LocalApiError('Subscription payment record not found.', 404);
+      const existing = db.subscriptionPayments[idx];
+      const targetUser = db.users[existing.organizerId];
+      if (!targetUser) throw new LocalApiError('Organizer profile not found.', 404);
+      if (existing.status === 'active') {
+        return {
+          ok: true,
+          alreadyActivated: true,
+          payment: existing,
+          plan: targetUser.profile.plan,
+        } as T;
+      }
+      if (action === 'reject') {
+        const rejected: SubscriptionPayment = {
+          ...existing,
+          status: 'rejected',
+          rejectionReason:
+            typeof body.reason === 'string' && body.reason.trim()
+              ? body.reason.trim()
+              : 'Rejected by creator administrator.',
+          verifiedAt: new Date().toISOString(),
+        };
+        db.subscriptionPayments[idx] = rejected;
+        saveDb(db);
+        return {
+          ok: true,
+          alreadyActivated: false,
+          payment: rejected,
+          plan: targetUser.profile.plan,
+        } as T;
+      }
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const expiresIso = computePlanExpiresAtIso(existing.billingCycle, now);
+      const approved: SubscriptionPayment = {
+        ...existing,
+        status: 'active',
+        rejectionReason: undefined,
+        periodStart: nowIso,
+        periodEnd: expiresIso,
+        verifiedAt: nowIso,
+      };
+      db.subscriptionPayments[idx] = approved;
+      targetUser.profile.plan = approved.planName;
+      targetUser.profile.planBillingCycle = approved.billingCycle;
+      targetUser.profile.planExpiresAt = expiresIso;
+      saveDb(db);
+      return {
+        ok: true,
+        alreadyActivated: false,
+        payment: approved,
+        plan: targetUser.profile.plan,
+      } as T;
     }
   }
 
