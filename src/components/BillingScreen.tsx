@@ -1,19 +1,24 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
+  AlertCircle,
   ArrowRight,
   Check,
   CheckCircle2,
   Code2,
+  ExternalLink,
   Infinity as InfinityIcon,
   Lock,
   Plus,
+  RefreshCw,
   RotateCcw,
   SlidersHorizontal,
   Sparkles,
   UserPlus,
   Verified,
+  X,
   Zap,
 } from 'lucide-react';
+import { api, type ArkeselStatusResponse } from '../lib/api';
 import { EventItem, OrganizerProfile } from '../types/events';
 
 interface BillingScreenProps {
@@ -116,6 +121,18 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
   const [isAnnual, setIsAnnual] = useState(false);
   const [customCredits, setCustomCredits] = useState(2500);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [arkeselStatus, setArkeselStatus] = useState<ArkeselStatusResponse | null>(null);
+  const [arkeselLoading, setArkeselLoading] = useState(false);
+  const [checkoutDraft, setCheckoutDraft] = useState<{
+    bundleId: string;
+    bundleName: string;
+    credits: number;
+    amountGhs: number;
+  } | null>(null);
+  const [paymentChannel, setPaymentChannel] = useState('Arkesel Portal Wallet');
+  const [arkeselReference, setArkeselReference] = useState('');
+  const [purchasing, setPurchasing] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
   const isPro = profile.plan !== 'Starter';
   const activeEventsCount = events.filter((e) => e.status === 'live' || e.status === 'upcoming').length;
@@ -126,15 +143,73 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(null), 3200);
+    setTimeout(() => setToastMsg(null), 4000);
   };
 
-  const handleTopUp = (amount: number, packName: string) => {
-    onUpdateProfile({
-      ...profile,
-      smsCredits: profile.smsCredits + amount,
-    });
-    showToast(`+${amount.toLocaleString()} SMS added via ${packName}`);
+  const refreshArkeselStatus = useCallback(async () => {
+    setArkeselLoading(true);
+    try {
+      const status = await api.studio.getArkeselStatus();
+      setArkeselStatus(status);
+    } catch {
+      // Keep previous status if network fails
+    } finally {
+      setArkeselLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshArkeselStatus();
+  }, [refreshArkeselStatus]);
+
+  const openBundleCheckout = (bundle: {
+    bundleId: string;
+    bundleName: string;
+    credits: number;
+    amountGhs: number;
+  }) => {
+    setCheckoutError(null);
+    setArkeselReference('');
+    setCheckoutDraft(bundle);
+  };
+
+  const handleConfirmBundlePurchase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!checkoutDraft || purchasing) return;
+    setPurchasing(true);
+    setCheckoutError(null);
+    try {
+      const res = await api.studio.purchaseSmsBundle({
+        ...checkoutDraft,
+        paymentChannel,
+        arkeselReference: arkeselReference.trim() || undefined,
+      });
+      onUpdateProfile(res.profile);
+      setArkeselStatus(res.arkeselStatus);
+      setCheckoutDraft(null);
+      showToast(res.message);
+    } catch (err) {
+      setCheckoutError(err instanceof Error ? err.message : 'Unable to record SMS bundle top-up.');
+    } finally {
+      setPurchasing(false);
+    }
+  };
+
+  const handleQuickTestGrant = async (amount: number, packName: string) => {
+    try {
+      const res = await api.studio.purchaseSmsBundle({
+        bundleId: 'sandbox-grant',
+        bundleName: packName,
+        credits: amount,
+        amountGhs: 0,
+        paymentChannel: 'Sandbox Test Grant',
+      });
+      onUpdateProfile(res.profile);
+      setArkeselStatus(res.arkeselStatus);
+      showToast(`+${amount.toLocaleString()} SMS credits added via ${packName}`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to add credits.');
+    }
   };
 
   const handleUpgradeToPro = () => {
@@ -188,7 +263,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <button
             type="button"
-            onClick={() => handleTopUp(100, 'Test Credits Simulator')}
+            onClick={() => void handleQuickTestGrant(100, 'Test Credits Simulator')}
             className="px-4 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -525,74 +600,189 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
               Arkesel Carrier Node v2
             </span>
             <h2 className="font-display text-[22px] font-bold tracking-[-0.02em] text-[#0B0B0B] mt-0.5">
-              Direct Carrier SMS Bundles
+              Arkesel SMS Bundles &amp; Platform Billing
             </h2>
             <p className="text-xs text-[#71717A] mt-0.5">
-              High-priority Tier-1 route delivery across MTN Ghana, Telecel, and AT networks. Credits rollover automatically.
+              High-priority Tier-1 route delivery across MTN Ghana, Telecel, and AT networks via Arkesel v2 API.
             </p>
           </div>
-          <span className="inline-flex items-center gap-1.5 text-xs text-[#71717A] shrink-0">
-            <Verified className="w-4 h-4 text-[#0B0B0B]" />
-            <span>Standard GSM-7 (160 chars/part)</span>
-          </span>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <a
+              href="https://sms.arkesel.com/user/sms-api/info"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3.5 py-2 rounded-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+            >
+              <Code2 className="w-3.5 h-3.5" />
+              <span>Arkesel SMS API Info</span>
+              <ExternalLink className="w-3 h-3 text-[#71717A]" />
+            </a>
+            <a
+              href="https://sms.arkesel.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3.5 py-2 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+            >
+              <span>Open Arkesel Platform</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          </div>
+        </div>
+
+        {/* Live Arkesel Gateway Connection & Balance Panel */}
+        <div className="bg-[#F5F5F7] rounded-3xl p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-[#0B0B0B]">
+                Arkesel Live Integration
+              </span>
+              <span
+                className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${
+                  arkeselStatus?.live
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                    : arkeselStatus?.configured
+                    ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                    : 'bg-white text-[#71717A] border border-[#E5E5EA]'
+                }`}
+              >
+                {arkeselStatus?.live
+                  ? 'Connected • Live Balance'
+                  : arkeselStatus?.configured
+                  ? 'Key Set • Check Gateway'
+                  : arkeselStatus?.mode === 'sandbox'
+                  ? 'Sandbox Mode'
+                  : 'Checking Gateway'}
+              </span>
+            </div>
+            <p className="text-xs text-[#71717A] max-w-xl leading-relaxed">
+              Recharge your Arkesel merchant wallet directly on{' '}
+              <a
+                href="https://sms.arkesel.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-semibold text-[#0B0B0B] underline underline-offset-2"
+              >
+                sms.arkesel.com
+              </a>{' '}
+              (MTN MoMo, Telecel Cash, AT Money, or card), then verify live gateway units or record a bundle allocation to your organizer workspace below.
+            </p>
+            {arkeselStatus?.error && (
+              <div className="inline-flex items-center gap-1.5 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-1.5">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>{arkeselStatus.error}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 shrink-0">
+            <div className="bg-white rounded-2xl px-4 py-3 min-w-[120px]">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#71717A]">
+                Arkesel SMS
+              </span>
+              <p className="font-display text-lg font-bold text-[#0B0B0B] mt-0.5 tabular-nums">
+                {arkeselStatus?.smsBalance !== null && arkeselStatus?.smsBalance !== undefined
+                  ? arkeselStatus.smsBalance.toLocaleString()
+                  : '—'}
+              </p>
+            </div>
+            <div className="bg-white rounded-2xl px-4 py-3 min-w-[120px]">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#71717A]">
+                Main Wallet
+              </span>
+              <p className="font-display text-lg font-bold text-[#0B0B0B] mt-0.5 tabular-nums">
+                {arkeselStatus?.mainBalance !== null && arkeselStatus?.mainBalance !== undefined
+                  ? `GH₵ ${arkeselStatus.mainBalance.toLocaleString()}`
+                  : '—'}
+              </p>
+            </div>
+            <div className="bg-white rounded-2xl px-4 py-3 min-w-[120px]">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#71717A]">
+                Sender ID
+              </span>
+              <p className="font-mono text-sm font-bold text-[#0B0B0B] mt-1 truncate">
+                {arkeselStatus?.senderId || profile.senderId || 'Arkesel'}
+              </p>
+            </div>
+            <div className="flex items-center">
+              <button
+                type="button"
+                onClick={() => void refreshArkeselStatus()}
+                disabled={arkeselLoading}
+                className="w-full h-full min-h-[54px] px-4 py-2 rounded-2xl bg-white hover:bg-[#0B0B0B] hover:text-white text-[#0B0B0B] border border-[#E5E5EA] text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60 whitespace-nowrap"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${arkeselLoading ? 'animate-spin' : ''}`} />
+                <span>Refresh Balance</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {CREDIT_BUNDLES.map((pack) => (
-            <div
-              key={pack.id}
-              className={`rounded-3xl p-6 flex flex-col justify-between gap-5 transition-all ${
-                pack.featured
-                  ? 'bg-white border border-[#E5E5EA] shadow-sm'
-                  : 'bg-[#F5F5F7] hover:bg-white hover:border hover:border-[#E5E5EA]'
-              }`}
-            >
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-base font-bold text-[#0B0B0B]">{pack.name}</span>
-                  <span
-                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold tabular-nums ${
-                      pack.featured
-                        ? 'bg-[#0B0B0B] text-white'
-                        : 'bg-white text-[#0B0B0B]'
-                    }`}
-                  >
-                    {pack.featured ? 'Best Value' : `${pack.credits.toLocaleString()} SMS`}
-                  </span>
-                </div>
-
-                <div className="flex items-baseline gap-1.5">
-                  <span className="font-display text-[30px] leading-none font-bold text-[#0B0B0B] tabular-nums">
-                    {pack.priceGhs}
-                  </span>
-                  <span className="text-xs text-[#71717A] tabular-nums">{pack.approxUsd}</span>
-                </div>
-
-                <div className="flex items-center gap-2 text-xs font-semibold text-[#444748]">
-                  <span className="tabular-nums">{pack.unitRate}</span>
-                  {pack.savings && (
-                    <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-[10px]">
-                      {pack.savings}
-                    </span>
-                  )}
-                </div>
-
-                <p className="text-xs text-[#71717A] leading-relaxed">{pack.desc}</p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => handleTopUp(pack.credits, pack.name)}
-                className={`w-full py-2.5 px-4 rounded-full text-xs font-semibold transition-colors ${
+          {CREDIT_BUNDLES.map((pack) => {
+            const numericAmount = Number(pack.priceGhs.replace(/[^0-9.]/g, '')) || 0;
+            return (
+              <div
+                key={pack.id}
+                className={`rounded-3xl p-6 flex flex-col justify-between gap-5 transition-all ${
                   pack.featured
-                    ? 'bg-[#0B0B0B] hover:bg-zinc-800 text-white'
-                    : 'bg-white hover:bg-[#0B0B0B] hover:text-white text-[#0B0B0B] border border-[#E5E5EA]'
+                    ? 'bg-white border border-[#E5E5EA] shadow-sm'
+                    : 'bg-[#F5F5F7] hover:bg-white hover:border hover:border-[#E5E5EA]'
                 }`}
               >
-                Top Up {pack.credits.toLocaleString()} Credits
-              </button>
-            </div>
-          ))}
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-base font-bold text-[#0B0B0B]">{pack.name}</span>
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold tabular-nums ${
+                        pack.featured
+                          ? 'bg-[#0B0B0B] text-white'
+                          : 'bg-white text-[#0B0B0B]'
+                      }`}
+                    >
+                      {pack.featured ? 'Best Value' : `${pack.credits.toLocaleString()} SMS`}
+                    </span>
+                  </div>
+
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="font-display text-[30px] leading-none font-bold text-[#0B0B0B] tabular-nums">
+                      {pack.priceGhs}
+                    </span>
+                    <span className="text-xs text-[#71717A] tabular-nums">{pack.approxUsd}</span>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs font-semibold text-[#444748]">
+                    <span className="tabular-nums">{pack.unitRate}</span>
+                    {pack.savings && (
+                      <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-[10px]">
+                        {pack.savings}
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-[#71717A] leading-relaxed">{pack.desc}</p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    openBundleCheckout({
+                      bundleId: pack.id,
+                      bundleName: pack.name,
+                      credits: pack.credits,
+                      amountGhs: numericAmount,
+                    })
+                  }
+                  className={`w-full py-2.5 px-4 rounded-full text-xs font-semibold transition-colors whitespace-nowrap ${
+                    pack.featured
+                      ? 'bg-[#0B0B0B] hover:bg-zinc-800 text-white'
+                      : 'bg-white hover:bg-[#0B0B0B] hover:text-white text-[#0B0B0B] border border-[#E5E5EA]'
+                  }`}
+                >
+                  Purchase {pack.credits.toLocaleString()} SMS via Arkesel
+                </button>
+              </div>
+            );
+          })}
         </div>
 
         {/* Custom Quantity Slider */}
@@ -632,7 +822,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
               </div>
             </div>
 
-            <div className="bg-white rounded-2xl p-4 flex flex-col items-center justify-center min-w-[165px] text-center shadow-sm">
+            <div className="bg-white rounded-2xl p-4 flex flex-col items-center justify-center min-w-[180px] text-center shadow-sm">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-[#71717A]">
                 Estimated Total
               </span>
@@ -641,14 +831,140 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
               </span>
               <button
                 type="button"
-                onClick={() => handleTopUp(customCredits, 'Custom Bundle')}
-                className="mt-2.5 w-full py-2 px-4 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold transition-colors"
+                onClick={() =>
+                  openBundleCheckout({
+                    bundleId: 'custom',
+                    bundleName: `Custom ${customCredits.toLocaleString()} SMS Bundle`,
+                    credits: customCredits,
+                    amountGhs: customTotalGhs,
+                  })
+                }
+                className="mt-2.5 w-full py-2 px-4 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold transition-colors whitespace-nowrap"
               >
-                Checkout
+                Checkout via Arkesel
               </button>
             </div>
           </div>
         </div>
+
+        {/* Arkesel Bundle Checkout Confirmation Drawer / Inline Panel */}
+        {checkoutDraft && (
+          <form
+            onSubmit={handleConfirmBundlePurchase}
+            className="bg-white border border-[#E5E5EA] rounded-3xl p-6 shadow-md space-y-5"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-[#71717A]">
+                  Arkesel SMS Bundle Checkout
+                </span>
+                <h3 className="font-display text-xl font-bold text-[#0B0B0B] mt-0.5">
+                  {checkoutDraft.bundleName} — {checkoutDraft.credits.toLocaleString()} SMS (GH₵{' '}
+                  {checkoutDraft.amountGhs.toLocaleString()})
+                </h3>
+                <p className="text-xs text-[#71717A] mt-1 leading-relaxed max-w-2xl">
+                  Arkesel handles direct bundle billing on the Arkesel Merchant Portal. Complete payment on{' '}
+                  <a
+                    href="https://sms.arkesel.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-semibold text-[#0B0B0B] underline underline-offset-2"
+                  >
+                    sms.arkesel.com
+                  </a>{' '}
+                  (API reference:{' '}
+                  <a
+                    href="https://sms.arkesel.com/user/sms-api/info"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-semibold text-[#0B0B0B] underline underline-offset-2"
+                  >
+                    sms.arkesel.com/user/sms-api/info
+                  </a>
+                  ), then credit your workspace below.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCheckoutDraft(null)}
+                aria-label="Close bundle checkout"
+                className="p-2 rounded-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[#0B0B0B]">Arkesel Payment Channel</label>
+                <select
+                  value={paymentChannel}
+                  onChange={(e) => setPaymentChannel(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-2xl bg-[#F5F5F7] border border-transparent focus:border-[#0B0B0B] text-xs font-medium text-[#0B0B0B] outline-none"
+                >
+                  <option value="Arkesel Portal Wallet">Arkesel Portal Wallet (sms.arkesel.com)</option>
+                  <option value="MTN Mobile Money">MTN Mobile Money (via Arkesel)</option>
+                  <option value="Telecel Cash">Telecel Cash (via Arkesel)</option>
+                  <option value="AT Money">AT Money (via Arkesel)</option>
+                  <option value="Visa / Mastercard">Visa / Mastercard (via Arkesel)</option>
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[#0B0B0B]">
+                  Arkesel Receipt / Transaction Ref (optional)
+                </label>
+                <input
+                  type="text"
+                  value={arkeselReference}
+                  onChange={(e) => setArkeselReference(e.target.value)}
+                  placeholder="e.g. ARK-TX-904218"
+                  className="w-full px-4 py-2.5 rounded-2xl bg-[#F5F5F7] border border-transparent focus:border-[#0B0B0B] text-xs font-mono text-[#0B0B0B] outline-none"
+                />
+              </div>
+            </div>
+
+            {checkoutError && (
+              <div className="px-4 py-2.5 rounded-2xl bg-red-50 border border-red-200 text-xs text-red-700">
+                {checkoutError}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#EEEEF0]">
+              <a
+                href="https://sms.arkesel.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+              >
+                <span>1. Pay on Arkesel Platform</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setCheckoutDraft(null)}
+                  className="px-4 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#EEEEF0] text-[#0B0B0B] text-xs font-semibold transition-colors whitespace-nowrap"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={purchasing}
+                  className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-60 whitespace-nowrap"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>
+                    {purchasing
+                      ? 'Syncing Credits...'
+                      : `2. Confirm & Credit +${checkoutDraft.credits.toLocaleString()} SMS`}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </form>
+        )}
       </section>
 
       {/* SECTION: SPECIFICATION MATRIX */}

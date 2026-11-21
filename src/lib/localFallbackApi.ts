@@ -1131,6 +1131,74 @@ export async function localFallbackRequest<T>(
     return { profile: user.profile } as T;
   }
 
+  if (method === 'GET' && path === '/studio/arkesel/status') {
+    requireRoles(user, ['creator', 'organizer']);
+    const senderId = (user.profile.senderId || 'Arkesel').trim();
+    return {
+      configured: false,
+      mode: db.flags.smsMode,
+      live: false,
+      smsBalance: null,
+      mainBalance: null,
+      error: 'Local offline fallback mode — Arkesel server API key is checked on the backend server.',
+      senderId,
+      isDefaultUnverifiedSender: senderId.toLowerCase() === 'arkesel' || senderId.toLowerCase() === 'eventsapp',
+      organizerCredits: user.profile.smsCredits,
+      apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
+      rechargeUrl: 'https://sms.arkesel.com',
+      checkedAt: new Date().toISOString(),
+    } as T;
+  }
+
+  if (method === 'POST' && path === '/studio/sms/purchase-bundle') {
+    requireRoles(user, ['creator', 'organizer']);
+    const parsedCredits = Math.round(Number(body.credits ?? 0));
+    const parsedAmount = Number(body.amountGhs ?? 0);
+    if (!Number.isFinite(parsedCredits) || parsedCredits < 10 || parsedCredits > 100000) {
+      throw new LocalApiError('Bundle credits must be between 10 and 100,000 SMS.', 400);
+    }
+    const nextCredits = user.profile.smsCredits + parsedCredits;
+    user.profile = { ...user.profile, smsCredits: nextCredits };
+    saveDb(db);
+    const senderId = (user.profile.senderId || 'Arkesel').trim();
+    const cleanRef =
+      typeof body.arkeselReference === 'string' && body.arkeselReference.trim()
+        ? body.arkeselReference.trim()
+        : `ARK-${Date.now().toString(36).toUpperCase()}`;
+    return {
+      ok: true,
+      profile: user.profile,
+      bundleId: typeof body.bundleId === 'string' ? body.bundleId : 'custom',
+      bundleName:
+        typeof body.bundleName === 'string' && body.bundleName.trim()
+          ? body.bundleName.trim()
+          : `${parsedCredits.toLocaleString()} SMS Bundle`,
+      addedCredits: parsedCredits,
+      amountGhs: Number.isFinite(parsedAmount) ? Number(parsedAmount.toFixed(2)) : 0,
+      paymentChannel:
+        typeof body.paymentChannel === 'string' && body.paymentChannel.trim()
+          ? body.paymentChannel.trim()
+          : 'Arkesel Portal Wallet',
+      arkeselReference: cleanRef,
+      portalPurchaseRequired: true,
+      arkeselStatus: {
+        configured: false,
+        mode: db.flags.smsMode,
+        live: false,
+        smsBalance: null,
+        mainBalance: null,
+        error: null,
+        senderId,
+        isDefaultUnverifiedSender: senderId.toLowerCase() === 'arkesel' || senderId.toLowerCase() === 'eventsapp',
+        organizerCredits: nextCredits,
+        apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
+        rechargeUrl: 'https://sms.arkesel.com',
+        checkedAt: new Date().toISOString(),
+      },
+      message: `${parsedCredits.toLocaleString()} SMS credits allocated (Ref: ${cleanRef}).`,
+    } as T;
+  }
+
   if (method === 'DELETE' && path === '/studio/account') {
     requireRoles(user, ['creator', 'organizer', 'gate_staff']);
     const confirmation = typeof body.confirmation === 'string' ? body.confirmation : undefined;

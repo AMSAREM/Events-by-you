@@ -71,6 +71,35 @@ export interface StudioWorkspacePayload {
   creatorAppLogs?: CreatorAppLog[];
 }
 
+export interface ArkeselStatusResponse {
+  configured: boolean;
+  mode: 'live' | 'sandbox';
+  live: boolean;
+  smsBalance: number | null;
+  mainBalance: number | null;
+  error: string | null;
+  senderId: string;
+  isDefaultUnverifiedSender: boolean;
+  organizerCredits: number;
+  apiInfoUrl: string;
+  rechargeUrl: string;
+  checkedAt: string;
+}
+
+export interface ArkeselBundlePurchaseResponse {
+  ok: boolean;
+  profile: OrganizerProfile;
+  bundleId: string;
+  bundleName: string;
+  addedCredits: number;
+  amountGhs: number;
+  paymentChannel: string;
+  arkeselReference: string;
+  portalPurchaseRequired: boolean;
+  arkeselStatus: ArkeselStatusResponse;
+  message: string;
+}
+
 export function getStoredSession(): StoredAuthSession | null {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -580,6 +609,23 @@ export const api = {
       request<{ profile: OrganizerProfile }>(
         '/api/studio/profile',
         { method: 'PATCH', body: JSON.stringify(profile) },
+        true
+      ),
+
+    getArkeselStatus: () =>
+      request<ArkeselStatusResponse>('/api/studio/arkesel/status', {}, true),
+
+    purchaseSmsBundle: (payload: {
+      bundleId: string;
+      bundleName: string;
+      credits: number;
+      amountGhs: number;
+      paymentChannel: string;
+      arkeselReference?: string;
+    }) =>
+      request<ArkeselBundlePurchaseResponse>(
+        '/api/studio/sms/purchase-bundle',
+        { method: 'POST', body: JSON.stringify(payload) },
         true
       ),
 

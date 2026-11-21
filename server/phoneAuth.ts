@@ -718,6 +718,7 @@ export async function sendArkeselSmsOtp(params: {
 export async function fetchArkeselGatewayBalance(): Promise<{
   ok: boolean;
   credits?: number;
+  mainBalance?: number;
   error?: string;
 }> {
   const apiKey = (process.env.ARKESEL_API_KEY || '').trim();
@@ -747,11 +748,16 @@ export async function fetchArkeselGatewayBalance(): Promise<{
       return { ok: false, error: msg };
     }
     const rawSmsBal = Number(parsed.data?.sms_balance ?? 0);
+    const rawMainBal = Number(parsed.data?.main_balance);
     if (Number.isFinite(rawSmsBal)) {
       platformRuntime.gatewayBalanceCredits = rawSmsBal;
       platformRuntime.gatewayBalanceLive = true;
       platformRuntime.gatewayBalanceError = undefined;
-      return { ok: true, credits: rawSmsBal };
+      return {
+        ok: true,
+        credits: rawSmsBal,
+        mainBalance: Number.isFinite(rawMainBal) ? rawMainBal : undefined,
+      };
     }
     return { ok: false, error: 'Arkesel returned invalid balance format' };
   } catch (err) {

@@ -38,8 +38,10 @@ import {
   clearPendingSignup,
   consumePendingSignup,
   dispatchDualAuthChallenge,
+  fetchArkeselGatewayBalance,
   getPendingSignup,
   hasActiveAuthChallenge,
+  isArkeselConfigured,
   sendArkeselSmsOtp,
   stagePendingSignup,
   verifyAuthOtp,
@@ -882,6 +884,86 @@ export function createMemoryRouter() {
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : 'SMS test failed.' });
     }
+  });
+
+  router.get('/studio/arkesel/status', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    try {
+      const currentProfile = req.memoryUser!.profile;
+      const senderInfo = platformRuntime.getEffectiveArkeselSenderId(currentProfile.senderId);
+      const bal = await fetchArkeselGatewayBalance();
+      return res.json({
+        configured: isArkeselConfigured(),
+        mode: platformRuntime.flags.smsMode,
+        live: bal.ok,
+        smsBalance: bal.ok && typeof bal.credits === 'number' ? bal.credits : null,
+        mainBalance: bal.ok && typeof bal.mainBalance === 'number' ? bal.mainBalance : null,
+        error: bal.ok ? null : (bal.error || null),
+        senderId: senderInfo.senderId,
+        isDefaultUnverifiedSender: senderInfo.isDefaultUnverifiedWarning,
+        organizerCredits: currentProfile.smsCredits,
+        apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
+        rechargeUrl: 'https://sms.arkesel.com',
+        checkedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to query Arkesel status.' });
+    }
+  });
+
+  router.post('/studio/sms/purchase-bundle', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    const { bundleId, bundleName, credits, amountGhs, paymentChannel, arkeselReference } = req.body as {
+      bundleId?: string;
+      bundleName?: string;
+      credits?: number;
+      amountGhs?: number;
+      paymentChannel?: string;
+      arkeselReference?: string;
+    };
+
+    const parsedCredits = Math.round(Number(credits ?? 0));
+    const parsedAmount = Number(amountGhs ?? 0);
+    if (!Number.isFinite(parsedCredits) || parsedCredits < 10 || parsedCredits > 100000) {
+      return res.status(400).json({ error: 'Bundle credits must be between 10 and 100,000 SMS.' });
+    }
+    if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+      return res.status(400).json({ error: 'Invalid bundle price amount.' });
+    }
+
+    const currentProfile = req.memoryUser!.profile;
+    const nextCredits = currentProfile.smsCredits + parsedCredits;
+    const updatedProfile = memoryStore.updateProfile(req.user!.id, {
+      smsCredits: nextCredits,
+    });
+    const senderInfo = platformRuntime.getEffectiveArkeselSenderId(updatedProfile.senderId);
+    const bal = await fetchArkeselGatewayBalance();
+    const cleanRef = (arkeselReference || '').trim() || `ARK-${Date.now().toString(36).toUpperCase()}`;
+
+    return res.json({
+      ok: true,
+      profile: updatedProfile,
+      bundleId: bundleId || 'custom',
+      bundleName: (bundleName || `${parsedCredits.toLocaleString()} SMS Bundle`).trim(),
+      addedCredits: parsedCredits,
+      amountGhs: Number(parsedAmount.toFixed(2)),
+      paymentChannel: (paymentChannel || 'Arkesel Portal Wallet').trim(),
+      arkeselReference: cleanRef,
+      portalPurchaseRequired: true,
+      arkeselStatus: {
+        configured: isArkeselConfigured(),
+        mode: platformRuntime.flags.smsMode,
+        live: bal.ok,
+        smsBalance: bal.ok && typeof bal.credits === 'number' ? bal.credits : null,
+        mainBalance: bal.ok && typeof bal.mainBalance === 'number' ? bal.mainBalance : null,
+        error: bal.ok ? null : (bal.error || null),
+        senderId: senderInfo.senderId,
+        isDefaultUnverifiedSender: senderInfo.isDefaultUnverifiedWarning,
+        organizerCredits: nextCredits,
+        apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
+        rechargeUrl: 'https://sms.arkesel.com',
+        checkedAt: new Date().toISOString(),
+      },
+      message: `${parsedCredits.toLocaleString()} SMS credits allocated to your workspace (Ref: ${cleanRef}).`,
+    });
   });
 
   router.post('/studio/events', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {

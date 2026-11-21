@@ -77,6 +77,7 @@ import {
   clearPendingSignup,
   consumePendingSignup,
   dispatchDualAuthChallenge,
+  fetchArkeselGatewayBalance,
   getPendingSignup,
   handleArkeselDlrPayload,
   hasActiveAuthChallenge,
@@ -2848,6 +2849,127 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       });
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : 'SMS test failed.' });
+    }
+  });
+
+  app.get('/api/studio/arkesel/status', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    try {
+      const client = req.supabase!;
+      const { data: prof } = await client
+        .from('profiles')
+        .select('sms_credits, sender_id')
+        .eq('id', req.user!.id)
+        .maybeSingle();
+      const row = (prof as Record<string, unknown> | null) ?? {};
+      const senderInfo = platformRuntime.getEffectiveArkeselSenderId(
+        typeof row.sender_id === 'string' ? row.sender_id : undefined
+      );
+      const bal = await fetchArkeselGatewayBalance();
+      return res.json({
+        configured: isArkeselConfigured(),
+        mode: platformRuntime.flags.smsMode,
+        live: bal.ok,
+        smsBalance: bal.ok && typeof bal.credits === 'number' ? bal.credits : null,
+        mainBalance: bal.ok && typeof bal.mainBalance === 'number' ? bal.mainBalance : null,
+        error: bal.ok ? null : (bal.error || null),
+        senderId: senderInfo.senderId,
+        isDefaultUnverifiedSender: senderInfo.isDefaultUnverifiedWarning,
+        organizerCredits: Number(row.sms_credits ?? 0),
+        apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
+        rechargeUrl: 'https://sms.arkesel.com',
+        checkedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to query Arkesel status.' });
+    }
+  });
+
+  app.post('/api/studio/sms/purchase-bundle', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    const { bundleId, bundleName, credits, amountGhs, paymentChannel, arkeselReference } = req.body as {
+      bundleId?: string;
+      bundleName?: string;
+      credits?: number;
+      amountGhs?: number;
+      paymentChannel?: string;
+      arkeselReference?: string;
+    };
+
+    const parsedCredits = Math.round(Number(credits ?? 0));
+    const parsedAmount = Number(amountGhs ?? 0);
+    if (!Number.isFinite(parsedCredits) || parsedCredits < 10 || parsedCredits > 100000) {
+      return res.status(400).json({ error: 'Bundle credits must be between 10 and 100,000 SMS.' });
+    }
+    if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+      return res.status(400).json({ error: 'Invalid bundle price amount.' });
+    }
+
+    try {
+      const client = req.supabase!;
+      const adminClient = createServiceSupabaseClient() ?? client;
+      const { data: prof, error: profErr } = await adminClient
+        .from('profiles')
+        .select('*')
+        .eq('id', req.user!.id)
+        .single();
+      if (profErr || !prof) {
+        return res.status(404).json({ error: 'Organizer profile not found.' });
+      }
+
+      const row = prof as Record<string, unknown>;
+      const currentCredits = Number(row.sms_credits ?? 0);
+      const nextCredits = currentCredits + parsedCredits;
+
+      const { data: updatedProf, error: updErr } = await adminClient
+        .from('profiles')
+        .update({
+          sms_credits: nextCredits,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', req.user!.id)
+        .select('*')
+        .single();
+      if (updErr || !updatedProf) {
+        return res.status(400).json({ error: updErr?.message || 'Failed to update organizer SMS credits.' });
+      }
+
+      const senderInfo = platformRuntime.getEffectiveArkeselSenderId(
+        typeof row.sender_id === 'string' ? row.sender_id : undefined
+      );
+      const bal = await fetchArkeselGatewayBalance();
+      const mappedProfile = mapProfileRow(
+        updatedProf as Record<string, unknown>,
+        req.user!.email || ''
+      );
+      const cleanRef = (arkeselReference || '').trim() || `ARK-${Date.now().toString(36).toUpperCase()}`;
+
+      return res.json({
+        ok: true,
+        profile: mappedProfile,
+        bundleId: bundleId || 'custom',
+        bundleName: (bundleName || `${parsedCredits.toLocaleString()} SMS Bundle`).trim(),
+        addedCredits: parsedCredits,
+        amountGhs: Number(parsedAmount.toFixed(2)),
+        paymentChannel: (paymentChannel || 'Arkesel Portal Wallet').trim(),
+        arkeselReference: cleanRef,
+        portalPurchaseRequired: true,
+        arkeselStatus: {
+          configured: isArkeselConfigured(),
+          mode: platformRuntime.flags.smsMode,
+          live: bal.ok,
+          smsBalance: bal.ok && typeof bal.credits === 'number' ? bal.credits : null,
+          mainBalance: bal.ok && typeof bal.mainBalance === 'number' ? bal.mainBalance : null,
+          error: bal.ok ? null : (bal.error || null),
+          senderId: senderInfo.senderId,
+          isDefaultUnverifiedSender: senderInfo.isDefaultUnverifiedWarning,
+          organizerCredits: nextCredits,
+          apiInfoUrl: 'https://sms.arkesel.com/user/sms-api/info',
+          rechargeUrl: 'https://sms.arkesel.com',
+          checkedAt: new Date().toISOString(),
+        },
+        message: `${parsedCredits.toLocaleString()} SMS credits allocated to your workspace (Ref: ${cleanRef}). Ensure your Arkesel merchant wallet has matching balance.`,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'SMS bundle purchase failed.' });
     }
   });
 
