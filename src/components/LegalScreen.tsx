@@ -1,6 +1,9 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, FileText, Lock, ShieldCheck } from 'lucide-react';
 import { BrandLogo } from './BrandLogo';
+import { SeoHead } from './SeoHead';
+import { MARKETING_SEO } from '../lib/seoConfig';
 
 interface LegalScreenProps {
   doc: 'terms' | 'privacy';
@@ -20,9 +23,11 @@ export const LegalScreen: React.FC<LegalScreenProps> = ({
   onNavigateStudio,
 }) => {
   const isTerms = doc === 'terms';
+  const seo = isTerms ? MARKETING_SEO['/terms'] : MARKETING_SEO['/privacy'];
 
   return (
     <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#0B0B0B] flex flex-col justify-between overflow-x-clip">
+      <SeoHead {...seo} />
       <header className="sticky top-0 z-40 w-full bg-[#F5F5F7]/90 backdrop-blur-xl border-b border-[#E5E5EA]">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -39,24 +44,30 @@ export const LegalScreen: React.FC<LegalScreenProps> = ({
 
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1 p-1 bg-white rounded-full border border-[#E5E5EA]">
-              <button
-                type="button"
-                onClick={() => onSwitchDoc('terms')}
+              <Link
+                to="/terms"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onSwitchDoc('terms');
+                }}
                 className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors whitespace-nowrap ${
                   isTerms ? 'bg-[#0B0B0B] text-white' : 'text-[#71717A] hover:text-[#0B0B0B]'
                 }`}
               >
                 Terms &amp; Conditions
-              </button>
-              <button
-                type="button"
-                onClick={() => onSwitchDoc('privacy')}
+              </Link>
+              <Link
+                to="/privacy"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onSwitchDoc('privacy');
+                }}
                 className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors whitespace-nowrap ${
                   !isTerms ? 'bg-[#0B0B0B] text-white' : 'text-[#71717A] hover:text-[#0B0B0B]'
                 }`}
               >
                 Privacy Policy
-              </button>
+              </Link>
             </div>
 
             <button

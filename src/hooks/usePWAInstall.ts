@@ -12,16 +12,8 @@ declare global {
 }
 
 export function usePWAInstall() {
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(() =>
-    typeof window !== 'undefined' ? window.__deferredPwaPrompt ?? null : null
-  );
-  const [isInstalled, setIsInstalled] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return (
-      window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as unknown as { standalone?: boolean }).standalone === true
-    );
-  });
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isInstalled, setIsInstalled] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
 
@@ -75,7 +67,7 @@ export function usePWAInstall() {
   }, []);
 
   const install = useCallback(async (): Promise<'accepted' | 'dismissed' | 'unavailable'> => {
-    const promptEvent = deferredPrompt ?? window.__deferredPwaPrompt ?? null;
+    const promptEvent = deferredPrompt ?? (typeof window !== 'undefined' ? window.__deferredPwaPrompt : null) ?? null;
     if (!promptEvent) {
       return 'unavailable';
     }
@@ -99,7 +91,7 @@ export function usePWAInstall() {
   }, [deferredPrompt]);
 
   return {
-    isInstallable: Boolean(deferredPrompt || (typeof window !== 'undefined' && window.__deferredPwaPrompt)),
+    isInstallable: Boolean(deferredPrompt),
     isInstalled,
     isIOS,
     isInstalling,
@@ -108,11 +100,10 @@ export function usePWAInstall() {
 }
 
 export function useOnlineStatus() {
-  const [isOnline, setIsOnline] = useState(
-    typeof navigator !== 'undefined' ? navigator.onLine : true
-  );
+  const [isOnline, setIsOnline] = useState(true);
 
   useEffect(() => {
+    setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true);
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 

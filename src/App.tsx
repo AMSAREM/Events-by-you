@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Clock, Compass, Database, Loader2, LogOut, ShieldCheck, X } from 'lucide-react';
 import { INITIAL_PROFILE } from './data/initialData';
 import type {
@@ -28,16 +29,24 @@ import {
   extractSessionFromUrlHash,
   getStoredCreatorToken,
   getStoredSession,
-  resolveApiUrl,
   saveStoredCreatorToken,
   saveStoredSession,
   type StoredAuthSession,
 } from './lib/api';
+import { NOINDEX_ROUTE_SEO } from './lib/seoConfig';
 import { NavigationRail } from './components/NavigationRail';
-
-const LandingScreen = lazy(() =>
-  import('./components/LandingScreen').then((m) => ({ default: m.LandingScreen }))
-);
+import { SeoHead } from './components/SeoHead';
+import { LandingScreen } from './components/LandingScreen';
+import { LegalScreen } from './components/LegalScreen';
+import {
+  AboutPage,
+  BlogPage,
+  ContactPage,
+  FaqPage,
+  FeaturesPage,
+  HowItWorksPage,
+  PricingPage,
+} from './components/MarketingPages';
 const SignInScreen = lazy(() =>
   import('./components/SignInScreen').then((m) => ({ default: m.SignInScreen }))
 );
@@ -95,9 +104,6 @@ const GiftTableScreen = lazy(() =>
 const AppsCreatorConsoleScreen = lazy(() =>
   import('./components/AppsCreatorConsoleScreen').then((m) => ({ default: m.AppsCreatorConsoleScreen }))
 );
-const LegalScreen = lazy(() =>
-  import('./components/LegalScreen').then((m) => ({ default: m.LegalScreen }))
-);
 const EventDetailModal = lazy(() =>
   import('./components/EventModals').then((m) => ({ default: m.EventDetailModal }))
 );
@@ -118,16 +124,14 @@ function getWalkthroughStorageKey(profile?: Pick<OrganizerProfile, 'email' | 'ph
   return `eventsapp_walkthrough_done_${userKey}`;
 }
 
-function parseInvitationFromLocation(): {
+function parseInvitationFromValues(pathname: string, search: string): {
   slugOrId?: string;
   focus?: 'top' | 'register' | 'checkin' | 'camera' | 'gifts';
   guest?: string;
   pass?: string;
   desk?: string;
 } {
-  if (typeof window === 'undefined') return {};
-  const pathname = window.location.pathname;
-  const params = new URLSearchParams(window.location.search);
+  const params = new URLSearchParams(search);
   const guest = params.get('guest')?.trim() || undefined;
   const pass = params.get('pass')?.trim() || params.get('code')?.trim() || undefined;
   const desk = params.get('desk')?.trim() || params.get('token')?.trim() || undefined;
@@ -176,17 +180,36 @@ function parseInvitationFromLocation(): {
   return {};
 }
 
-function getInitialRouteFromPathname(): AppRoute {
-  if (typeof window === 'undefined') return 'home';
-  const path = window.location.pathname.toLowerCase();
+function normalizePathname(raw: string): string {
+  const lowered = raw.toLowerCase();
+  if (lowered.length > 1 && lowered.endsWith('/')) {
+    return lowered.slice(0, -1);
+  }
+  return lowered || '/';
+}
+
+function resolveRouteFromLocation(pathname: string, search: string): AppRoute {
+  const path = normalizePathname(pathname);
+  const invite = parseInvitationFromValues(pathname, search);
+  if (invite.focus === 'camera') return 'camera';
+  if (invite.slugOrId) return 'demo-event';
+  if (path === '/' || path === '/index.html') return 'home';
+  if (path === '/features') return 'features';
+  if (path === '/pricing') return 'pricing';
+  if (path === '/how-it-works') return 'how-it-works';
+  if (path === '/faq') return 'faq';
+  if (path === '/about') return 'about';
+  if (path === '/contact') return 'contact';
+  if (path === '/blog') return 'blog';
   if (path === '/terms') return 'terms';
   if (path === '/privacy') return 'privacy';
   if (path === '/signin') return 'signin';
   if (path === '/signup') return 'signup';
-  const invite = parseInvitationFromLocation();
-  if (invite.focus === 'camera') return 'camera';
-  if (invite.slugOrId) return 'demo-event';
-  return 'home';
+  if (path === '/reset-password') return 'reset-password';
+  if (path === '/verify-otp') return 'verify-otp';
+  if (path === '/studio' || path.startsWith('/studio/')) return 'studio';
+  if (path === '/camera') return 'camera';
+  return 'not-found';
 }
 
 interface PendingModuleTarget {
@@ -210,20 +233,27 @@ const EMPTY_PROFILE: OrganizerProfile = {
 };
 
 export default function App() {
-  const [route, setRoute] = useState<AppRoute>(getInitialRouteFromPathname);
-  const [isSignedIn, setIsSignedIn] = useState<boolean>(() => Boolean(getStoredSession()));
-  const [authBootstrapping, setAuthBootstrapping] = useState<boolean>(() => Boolean(getStoredSession()));
+  const location = useLocation();
+  const navigate = useNavigate();
+  const initialInvite = parseInvitationFromValues(location.pathname, location.search);
+
+  const [route, setRoute] = useState<AppRoute>(() =>
+    resolveRouteFromLocation(location.pathname, location.search)
+  );
+  const [isSignedIn, setIsSignedIn] = useState<boolean>(false);
+  const [authBootstrapping, setAuthBootstrapping] = useState<boolean>(false);
+  const [hasCheckedStoredSession, setHasCheckedStoredSession] = useState<boolean>(false);
   const [studioLoading, setStudioLoading] = useState(false);
   const [showWalkthrough, setShowWalkthrough] = useState(false);
   const [supabaseConfigured, setSupabaseConfigured] = useState<boolean>(true);
   const [inMemoryMode, setInMemoryMode] = useState<boolean>(false);
   const [creatorEmail, setCreatorEmail] = useState<string>('amoakoimml@gmail.com');
   const [creatorPasswordConfigured, setCreatorPasswordConfigured] = useState<boolean>(false);
-  const [creatorUnlocked, setCreatorUnlocked] = useState<boolean>(() => Boolean(getStoredCreatorToken()));
+  const [creatorUnlocked, setCreatorUnlocked] = useState<boolean>(false);
   const [apiBannerError, setApiBannerError] = useState<string | null>(null);
   const [sessionTimeoutNotice, setSessionTimeoutNotice] = useState<string | null>(null);
   const [sessionWarningSecondsLeft, setSessionWarningSecondsLeft] = useState<number | null>(null);
-  const lastActivityRef = useRef<number>(Date.now());
+  const lastActivityRef = useRef<number>(0);
 
   const [prefillEmail, setPrefillEmail] = useState<string>('');
   const [prefillPhone, setPrefillPhone] = useState<string>('');
@@ -261,18 +291,15 @@ export default function App() {
   const [giftTableEventId, setGiftTableEventId] = useState<string | undefined>(undefined);
   const [checkinEventId, setCheckinEventId] = useState<string | undefined>(undefined);
   const [checkinPrefillCode, setCheckinPrefillCode] = useState<string | undefined>(undefined);
-  const [cameraEventId, setCameraEventId] = useState<string | undefined>(() => {
-    const inv = parseInvitationFromLocation();
-    return inv.focus === 'camera' ? inv.slugOrId : undefined;
-  });
-  const [cameraGuestName, setCameraGuestName] = useState<string | undefined>(() => {
-    const inv = parseInvitationFromLocation();
-    return inv.focus === 'camera' ? inv.guest : undefined;
-  });
-  const [cameraPassCode, setCameraPassCode] = useState<string | undefined>(() => {
-    const inv = parseInvitationFromLocation();
-    return inv.focus === 'camera' ? inv.pass : undefined;
-  });
+  const [cameraEventId, setCameraEventId] = useState<string | undefined>(() =>
+    initialInvite.focus === 'camera' ? initialInvite.slugOrId : undefined
+  );
+  const [cameraGuestName, setCameraGuestName] = useState<string | undefined>(() =>
+    initialInvite.focus === 'camera' ? initialInvite.guest : undefined
+  );
+  const [cameraPassCode, setCameraPassCode] = useState<string | undefined>(() =>
+    initialInvite.focus === 'camera' ? initialInvite.pass : undefined
+  );
   const [verifiedCameraPass, setVerifiedCameraPass] = useState<{
     attendeeName: string;
     ticketCode: string;
@@ -282,24 +309,26 @@ export default function App() {
   const [cameraReturnRoute, setCameraReturnRoute] = useState<'home' | 'demo-event'>('home');
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [workspaceEventId, setWorkspaceEventId] = useState<string | null>(null);
-  const [publicPreviewEventId, setPublicPreviewEventId] = useState<string | undefined>(() => {
-    const inv = parseInvitationFromLocation();
-    return inv.focus === 'camera' ? undefined : inv.slugOrId;
-  });
+  const [publicPreviewEventId, setPublicPreviewEventId] = useState<string | undefined>(() =>
+    initialInvite.focus === 'camera' ? undefined : initialInvite.slugOrId
+  );
   const [publicPreviewFocus, setPublicPreviewFocus] = useState<
     'top' | 'register' | 'checkin' | 'gifts'
-  >(() => {
-    const focus = parseInvitationFromLocation().focus;
-    return focus === 'register' || focus === 'checkin' || focus === 'gifts' ? focus : 'top';
-  });
+  >(() =>
+    initialInvite.focus === 'register' ||
+    initialInvite.focus === 'checkin' ||
+    initialInvite.focus === 'gifts'
+      ? initialInvite.focus
+      : 'top'
+  );
   const [publicPreviewDeskToken, setPublicPreviewDeskToken] = useState<string | undefined>(
-    () => parseInvitationFromLocation().desk
+    () => initialInvite.desk
   );
   const [publicEventsLoading, setPublicEventsLoading] = useState<boolean>(true);
   const [selectedCheckoutBundleId, setSelectedCheckoutBundleId] = useState<string | null>(null);
   const [pendingPaystackRef, setPendingPaystackRef] = useState<string | null>(() => {
     try {
-      const params = new URLSearchParams(window.location.search);
+      const params = new URLSearchParams(location.search);
       if (params.get('sub_ref')) return null;
       const ref =
         params.get('paystack_ref') || params.get('reference') || params.get('trxref') || null;
@@ -310,7 +339,7 @@ export default function App() {
   });
   const [pendingSubscriptionRef, setPendingSubscriptionRef] = useState<string | null>(() => {
     try {
-      const params = new URLSearchParams(window.location.search);
+      const params = new URLSearchParams(location.search);
       const subRef = params.get('sub_ref');
       if (subRef) return subRef;
       const ref = params.get('reference') || params.get('trxref') || null;
@@ -419,6 +448,13 @@ export default function App() {
 
     const init = async () => {
       const oauthSession = extractSessionFromUrlHash();
+      const storedSession = getStoredSession();
+      if (getStoredCreatorToken()) {
+        setCreatorUnlocked(true);
+      }
+      if (oauthSession || storedSession) {
+        setAuthBootstrapping(true);
+      }
       try {
         const health = await api.health();
         if (!cancelled) {
@@ -438,30 +474,23 @@ export default function App() {
 
       await loadPublicEvents();
 
-      const activeSession = oauthSession ?? getStoredSession();
+      const activeSession = oauthSession ?? storedSession;
       if (activeSession) {
         const ok = await hydrateStudioWorkspace();
         if (!cancelled && ok) {
           if (pendingPaystackRef || pendingSubscriptionRef) {
             setActiveScreen('billing');
             setRoute('studio');
-            try {
-              const url = new URL(window.location.href);
-              url.searchParams.delete('paystack_ref');
-              url.searchParams.delete('sub_ref');
-              url.searchParams.delete('reference');
-              url.searchParams.delete('trxref');
-              window.history.replaceState(null, '', url.pathname + url.search);
-            } catch {
-              // Ignore history cleanup error
-            }
+            navigate('/studio', { replace: true });
           } else if (oauthSession) {
             setRoute('studio');
+            navigate('/studio', { replace: true });
           }
         }
       }
       if (!cancelled) {
         setAuthBootstrapping(false);
+        setHasCheckedStoredSession(true);
       }
     };
 
@@ -473,6 +502,7 @@ export default function App() {
         const ok = await hydrateStudioWorkspace();
         if (ok && !cancelled) {
           setRoute('studio');
+          navigate('/studio', { replace: true });
         }
       }
     };
@@ -504,6 +534,16 @@ export default function App() {
     ? safeEvents.find((e) => e.id === workspaceEventId) ?? null
     : null;
 
+  const syncBrowserPath = useCallback(
+    (nextPath: string) => {
+      const currentFull = `${location.pathname}${location.search}`;
+      if (currentFull !== nextPath) {
+        navigate(nextPath);
+      }
+    },
+    [location.pathname, location.search, navigate]
+  );
+
   const applyModuleTarget = (target: PendingModuleTarget) => {
     setWorkspaceEventId(null);
     setStudioSubScreen(target.subScreen ?? null);
@@ -512,6 +552,7 @@ export default function App() {
       setCameraGuestName(target.guestName);
       setCameraReturnRoute(target.returnRoute ?? 'home');
       setRoute('camera');
+      syncBrowserPath(target.eventId ? `/e/${encodeURIComponent(target.eventId)}/camera` : '/camera');
     } else {
       if (target.screen === 'checkin') {
         setCheckinEventId(target.eventId);
@@ -521,33 +562,33 @@ export default function App() {
       }
       setActiveScreen(target.screen ?? 'overview');
       setRoute('studio');
+      syncBrowserPath('/studio');
     }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   const requireSignedIn = (target: PendingModuleTarget) => {
     if (!isSignedIn) {
       setPendingTarget(target);
       setRoute('signin');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      syncBrowserPath('/signin');
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
       return;
     }
     applyModuleTarget(target);
   };
 
-  const syncBrowserPath = useCallback((nextPath: string) => {
-    if (typeof window === 'undefined') return;
-    const currentFull = `${window.location.pathname}${window.location.search}`;
-    if (currentFull !== nextPath) {
-      window.history.pushState(null, '', nextPath);
-    }
-  }, []);
-
   const openLegalRoute = useCallback(
     (doc: 'terms' | 'privacy') => {
       setRoute(doc);
       syncBrowserPath(doc === 'terms' ? '/terms' : '/privacy');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
     },
     [syncBrowserPath]
   );
@@ -555,7 +596,9 @@ export default function App() {
   const navigateHome = useCallback(() => {
     setRoute('home');
     syncBrowserPath('/');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   }, [syncBrowserPath]);
 
   const openEventInvitation = useCallback(
@@ -586,7 +629,7 @@ export default function App() {
                 : `/e/${cleanSlug}`;
         syncBrowserPath(nextPath);
       }
-      if (focus === 'top' || focus === 'checkin' || focus === 'gifts') {
+      if ((focus === 'top' || focus === 'checkin' || focus === 'gifts') && typeof window !== 'undefined') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     },
@@ -594,46 +637,29 @@ export default function App() {
   );
 
   useEffect(() => {
-    const handlePopState = () => {
-      const invite = parseInvitationFromLocation();
-      if (invite.focus === 'camera') {
-        setCameraEventId(invite.slugOrId);
-        setCameraGuestName(invite.guest);
-        setCameraPassCode(invite.pass);
-        setVerifiedCameraPass(null);
-        setRoute('camera');
-        return;
-      }
-      if (invite.slugOrId) {
-        setPublicPreviewEventId(invite.slugOrId);
-        setPublicPreviewFocus(
-          invite.focus === 'register' || invite.focus === 'checkin' || invite.focus === 'gifts'
-            ? invite.focus
-            : 'top'
-        );
-        setPublicPreviewDeskToken(invite.desk);
-        setRoute('demo-event');
-        return;
-      }
-      const pathRoute = getInitialRouteFromPathname();
-      setRoute((prev) => {
-        if (pathRoute !== 'home') return pathRoute;
-        if (
-          prev === 'terms' ||
-          prev === 'privacy' ||
-          prev === 'signin' ||
-          prev === 'signup' ||
-          prev === 'demo-event' ||
-          prev === 'camera'
-        ) {
-          return 'home';
-        }
-        return prev;
-      });
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+    const nextRoute = resolveRouteFromLocation(location.pathname, location.search);
+    const invite = parseInvitationFromValues(location.pathname, location.search);
+    if (invite.focus === 'camera') {
+      setCameraEventId(invite.slugOrId);
+      setCameraGuestName(invite.guest);
+      setCameraPassCode(invite.pass);
+      setVerifiedCameraPass(null);
+      setRoute('camera');
+      return;
+    }
+    if (invite.slugOrId) {
+      setPublicPreviewEventId(invite.slugOrId);
+      setPublicPreviewFocus(
+        invite.focus === 'register' || invite.focus === 'checkin' || invite.focus === 'gifts'
+          ? invite.focus
+          : 'top'
+      );
+      setPublicPreviewDeskToken(invite.desk);
+      setRoute('demo-event');
+      return;
+    }
+    setRoute(nextRoute);
+  }, [location.pathname, location.search]);
 
   const handleAuthenticated = async (
     session: StoredAuthSession,
@@ -654,7 +680,6 @@ export default function App() {
     setSessionWarningSecondsLeft(null);
     setIsSignedIn(true);
     setApiBannerError(null);
-    syncBrowserPath('/');
     if (getStoredCreatorToken()) {
       setCreatorUnlocked(true);
     }
@@ -681,7 +706,10 @@ export default function App() {
       setStudioSubScreen(null);
       setActiveScreen(canAccessConsole ? 'console' : 'overview');
       setRoute('studio');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      syncBrowserPath('/studio');
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
       return;
     }
 
@@ -692,7 +720,10 @@ export default function App() {
       return;
     }
     setRoute('studio');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    syncBrowserPath('/studio');
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   const handleSignOut = useCallback(
@@ -1633,59 +1664,7 @@ export default function App() {
     };
   }, [route, cameraEventId, cameraPassCode, isSignedIn]);
 
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-    const setMeta = (attr: 'property' | 'name', key: string, value: string) => {
-      let el = document.querySelector(`meta[${attr}="${key}"]`) as HTMLMetaElement | null;
-      if (!el) {
-        el = document.createElement('meta');
-        el.setAttribute(attr, key);
-        document.head.appendChild(el);
-      }
-      el.setAttribute('content', value);
-    };
 
-    if (route === 'demo-event') {
-      const pool = [...safeEvents, ...safePublicEvents];
-      const targetLower = (publicPreviewEventId || '').toLowerCase();
-      const active =
-        pool.find((e) => e.id.toLowerCase() === targetLower || e.slug.toLowerCase() === targetLower) ??
-        featuredEvent;
-      if (active) {
-        const cleanSlug = encodeURIComponent(active.slug || active.id);
-        const origin = window.location.origin;
-        const inviteUrl = `${origin}/e/${cleanSlug}`;
-        const ogPath = `/api/og/event/${cleanSlug}`;
-        const resolvedOg = resolveApiUrl(ogPath);
-        const ogImg = /^https?:\/\//i.test(resolvedOg) ? resolvedOg : `${origin}${resolvedOg}`;
-        const title = `${active.title} — ${active.date} · ${active.city} | Events By You`;
-        const desc = `${active.organizer} invites you to ${active.title} on ${active.date} at ${active.venue}, ${active.city}.`;
-        document.title = title;
-        setMeta('name', 'description', desc);
-        setMeta('property', 'og:title', title);
-        setMeta('property', 'og:description', desc);
-        setMeta('property', 'og:url', inviteUrl);
-        setMeta('property', 'og:image', ogImg);
-        setMeta('name', 'twitter:title', title);
-        setMeta('name', 'twitter:description', desc);
-        setMeta('name', 'twitter:image', ogImg);
-        return;
-      }
-    }
-
-    document.title = 'Events By You — Event Registration & SMS Ticketing';
-    if (featuredEvent) {
-      const defaultOgPath = `/api/og/event/${encodeURIComponent(
-        featuredEvent.slug || featuredEvent.id
-      )}`;
-      const resolvedDefaultOg = resolveApiUrl(defaultOgPath);
-      const defaultOg = /^https?:\/\//i.test(resolvedDefaultOg)
-        ? resolvedDefaultOg
-        : `${window.location.origin}${resolvedDefaultOg}`;
-      setMeta('property', 'og:image', defaultOg);
-      setMeta('name', 'twitter:image', defaultOg);
-    }
-  }, [route, publicPreviewEventId, safeEvents, safePublicEvents, featuredEvent]);
 
   const sessionTimeoutModal =
     isSignedIn && sessionWarningSecondsLeft !== null ? (
@@ -1762,37 +1741,110 @@ export default function App() {
   if (route === 'terms' || route === 'privacy') {
     return (
       <>
-        <Suspense fallback={routeLoadingFallback}>
-          <LegalScreen
-            doc={route}
-            isSignedIn={isSignedIn}
-            onSwitchDoc={openLegalRoute}
-            onBackHome={navigateHome}
-            onNavigateSignIn={() => {
-              setSessionTimeoutNotice(null);
-              setRoute('signin');
-              syncBrowserPath('/signin');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            onNavigateStudio={() =>
-              requireSignedIn({
-                route: 'studio',
-                screen: 'overview',
-                label: 'Creator Studio',
-              })
-            }
-          />
-        </Suspense>
+        <LegalScreen
+          doc={route}
+          isSignedIn={isSignedIn}
+          onSwitchDoc={openLegalRoute}
+          onBackHome={navigateHome}
+          onNavigateSignIn={() => {
+            setSessionTimeoutNotice(null);
+            setRoute('signin');
+            syncBrowserPath('/signin');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onNavigateStudio={() =>
+            requireSignedIn({
+              route: 'studio',
+              screen: 'overview',
+              label: 'Creator Studio',
+            })
+          }
+        />
         {sessionTimeoutModal}
       </>
+    );
+  }
+
+  if (
+    route === 'features' ||
+    route === 'pricing' ||
+    route === 'how-it-works' ||
+    route === 'faq' ||
+    route === 'about' ||
+    route === 'contact' ||
+    route === 'blog'
+  ) {
+    const sharedMarketingProps = {
+      isSignedIn,
+      onNavigateSignIn: () => {
+        setSessionTimeoutNotice(null);
+        setRoute('signin');
+        syncBrowserPath('/signin');
+        if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+      },
+      onNavigateStudio: () =>
+        requireSignedIn({
+          route: 'studio',
+          screen: 'overview',
+          label: 'Creator Studio',
+        }),
+    };
+    return (
+      <>
+        {route === 'features' && <FeaturesPage {...sharedMarketingProps} />}
+        {route === 'pricing' && <PricingPage {...sharedMarketingProps} />}
+        {route === 'how-it-works' && <HowItWorksPage {...sharedMarketingProps} />}
+        {route === 'faq' && <FaqPage {...sharedMarketingProps} />}
+        {route === 'about' && <AboutPage {...sharedMarketingProps} />}
+        {route === 'contact' && <ContactPage {...sharedMarketingProps} />}
+        {route === 'blog' && <BlogPage {...sharedMarketingProps} />}
+        {sessionTimeoutModal}
+      </>
+    );
+  }
+
+  if (route === 'not-found') {
+    return (
+      <div className="min-h-dvh w-full bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center px-4 py-10">
+        <SeoHead
+          path={location.pathname || '/404'}
+          title="Page Not Found | Events By You"
+          description="The requested Events By You page could not be found. Return to the homepage to explore features, pricing, or event tools."
+          robots="noindex, nofollow"
+        />
+        <main className="max-w-md w-full bg-white rounded-[28px] border border-[#E5E5EA] p-6 sm:p-8 shadow-sm text-center space-y-4">
+          <p className="text-xs font-mono font-bold uppercase tracking-wider text-[#71717A]">
+            404 · Page Not Found
+          </p>
+          <h1 className="font-display text-2xl font-bold text-[#0B0B0B]">
+            This page does not exist
+          </h1>
+          <p className="text-xs sm:text-sm text-[#71717A] leading-relaxed">
+            The link may be outdated or removed. Explore Events By You features, pricing, or return home.
+          </p>
+          <div className="flex flex-wrap justify-center gap-2 pt-2">
+            <Link
+              to="/"
+              className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 transition-colors"
+            >
+              Back to Home
+            </Link>
+            <Link
+              to="/features"
+              className="px-5 py-2.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] border border-[#E5E5EA] text-xs font-semibold hover:border-[#0B0B0B] transition-colors"
+            >
+              View Features
+            </Link>
+          </div>
+        </main>
+      </div>
     );
   }
 
   if (route === 'home') {
     return (
       <>
-        <Suspense fallback={routeLoadingFallback}>
-          <LandingScreen
+        <LandingScreen
           featuredEvent={featuredEvent}
           allEvents={landingEvents}
           recentAttendees={safeAttendees}
@@ -1880,7 +1932,6 @@ export default function App() {
           }}
           onOpenLegal={openLegalRoute}
         />
-        </Suspense>
         {sessionTimeoutModal}
       </>
     );
@@ -2138,9 +2189,10 @@ export default function App() {
     );
   }
 
-  if (authBootstrapping) {
+  if ((route === 'studio' && !hasCheckedStoredSession) || authBootstrapping) {
     return (
       <div className="min-h-dvh w-full bg-[#F5F5F7] text-[#0B0B0B] flex flex-col items-center justify-center gap-3 px-4">
+        <SeoHead {...NOINDEX_ROUTE_SEO['/studio']} />
         <Loader2 className="w-6 h-6 animate-spin text-[#0B0B0B]" />
         <p className="text-xs font-medium text-[#71717A]">
           Syncing your workspace...
@@ -2180,6 +2232,7 @@ export default function App() {
           setAuthCountryGateway(target.countryGateway || 'GH');
           setSessionTimeoutNotice(null);
           setRoute('reset-password');
+          syncBrowserPath('/reset-password');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
         onGoSignUp={(email, phone) => {
@@ -2249,6 +2302,7 @@ export default function App() {
 
   return (
     <div className="min-h-dvh w-full max-w-full bg-white text-[#0B0B0B] overflow-x-clip">
+      <SeoHead {...NOINDEX_ROUTE_SEO['/studio']} />
       <div className="w-full max-w-[1600px] mx-auto pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:pl-[max(1.25rem,env(safe-area-inset-left))] sm:pr-[max(1.25rem,env(safe-area-inset-right))] md:px-6 lg:px-8 xl:px-10 pt-[max(0.75rem,env(safe-area-inset-top))] sm:pt-5 lg:pt-6 pb-[calc(6.25rem+env(safe-area-inset-bottom))] md:pb-8 flex flex-col md:flex-row gap-3.5 sm:gap-4 md:gap-5 lg:gap-7 xl:gap-8 md:items-start min-w-0 overflow-x-clip">
         {/* Left Floating Dark Pill Capsule Navigation */}
         <NavigationRail

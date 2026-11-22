@@ -52,6 +52,8 @@ import {
 import { appendPoweredByLine } from '../lib/eventMessages';
 import { getContrastTextColor, hexWithAlpha, normalizeHexColor } from '../lib/themeColors';
 import { PWAInstallButton } from './PWAInstallButton';
+import { SeoHead } from './SeoHead';
+import { buildEventSeoPayload, CANONICAL_ORIGIN } from '../lib/seoConfig';
 
 interface PublicEventScreenProps {
   events: EventItem[];
@@ -735,6 +737,12 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     }
     return (
       <div className="min-h-screen bg-[#F5F5F7] text-[#1A1C1D] flex flex-col items-center justify-center px-4 text-center">
+        <SeoHead
+          path="/e"
+          title="Event Page Unavailable | Events By You"
+          description="This event invitation page has not been published yet or is unavailable. Contact the organiser for an updated link."
+          robots="noindex, nofollow"
+        />
         <div className="max-w-md w-full bg-white rounded-[28px] p-8 shadow-sm space-y-4">
           <div className="w-12 h-12 rounded-2xl bg-[#F5F5F7] flex items-center justify-center mx-auto">
             <CalendarDays className="w-6 h-6 text-[#0B0B0B]" />
@@ -1236,8 +1244,15 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     </section>
   );
 
+  const eventSeo = buildEventSeoPayload(
+    selectedEvent,
+    CANONICAL_ORIGIN,
+    standaloneGifts ? 'gifts' : standaloneCheckin ? 'checkin' : 'top'
+  );
+
   return (
     <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col overflow-x-clip selection:bg-[#0B0B0B] selection:text-white">
+      <SeoHead {...eventSeo} />
       {/* Fullscreen Kiosk Check-In & QR Pass Modal */}
       {showCheckinModal && (
         <div
@@ -1356,7 +1371,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 <ArrowLeft className="w-5 h-5" />
               </button>
             )}
-            <h1 className="font-display text-base font-semibold text-[#1A1C1D] truncate">
+            <span className="font-display text-base font-semibold text-[#1A1C1D] truncate">
               {isGiftDeskPortal
                 ? deskAttendant
                   ? `Gift Desk · ${deskAttendant.attendantName}`
@@ -1366,7 +1381,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   : standaloneGifts
                     ? 'Standalone Gift Table'
                     : 'Event Invitation & Check-In'}
-            </h1>
+            </span>
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
@@ -1516,11 +1531,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           </>
                         )}
                       </span>
-                      <h2 className="font-display text-xl sm:text-2xl font-bold text-white">
+                      <h1 className="font-display text-xl sm:text-2xl font-bold text-white">
                         {deskAttendant
                           ? `${selectedEvent.title} — Manned Gift Desk`
                           : extraDataConfig.giftTitle || `${selectedEvent.title} — Gift Table`}
-                      </h2>
+                      </h1>
                       <p className="text-xs text-zinc-300 leading-relaxed max-w-xl">
                         {deskAttendant
                           ? `You are operating an appointed Gift Table link${
@@ -2011,9 +2026,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                             {selectedEvent.category}
                           </span>
                         </div>
-                        <h2 className="font-display text-lg sm:text-xl font-bold text-white truncate">
+                        <h1 className="font-display text-lg sm:text-xl font-bold text-white truncate">
                           {selectedEvent.title}
-                        </h2>
+                        </h1>
                         <p className="text-xs text-zinc-300 mt-0.5 truncate tabular-nums">
                           {selectedEvent.date} · {selectedEvent.time} · {selectedEvent.venue}
                         </p>
@@ -2169,9 +2184,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     >
                       {selectedEvent.organizer} Presents · Official Invitation
                     </span>
-                    <h2 className="font-display text-[28px] sm:text-[36px] leading-[1.12] font-bold text-white tracking-[-0.03em] text-balance">
+                    <h1 className="font-display text-[28px] sm:text-[36px] leading-[1.12] font-bold text-white tracking-[-0.03em] text-balance">
                       {selectedEvent.title}
-                    </h2>
+                    </h1>
                     <div className="pt-1 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[#E8E8EA] text-[13px]">
                       <div className="flex items-center gap-1.5 tabular-nums">
                         <CalendarDays className="w-4 h-4 text-[#E2E2E4] shrink-0" />
