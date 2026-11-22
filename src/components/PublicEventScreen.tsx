@@ -62,6 +62,7 @@ interface PublicEventScreenProps {
   initialDeskToken?: string;
   isLoadingEvents?: boolean;
   isSignedIn?: boolean;
+  canOpenStudio?: boolean;
   hasSetEvent?: boolean;
   onBackHome: () => void;
   onSelectEvent?: (event: EventItem) => void;
@@ -130,6 +131,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   initialDeskToken,
   isLoadingEvents = false,
   isSignedIn = false,
+  canOpenStudio = false,
   onBackHome,
   onSelectEvent,
   onOpenStudio,
@@ -178,6 +180,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const [deskAttendant, setDeskAttendant] = useState<Omit<GiftTableAttendantLink, 'token'> | null>(
     null
   );
+  const isGiftDeskPortal = Boolean(deskToken || deskAttendant);
   const [deskLoading, setDeskLoading] = useState(false);
   const [deskError, setDeskError] = useState<string | null>(null);
   const [deskSearch, setDeskSearch] = useState('');
@@ -737,26 +740,38 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             <CalendarDays className="w-6 h-6 text-[#0B0B0B]" />
           </div>
           <h1 className="font-display text-xl font-bold text-[#0B0B0B]">
-            No published events yet
+            {isGiftDeskPortal
+              ? 'Gift Desk Unavailable'
+              : initialFocus === 'gifts'
+                ? 'Gift Table Unavailable'
+                : 'No published events yet'}
           </h1>
           <p className="text-sm text-[#71717A] leading-relaxed">
-            Sign in to Creator Studio to create and publish your event page, check-in passes, and optional standalone gift table.
+            {isGiftDeskPortal || initialFocus === 'gifts'
+              ? 'This event gift portal is not active yet. Please contact the event organiser for an updated link.'
+              : canOpenStudio
+                ? 'Open Organiser Studio to create and publish your event page, check-in passes, and optional standalone gift table.'
+                : 'This event page has not been published by the organiser yet.'}
           </p>
           <div className="flex flex-col sm:flex-row gap-2 pt-2 justify-center">
-            <button
-              type="button"
-              onClick={onBackHome}
-              className="px-5 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] transition-colors"
-            >
-              Back to Home
-            </button>
-            <button
-              type="button"
-              onClick={onOpenStudio}
-              className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-xs font-semibold text-white transition-colors"
-            >
-              {isSignedIn ? 'Open Creator Studio' : 'Sign In to Publish'}
-            </button>
+            {!isGiftDeskPortal && (
+              <button
+                type="button"
+                onClick={onBackHome}
+                className="px-5 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] transition-colors"
+              >
+                Back to Home
+              </button>
+            )}
+            {canOpenStudio && !isGiftDeskPortal && initialFocus !== 'gifts' && (
+              <button
+                type="button"
+                onClick={onOpenStudio}
+                className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-xs font-semibold text-white transition-colors"
+              >
+                Open Organiser Studio
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1324,32 +1339,38 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       <header className="fixed top-0 inset-x-0 w-full z-50 bg-[#F5F5F7]/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] pt-[env(safe-area-inset-top)]">
         <div className="h-16 max-w-3xl mx-auto px-4 sm:px-6 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1 min-w-0">
-            <button
-              type="button"
-              aria-label="Go Back"
-              onClick={() => {
-                if (issuedPass) {
-                  setIssuedPass(null);
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                } else {
-                  onBackHome();
-                }
-              }}
-              className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-[#E8E8EA] transition-colors text-[#1A1C1D] shrink-0"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
+            {!isGiftDeskPortal && (
+              <button
+                type="button"
+                aria-label="Go Back"
+                onClick={() => {
+                  if (issuedPass) {
+                    setIssuedPass(null);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  } else {
+                    onBackHome();
+                  }
+                }}
+                className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-[#E8E8EA] transition-colors text-[#1A1C1D] shrink-0"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            )}
             <h1 className="font-display text-base font-semibold text-[#1A1C1D] truncate">
-              {standaloneCheckin
-                ? 'Event Check-In Screen'
-                : standaloneGifts
-                  ? 'Standalone Gift Table'
-                  : 'Event Invitation & Check-In'}
+              {isGiftDeskPortal
+                ? deskAttendant
+                  ? `Gift Desk · ${deskAttendant.attendantName}`
+                  : 'Venue Gift Desk'
+                : standaloneCheckin
+                  ? 'Event Check-In Screen'
+                  : standaloneGifts
+                    ? 'Standalone Gift Table'
+                    : 'Event Invitation & Check-In'}
             </h1>
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            {!issuedPass && (
+            {!issuedPass && !isGiftDeskPortal && (
               <>
                 <div className="hidden sm:flex items-center p-1 rounded-full bg-white border border-[#E5E5EA]">
                   <button
@@ -1403,14 +1424,16 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               </>
             )}
             <PWAInstallButton variant="header-light" />
-            <button
-              type="button"
-              onClick={() => setShowCheckinModal(true)}
-              className="h-9 px-3 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold inline-flex items-center gap-1.5 hover:bg-neutral-800 transition-colors"
-            >
-              <QrCode className="w-3.5 h-3.5" />
-              <span className="hidden xs:inline">Check-In QR</span>
-            </button>
+            {!isGiftDeskPortal && (
+              <button
+                type="button"
+                onClick={() => setShowCheckinModal(true)}
+                className="h-9 px-3 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold inline-flex items-center gap-1.5 hover:bg-neutral-800 transition-colors"
+              >
+                <QrCode className="w-3.5 h-3.5" />
+                <span className="hidden xs:inline">Check-In QR</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={handleShare}
@@ -1420,15 +1443,17 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             >
               <Share2 className="w-4.5 h-4.5" />
             </button>
-            <button
-              type="button"
-              onClick={onOpenStudio}
-              title={isSignedIn ? 'Open Creator Studio' : 'Sign In for Creator Studio'}
-              aria-label={isSignedIn ? 'Open Creator Studio' : 'Sign In for Creator Studio'}
-              className="w-8 h-8 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center hover:opacity-85 transition-opacity"
-            >
-              <User className="w-4 h-4" />
-            </button>
+            {canOpenStudio && !isGiftDeskPortal && !standaloneGifts && (
+              <button
+                type="button"
+                onClick={onOpenStudio}
+                title="Open Organiser Studio"
+                aria-label="Open Organiser Studio"
+                className="w-8 h-8 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center hover:opacity-85 transition-opacity"
+              >
+                <User className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -1445,30 +1470,32 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
           {!issuedPass ? (
             standaloneGifts ? (
               <>
-                {/* Mobile View Mode Switcher */}
-                <div className="sm:hidden flex items-center justify-between gap-1 bg-white rounded-full p-1.5 shadow-sm border border-[#E5E5EA]">
-                  <button
-                    type="button"
-                    onClick={() => switchScreenMode('top')}
-                    className="flex-1 py-1.5 rounded-full text-xs font-semibold text-[#71717A]"
-                  >
-                    Invitation
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => switchScreenMode('checkin')}
-                    className="flex-1 py-1.5 rounded-full text-xs font-semibold text-[#71717A]"
-                  >
-                    Check-In
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => switchScreenMode('gifts')}
-                    className="flex-1 py-1.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white"
-                  >
-                    Gift Table
-                  </button>
-                </div>
+                {/* Mobile View Mode Switcher (hidden for Gift Desk staff so they stay inside the Gift Table terminal) */}
+                {!isGiftDeskPortal && (
+                  <div className="sm:hidden flex items-center justify-between gap-1 bg-white rounded-full p-1.5 shadow-sm border border-[#E5E5EA]">
+                    <button
+                      type="button"
+                      onClick={() => switchScreenMode('top')}
+                      className="flex-1 py-1.5 rounded-full text-xs font-semibold text-[#71717A]"
+                    >
+                      Invitation
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => switchScreenMode('checkin')}
+                      className="flex-1 py-1.5 rounded-full text-xs font-semibold text-[#71717A]"
+                    >
+                      Check-In
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => switchScreenMode('gifts')}
+                      className="flex-1 py-1.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white"
+                    >
+                      Gift Table
+                    </button>
+                  </div>
+                )}
 
                 {/* Standalone Gift Table / Appointed Gift Desk Hero Card */}
                 <section className="bg-[#0B0B0B] text-white rounded-[32px] p-5 sm:p-7 shadow-xl space-y-4">
@@ -1683,13 +1710,15 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           >
                             {deskAttendant ? 'Record Next Desk Gift' : 'Record Another Gift'}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => switchScreenMode('top')}
-                            className="px-5 py-2.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-xs font-semibold"
-                          >
-                            Back to Event Page
-                          </button>
+                          {!isGiftDeskPortal && (
+                            <button
+                              type="button"
+                              onClick={() => switchScreenMode('top')}
+                              className="px-5 py-2.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-xs font-semibold"
+                            >
+                              Back to Event Page
+                            </button>
+                          )}
                         </div>
                       </div>
                     ) : (
@@ -2772,7 +2801,6 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 </div>
               )}
 
-              {/* Switch between guest demo and studio */}
               <div className="flex flex-wrap items-center justify-center gap-3 mb-4">
                 <button
                   type="button"
@@ -2785,13 +2813,15 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 >
                   Register Another Guest
                 </button>
-                <button
-                  type="button"
-                  onClick={onOpenStudio}
-                  className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800"
-                >
-                  {isSignedIn ? 'View Guest in Creator Studio' : 'Sign In for Creator Studio'}
-                </button>
+                {canOpenStudio && !isGiftDeskPortal && !standaloneGifts && (
+                  <button
+                    type="button"
+                    onClick={onOpenStudio}
+                    className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800"
+                  >
+                    View Guest in Organiser Studio
+                  </button>
+                )}
               </div>
             </div>
           )}

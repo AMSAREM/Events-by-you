@@ -877,7 +877,7 @@ export function createMemoryRouter() {
   // STUDIO ROUTES (In-Memory Fallback)
   // =========================================================================
 
-  router.get('/studio/bootstrap', requireMemoryAuth, (req: AuthedRequest, res) => {
+  router.get('/studio/bootstrap', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
     try {
       return res.json(memoryStore.loadWorkspace(req.user!.id));
     } catch (err) {
@@ -1683,7 +1683,7 @@ export function createMemoryRouter() {
     }
   });
 
-  router.post('/studio/events/:eventId/gifts', requireMemoryAuth, requireRole('creator', 'organizer', 'gate_staff'), (req: AuthedRequest, res) => {
+  router.post('/studio/events/:eventId/gifts', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
     try {
       const result = memoryStore.recordGiftTableEntry(
         req.params.eventId,
@@ -1699,7 +1699,7 @@ export function createMemoryRouter() {
     }
   });
 
-  router.patch('/studio/attendees/:id/checkin', requireMemoryAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
+  router.patch('/studio/attendees/:id/checkin', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const attendee = memoryStore.toggleCheckIn(req.user!.id, req.params.id);
       let checkInMessageSent = false;
@@ -1955,7 +1955,7 @@ export function createMemoryRouter() {
     }
   });
 
-  router.post('/studio/camera/shots', requireMemoryAuth, requireRole('creator', 'organizer', 'gate_staff'), (req: AuthedRequest, res) => {
+  router.post('/studio/camera/shots', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
     try {
       const shot = memoryStore.addShot(req.user!.id, req.body as DisposableShot);
       return res.status(201).json({ shot });
@@ -1965,7 +1965,7 @@ export function createMemoryRouter() {
     }
   });
 
-  router.patch('/studio/camera/shots/:id/like', requireMemoryAuth, requireRole('creator', 'organizer', 'gate_staff'), (req: AuthedRequest, res) => {
+  router.patch('/studio/camera/shots/:id/like', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
     try {
       const shot = memoryStore.toggleLikeShot(req.user!.id, req.params.id);
       return res.json({ shot });

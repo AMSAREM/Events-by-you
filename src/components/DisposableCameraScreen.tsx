@@ -63,7 +63,6 @@ interface DisposableCameraScreenProps {
   onNavigateSettings?: () => void;
   onResolveAlert?: (id: string) => void;
   onBack?: () => void;
-  onOpenStudio?: () => void;
 }
 
 const FILM_STOCKS: {
@@ -184,7 +183,6 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
   onNavigateSettings,
   onResolveAlert,
   onBack,
-  onOpenStudio,
 }) => {
   const activePool = useMemo(() => {
     const liveOrUpcoming = events.filter((e) => e.status === 'live' || e.status === 'upcoming');
@@ -1160,21 +1158,6 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                   Roll ({eventShots.length})
                 </button>
               </div>
-
-              {onOpenStudio && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    stopCamera();
-                    onOpenStudio();
-                  }}
-                  aria-label="Open Studio"
-                  className="min-h-[40px] px-3 sm:px-4 rounded-full bg-white/15 lg:bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-white/25 lg:hover:bg-neutral-800 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
-                >
-                  <User className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Open Studio</span>
-                </button>
-              )}
             </div>
           </div>
 
@@ -1440,7 +1423,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {events.length > 1 && mode === 'public' && (
+                  {!initialEventId && events.length > 1 && mode === 'public' && (
                     <select
                       aria-label="Switch event roll"
                       value={selectedEvent?.id || ''}

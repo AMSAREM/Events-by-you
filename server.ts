@@ -3152,7 +3152,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
   // PROTECTED STUDIO & EVENT MODULE ROUTES (Authenticated Organisers Only)
   // =========================================================================
 
-  app.get('/api/studio/bootstrap', requireSupabaseAuth, async (req: AuthedRequest, res) => {
+  app.get('/api/studio/bootstrap', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const workspace = await loadOrganizerWorkspace(req.supabase!, req.user!);
       return res.json(workspace);
@@ -4705,7 +4705,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
   app.post(
     '/api/studio/events/:eventId/gifts',
     requireSupabaseAuth,
-    requireRole('creator', 'organizer', 'gate_staff'),
+    requireRole('creator', 'organizer'),
     async (req: AuthedRequest, res) => {
       try {
         const client = req.supabase!;
@@ -5204,7 +5204,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
     }
   });
 
-  app.patch('/api/studio/attendees/:id/checkin', requireSupabaseAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
+  app.patch('/api/studio/attendees/:id/checkin', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const client = req.supabase!;
       const { data: existing, error: fetchErr } = await client
@@ -5625,7 +5625,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
   });
 
   // Disposable Camera Routes
-  app.post('/api/studio/camera/shots', requireSupabaseAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
+  app.post('/api/studio/camera/shots', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const shot = req.body as DisposableShot;
     try {
       const client = req.supabase!;
@@ -5711,7 +5711,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
     }
   });
 
-  app.patch('/api/studio/camera/shots/:id/like', requireSupabaseAuth, requireRole('creator', 'organizer', 'gate_staff'), async (req: AuthedRequest, res) => {
+  app.patch('/api/studio/camera/shots/:id/like', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const client = req.supabase!;
       const { data: existing, error: fetchErr } = await client

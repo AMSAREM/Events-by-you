@@ -240,6 +240,13 @@ export default function App() {
   const [scheduleBlocks, setScheduleBlocks] = useState<ScheduleBlock[]>([]);
   const [alerts, setAlerts] = useState<SystemAlert[]>([]);
   const [profile, setProfile] = useState<OrganizerProfile>(EMPTY_PROFILE);
+  const effectiveRole: AppRole =
+    profile.email?.toLowerCase() === creatorEmail.toLowerCase()
+      ? 'creator'
+      : profile.appRole === 'gate_staff'
+        ? 'gate_staff'
+        : 'organizer';
+  const isStudioAuthorized = effectiveRole === 'organizer' || effectiveRole === 'creator';
   const [disposableShots, setDisposableShots] = useState<DisposableShot[]>([]);
   const [rollSettings, setRollSettings] = useState<Record<string, DisposableRollSettings>>({});
   const [creatorApps, setCreatorApps] = useState<CreatorApp[]>([]);
@@ -371,6 +378,11 @@ export default function App() {
         lower.includes('expired') ||
         lower.includes('timed out') ||
         lower.includes('inactivity');
+      const isForbidden =
+        (err instanceof ApiError && err.status === 403) ||
+        lower.includes('requires one of') ||
+        lower.includes('only an organiser') ||
+        lower.includes('organiser');
       if (isAuthFailure) {
         saveStoredSession(null);
         saveStoredCreatorToken(null);
@@ -382,6 +394,17 @@ export default function App() {
           );
           setRoute('signin');
         }
+      } else if (isForbidden) {
+        setProfile((prev) => ({ ...prev, appRole: 'gate_staff' }));
+        setEvents([]);
+        setAttendees([]);
+        setScheduleBlocks([]);
+        setAlerts([]);
+        setDisposableShots([]);
+        setRollSettings({});
+        setCreatorApps([]);
+        setCreatorAppLogs([]);
+        setApiBannerError('Only event organisers can enter the Studio workspace.');
       } else {
         setApiBannerError(msg);
       }
@@ -1013,9 +1036,10 @@ export default function App() {
   const handleAddShot = async (
     shot: DisposableShot
   ): Promise<{ ok: boolean; error?: string }> => {
+    const useStudioApi = isSignedIn && isStudioAuthorized && route === 'studio';
     setDisposableShots((prev) => [shot, ...prev]);
     try {
-      const res = isSignedIn
+      const res = useStudioApi
         ? await api.studio.addShot(shot)
         : await api.public.addCameraShot(shot.eventId, shot);
       setDisposableShots((prev) => prev.map((s) => (s.id === shot.id ? res.shot : s)));
@@ -1029,6 +1053,7 @@ export default function App() {
   };
 
   const handleToggleLikeShot = async (shotId: string) => {
+    const useStudioApi = isSignedIn && isStudioAuthorized && route === 'studio';
     const previous = disposableShots;
     setDisposableShots((prev) =>
       prev.map((s) =>
@@ -1042,7 +1067,7 @@ export default function App() {
       )
     );
     try {
-      const res = isSignedIn
+      const res = useStudioApi
         ? await api.studio.toggleLikeShot(shotId)
         : await api.public.toggleLikeCameraShot(shotId);
       setDisposableShots((prev) => prev.map((s) => (s.id === shotId ? res.shot : s)));
@@ -1054,10 +1079,11 @@ export default function App() {
   };
 
   const handleDeleteShot = async (shotId: string, shooterKey?: string) => {
+    const useStudioApi = isSignedIn && isStudioAuthorized && route === 'studio';
     const previous = disposableShots;
     setDisposableShots((prev) => prev.filter((s) => s.id !== shotId));
     try {
-      if (shooterKey || !isSignedIn) {
+      if (shooterKey || !useStudioApi) {
         await api.public.deleteCameraShot(shotId, shooterKey || '');
       } else {
         await api.studio.deleteShot(shotId);
@@ -1532,13 +1558,7 @@ export default function App() {
     }
   };
 
-  const effectiveRole: AppRole =
-    profile.email?.toLowerCase() === creatorEmail.toLowerCase()
-      ? 'creator'
-      : profile.appRole === 'gate_staff'
-        ? 'gate_staff'
-        : 'organizer';
-  const hasSetEvent = isSignedIn && safeEvents.length > 0;
+  const hasSetEvent = isSignedIn && isStudioAuthorized && safeEvents.length > 0;
   const unresolvedCount = safeAlerts.filter((a) => !a.resolved).length;
   const landingEvents =
     isSignedIn && safeEvents.length > 0
@@ -1988,6 +2008,7 @@ export default function App() {
           initialDeskToken={publicPreviewDeskToken}
           isLoadingEvents={publicEventsLoading}
           isSignedIn={isSignedIn}
+          canOpenStudio={isSignedIn && isStudioAuthorized}
           hasSetEvent={hasSetEvent}
           onBackHome={navigateHome}
           onSelectEvent={(evt) => {
@@ -2080,12 +2101,14 @@ export default function App() {
       camPool.find(
         (e) => e.id.toLowerCase() === camTargetLower || e.slug.toLowerCase() === camTargetLower
       ) ?? camPool[0];
+    const scopedCamEvents =
+      cameraEventId && resolvedCamEvent ? [resolvedCamEvent] : camPool;
     return (
       <>
         <Suspense fallback={routeLoadingFallback}>
           <DisposableCameraScreen
           mode="public"
-          events={camPool}
+          events={scopedCamEvents}
           shots={safeDisposableShots}
           rollSettings={safeRollSettings}
           alerts={safeAlerts}
@@ -2099,14 +2122,15 @@ export default function App() {
           onDeleteShot={handleDeleteShot}
           onDevelopRoll={handleDevelopRoll}
           onUpdateRollSettings={handleUpdateRollSettings}
-          onBack={() => {
-            setRoute(cameraReturnRoute);
-            syncBrowserPath(cameraReturnRoute === 'home' ? '/' : window.location.pathname.replace(/\/camera\/?$/i, ''));
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
-          onOpenStudio={() => {
-            openStudioCamera(resolvedCamEvent?.id);
-          }}
+          onBack={
+            cameraReturnRoute === 'demo-event'
+              ? () => {
+                  setRoute('demo-event');
+                  syncBrowserPath(window.location.pathname.replace(/\/camera\/?$/i, '') || '/');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }
+              : undefined
+          }
         />
         </Suspense>
         {sessionTimeoutModal}
@@ -2184,6 +2208,45 @@ export default function App() {
 
 
 
+  // Hard Studio Role Gate: Only event organisers (and the platform creator) may enter the Studio workspace
+  if (!isStudioAuthorized) {
+    return (
+      <div className="min-h-dvh w-full bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center px-4 py-10">
+        <div className="max-w-md w-full bg-white rounded-[28px] border border-[#E5E5EA] p-6 sm:p-8 shadow-sm text-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
+            <ShieldCheck className="w-6 h-6" />
+          </div>
+          <div className="space-y-1.5">
+            <h1 className="font-display text-xl font-bold text-[#0B0B0B]">
+              Organiser Access Only
+            </h1>
+            <p className="text-xs sm:text-sm text-[#71717A] leading-relaxed">
+              Attendees and gift table personnel do not have access to the Organiser Studio workspace. Only an event organiser can enter the studio.
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2 pt-2 justify-center">
+            <button
+              type="button"
+              onClick={navigateHome}
+              className="px-5 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] transition-colors"
+            >
+              Back to Public Page
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSignOut()}
+              className="px-5 py-2.5 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-xs font-semibold text-white transition-colors inline-flex items-center justify-center gap-1.5"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Sign Out</span>
+            </button>
+          </div>
+        </div>
+        {sessionTimeoutModal}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-dvh w-full max-w-full bg-white text-[#0B0B0B] overflow-x-clip">
       <div className="w-full max-w-[1600px] mx-auto pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:pl-[max(1.25rem,env(safe-area-inset-left))] sm:pr-[max(1.25rem,env(safe-area-inset-right))] md:px-6 lg:px-8 xl:px-10 pt-[max(0.75rem,env(safe-area-inset-top))] sm:pt-5 lg:pt-6 pb-[calc(6.25rem+env(safe-area-inset-bottom))] md:pb-8 flex flex-col md:flex-row gap-3.5 sm:gap-4 md:gap-5 lg:gap-7 xl:gap-8 md:items-start min-w-0 overflow-x-clip">
@@ -2191,14 +2254,10 @@ export default function App() {
         <NavigationRail
           activeScreen={activeScreen}
           userRole={effectiveRole}
-          onCreateEvent={effectiveRole !== 'gate_staff' ? openCreateWizard : undefined}
+          onCreateEvent={openCreateWizard}
           onNavigate={(screen) => {
             if (screen === 'console' && effectiveRole !== 'creator') {
               setApiBannerError('Access denied: Apps Creator Console requires the creator role.');
-              return;
-            }
-            if (screen === 'billing' && effectiveRole === 'gate_staff') {
-              setApiBannerError('Access denied: Billing & Plans are restricted to organizers.');
               return;
             }
             setWorkspaceEventId(null);
@@ -2238,7 +2297,6 @@ export default function App() {
           )}
 
           {(supabaseConfigured || inMemoryMode) &&
-            effectiveRole !== 'gate_staff' &&
             !studioLoading &&
             safeEvents.length === 0 &&
             studioSubScreen !== 'create-event' && (
@@ -2523,7 +2581,7 @@ export default function App() {
                 />
               )}
 
-              {activeScreen === 'billing' && effectiveRole !== 'gate_staff' && (
+              {activeScreen === 'billing' && (
                 <BillingScreen
                   profile={profile}
                   events={safeEvents}
@@ -2567,7 +2625,7 @@ export default function App() {
             profile={profile}
             scheduleBlocks={safeScheduleBlocks}
             capacityThreshold={profile.capacityAlertThreshold}
-            canPublishQrPass={effectiveRole !== 'gate_staff'}
+            canPublishQrPass={true}
             onToggleQrPassPublished={handleToggleQrPassPublished}
             onClose={() => setSelectedEventId(null)}
             onUpdateEvent={handleUpdateEvent}

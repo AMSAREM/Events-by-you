@@ -69,7 +69,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
   const [orgEmail, setOrgEmail] = useState(initialEmail);
   const [orgName, setOrgName] = useState('');
   const [countryGateway, setCountryGateway] = useState('GH');
-  const [accountRole, setAccountRole] = useState<'organizer' | 'gate_staff'>('organizer');
+  const accountRole = 'organizer' as const;
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [agreed, setAgreed] = useState(true);
@@ -462,40 +462,19 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
                     />
                   </div>
 
-                  {/* Workspace RBAC Role */}
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-xs font-semibold text-[#1A1C1D] flex items-center justify-between">
-                      <span>Workspace Access Role (RBAC)</span>
-                      <span className="text-[11px] text-[#71717A]">Row Level Security</span>
-                    </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {(
-                        [
-                          { id: 'organizer', label: 'Individual / Event Host', sub: 'Create events, programs & manage passes' },
-                          { id: 'gate_staff', label: 'Gate Check-In Staff', sub: 'QR scanner & door check-in only' },
-                        ] as const
-                      ).map((opt) => (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          onClick={() => setAccountRole(opt.id)}
-                          className={`rounded-2xl px-4 py-2.5 text-left border transition-colors ${
-                            accountRole === opt.id
-                              ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
-                              : 'bg-[#F5F5F7] text-[#0B0B0B] border-transparent hover:border-[#E5E5EA]'
-                          }`}
-                        >
-                          <span className="text-xs font-semibold block">{opt.label}</span>
-                          <span
-                            className={`text-[10px] block mt-0.5 ${
-                              accountRole === opt.id ? 'text-zinc-300' : 'text-[#71717A]'
-                            }`}
-                          >
-                            {opt.sub}
-                          </span>
-                        </button>
-                      ))}
+                  {/* Workspace Access Role */}
+                  <div className="rounded-2xl px-4 py-2.5 bg-[#F5F5F7] border border-[#E5E5EA] flex items-center justify-between gap-3">
+                    <div>
+                      <span className="text-xs font-semibold text-[#0B0B0B] block">
+                        Event Organiser Studio Account
+                      </span>
+                      <span className="text-[10px] text-[#71717A] block mt-0.5">
+                        Only event organisers can enter the Studio workspace
+                      </span>
                     </div>
+                    <span className="px-2.5 py-1 rounded-full bg-[#0B0B0B] text-white text-[10px] font-bold uppercase tracking-wider shrink-0">
+                      Organiser
+                    </span>
                   </div>
 
                   {/* Password Field + 4-Bar Strength Indicator */}

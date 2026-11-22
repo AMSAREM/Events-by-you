@@ -1198,6 +1198,7 @@ export async function localFallbackRequest<T>(
   const user = getAuthenticatedUser(db, accessToken);
 
   if (method === 'GET' && path === '/studio/bootstrap') {
+    requireRoles(user, ['creator', 'organizer']);
     return loadUserWorkspace(db, user.id) as T;
   }
 
@@ -1734,7 +1735,7 @@ export async function localFallbackRequest<T>(
 
   const studioGiftMatch = path.match(/^\/studio\/events\/([^/]+)\/gifts$/);
   if (method === 'POST' && studioGiftMatch) {
-    requireRoles(user, ['creator', 'organizer', 'gate_staff']);
+    requireRoles(user, ['creator', 'organizer']);
     const eventId = decodeURIComponent(studioGiftMatch[1]);
     const evt = db.events.find((e) => e.id === eventId && e.organizerId === user.id);
     if (!evt) throw new LocalApiError('Event not found.', 404);
@@ -1899,6 +1900,7 @@ export async function localFallbackRequest<T>(
 
   const checkinMatch = path.match(/^\/studio\/attendees\/([^/]+)\/checkin$/);
   if (method === 'PATCH' && checkinMatch) {
+    requireRoles(user, ['creator', 'organizer']);
     const attId = decodeURIComponent(checkinMatch[1]);
     const att = db.attendees.find((a) => a.id === attId);
     if (!att) throw new LocalApiError('Attendee not found.', 404);
@@ -2078,6 +2080,7 @@ export async function localFallbackRequest<T>(
 
   // Camera
   if (method === 'POST' && path === '/studio/camera/shots') {
+    requireRoles(user, ['creator', 'organizer']);
     const shot = body as unknown as DisposableShot;
     const existingEventShots = db.disposableShots.filter((s) => s.eventId === shot.eventId);
     const rollCfg = db.rollSettings[shot.eventId] ?? { exposuresLimit: 24, darkroomMode: false };
@@ -2107,6 +2110,7 @@ export async function localFallbackRequest<T>(
 
   const shotLikeMatch = path.match(/^\/studio\/camera\/shots\/([^/]+)\/like$/);
   if (method === 'PATCH' && shotLikeMatch) {
+    requireRoles(user, ['creator', 'organizer']);
     const shotId = decodeURIComponent(shotLikeMatch[1]);
     const shot = db.disposableShots.find((s) => s.id === shotId);
     if (!shot) throw new LocalApiError('Shot not found.', 404);
