@@ -13,6 +13,7 @@ import {
   ImagePlus,
   LayoutGrid,
   Lock,
+  Pencil,
   RefreshCw,
   Share2,
   ShieldCheck,
@@ -55,7 +56,7 @@ interface DisposableCameraScreenProps {
   } | null;
   onAddShot: (shot: DisposableShot) => Promise<{ ok: boolean; error?: string } | void> | void;
   onToggleLikeShot: (shotId: string) => Promise<void> | void;
-  onDeleteShot: (shotId: string) => Promise<void> | void;
+  onDeleteShot: (shotId: string, shooterKey?: string) => Promise<void> | void;
   onDevelopRoll: (eventId: string) => Promise<void> | void;
   onUpdateRollSettings: (eventId: string, next: DisposableRollSettings) => Promise<void> | void;
   onManageEvent?: (event: EventItem) => void;
@@ -68,6 +69,7 @@ interface DisposableCameraScreenProps {
 const FILM_STOCKS: {
   id: FilmStock;
   label: string;
+  shortLabel: string;
   iso: string;
   cssFilter: string;
   tintOverlay: string;
@@ -75,6 +77,7 @@ const FILM_STOCKS: {
   {
     id: 'ilford-bw',
     label: 'Ilford HP5',
+    shortLabel: 'B&W 400',
     iso: 'B&W 400',
     cssFilter: 'grayscale(1) contrast(1.22) brightness(0.98)',
     tintOverlay: 'rgba(255,255,255,0)',
@@ -82,6 +85,7 @@ const FILM_STOCKS: {
   {
     id: 'kodak-gold',
     label: 'Kodak Gold',
+    shortLabel: 'Gold 200',
     iso: 'Warm 200',
     cssFilter: 'sepia(0.24) saturate(1.22) contrast(1.06) brightness(1.02)',
     tintOverlay: 'rgba(245, 180, 90, 0.08)',
@@ -89,6 +93,7 @@ const FILM_STOCKS: {
   {
     id: 'fuji-c200',
     label: 'Fuji C200',
+    shortLabel: 'Fuji C200',
     iso: 'Daylight',
     cssFilter: 'contrast(1.06) saturate(1.12) hue-rotate(-4deg)',
     tintOverlay: 'rgba(80, 175, 130, 0.06)',
@@ -96,6 +101,7 @@ const FILM_STOCKS: {
   {
     id: 'cinestill-800t',
     label: 'CineStill 800T',
+    shortLabel: 'Cine 800T',
     iso: 'Night 800',
     cssFilter: 'contrast(1.12) saturate(1.15) hue-rotate(8deg) brightness(0.95)',
     tintOverlay: 'rgba(65, 125, 220, 0.09)',
@@ -111,7 +117,6 @@ function playMechanicalShutterSound() {
     const ctx = new AudioCtx();
     const now = ctx.currentTime;
 
-    // Crisp mechanical shutter click
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'triangle';
@@ -210,6 +215,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const contactSheetRef = useRef<HTMLElement | null>(null);
 
   const [cameraActive, setCameraActive] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
@@ -223,7 +229,11 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       (mode === 'studio' ? profile.name : 'Guest Photographer')
   );
   const [guestNameTouched, setGuestNameTouched] = useState(false);
+  const [editingGuestName, setEditingGuestName] = useState(false);
   const [caption, setCaption] = useState('');
+
+  // Mobile (< lg) single-pane focus switcher: Camera vs Film Roll / Contact Sheet
+  const [mobilePanel, setMobilePanel] = useState<'camera' | 'roll'>('camera');
 
   useEffect(() => {
     if (guestNameTouched) return;
@@ -245,10 +255,12 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     return getOrCreateShooterKey();
   }, [mode, profile.email, activePassCode, selectedEvent?.id]);
 
-  // Tactile shutter + winding states
+  // Tactile shutter + deletion states
   const [flashPulse, setFlashPulse] = useState(false);
   const [winding, setWinding] = useState(false);
   const [savingShot, setSavingShot] = useState(false);
+  const [deletingShotId, setDeletingShotId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [zippingPhotos, setZippingPhotos] = useState(false);
   const [shotError, setShotError] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -269,8 +281,18 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(null), 2600);
+    window.setTimeout(() => {
+      setToastMsg((curr) => (curr === msg ? null : curr));
+    }, 2600);
   };
+
+  useEffect(() => {
+    if (!confirmDeleteId) return;
+    const timer = window.setTimeout(() => {
+      setConfirmDeleteId(null);
+    }, 3500);
+    return () => window.clearTimeout(timer);
+  }, [confirmDeleteId]);
 
   const stopCamera = () => {
     if (streamRef.current) {
@@ -296,7 +318,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     stopCamera();
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError(
-        'Live camera API is unavailable here. Use "Upload Photo" or "Snap Film Scene" below.'
+        'Live camera unavailable here. Tap Gallery Upload or Shutter for a 35mm frame.'
       );
       return;
     }
@@ -314,7 +336,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       });
     } catch {
       setCameraError(
-        'Camera access unavailable or declined. Use "Upload Photo" or "Snap Film Frame" to shoot onto the roll.'
+        'Camera permission unavailable. Tap Upload or Shutter to snap onto the roll.'
       );
     }
   };
@@ -333,7 +355,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     const next = facingMode === 'environment' ? 'user' : 'environment';
     setFacingMode(next);
     if (cameraActive) {
-      startCamera(next);
+      void startCamera(next);
     }
   };
 
@@ -370,6 +392,12 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     });
   }, [eventShots, galleryTab, searchQuery]);
 
+  const isOwnShot = (shot: DisposableShot): boolean =>
+    Boolean(shot.shooterKey && shot.shooterKey === effectiveShooterKey);
+
+  const canDeleteShot = (shot: DisposableShot): boolean =>
+    mode === 'studio' || isOwnShot(shot);
+
   const myEventShots = useMemo(() => {
     const authorNorm = (guestName.trim() || 'Guest Photographer').toLowerCase();
     return eventShots.filter((s) =>
@@ -394,6 +422,33 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
   const activeStockMeta =
     FILM_STOCKS.find((f) => f.id === selectedStock) ?? FILM_STOCKS[0];
 
+  const handleRequestDeleteShot = async (shot: DisposableShot) => {
+    if (!canDeleteShot(shot) || deletingShotId === shot.id) return;
+
+    if (confirmDeleteId !== shot.id) {
+      setConfirmDeleteId(shot.id);
+      return;
+    }
+
+    setConfirmDeleteId(null);
+    setDeletingShotId(shot.id);
+    try {
+      const keyArg = mode === 'public' && isOwnShot(shot) ? effectiveShooterKey : undefined;
+      await Promise.resolve(onDeleteShot(shot.id, keyArg));
+      setCollageSelectedIds((prev) => prev.filter((id) => id !== shot.id));
+      if (lightboxShot?.id === shot.id) {
+        setLightboxShot(null);
+      }
+      setShotError(null);
+      const frameCode = `${String(shot.frameNumber).padStart(2, '0')}A`;
+      showToast(`Frame #${frameCode} deleted`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to delete photo right now.');
+    } finally {
+      setDeletingShotId(null);
+    }
+  };
+
   const triggerShutterEffects = () => {
     playMechanicalShutterSound();
     if (flashMode !== 'off') {
@@ -408,7 +463,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     if (!selectedEvent) return;
     if (isUserLimitReached) {
       setShotError(
-        `Camera limit reached: each user is allowed up to ${MAX_SHOTS_PER_USER} pictures per event.`
+        `Limit reached (${MAX_SHOTS_PER_USER}/${MAX_SHOTS_PER_USER}). Delete a photo from your roll to retake.`
       );
       return;
     }
@@ -417,11 +472,9 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       const w = canvas.width;
       const h = canvas.height;
 
-      // Subtle tint wash
       ctx.fillStyle = activeStockMeta.tintOverlay;
       ctx.fillRect(0, 0, w, h);
 
-      // Analog lens vignette
       const grad = ctx.createRadialGradient(
         w / 2,
         h / 2,
@@ -435,7 +488,6 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Subtle organic film grain specks
       ctx.fillStyle = 'rgba(255,255,255,0.055)';
       for (let i = 0; i < 650; i++) {
         const gx = Math.random() * w;
@@ -443,7 +495,6 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
         ctx.fillRect(gx, gy, 1.4, 1.4);
       }
 
-      // Quartz 35mm LED date stamp (scaled proportionally to canvas resolution)
       if (dateStampEnabled) {
         const fontPx = Math.max(24, Math.round(w * 0.027));
         const marginX = Math.round(w * 0.035);
@@ -489,7 +540,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       if (res && res.ok === false) {
         setShotError(
           res.error ||
-            `Camera limit reached: each user is allowed up to ${MAX_SHOTS_PER_USER} pictures per event.`
+            `Limit reached (${MAX_SHOTS_PER_USER}/${MAX_SHOTS_PER_USER}). Delete a photo to retake.`
         );
         showToast(res.error || `Max ${MAX_SHOTS_PER_USER} pictures per user reached`);
         return;
@@ -497,8 +548,8 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       setCaption('');
       showToast(
         currentRollConfig.darkroomMode
-          ? `Frame #${String(nextFrame).padStart(2, '0')}A sealed in darkroom (${userShotsUsed + 1}/${MAX_SHOTS_PER_USER})`
-          : `Frame #${String(nextFrame).padStart(2, '0')}A captured (${userShotsUsed + 1}/${MAX_SHOTS_PER_USER} shots)`
+          ? `Frame #${String(nextFrame).padStart(2, '0')}A sealed (${userShotsUsed + 1}/${MAX_SHOTS_PER_USER})`
+          : `Frame #${String(nextFrame).padStart(2, '0')}A captured (${userShotsUsed + 1}/${MAX_SHOTS_PER_USER})`
       );
     } finally {
       setSavingShot(false);
@@ -509,7 +560,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     if (!selectedEvent || isCaptureDisabled) {
       if (isUserLimitReached) {
         setShotError(
-          `You have used all ${MAX_SHOTS_PER_USER} shots on this camera. Select 2–5 shots to build your Collage!`
+          `You've used all ${MAX_SHOTS_PER_USER} shots. Delete a photo in your roll to retake or build a Collage.`
         );
       }
       return;
@@ -555,7 +606,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       return;
     }
 
-    // Procedural high-contrast documentary film frame fallback (zero dead-end when no webcam)
+    // Procedural high-contrast documentary film frame fallback
     ctx.save();
     ctx.filter = activeStockMeta.cssFilter;
     const sceneScale = canvas.width / 960;
@@ -568,7 +619,6 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, 960, 720);
 
-    // Stage spotlights / architectural sunbeams
     const beamOffsets = [220, 480, 740];
     beamOffsets.forEach((bx, idx) => {
       const beam = ctx.createRadialGradient(bx, 110, 12, bx + (idx - 1) * 40, 520, 380);
@@ -585,7 +635,6 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       ctx.fill();
     });
 
-    // Gathering crowd silhouettes
     ctx.fillStyle = '#0B0B0B';
     for (let i = 0; i < 14; i++) {
       const px = 65 + i * 64 + ((i % 3) - 1) * 10;
@@ -598,7 +647,6 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       ctx.fill();
     }
 
-    // Event title strip subtle editorial imprint
     ctx.fillStyle = 'rgba(255,255,255,0.72)';
     ctx.font = '600 18px "Plus Jakarta Sans", sans-serif';
     ctx.fillText(`${selectedEvent.title} · ${selectedEvent.city}`, 38, 668);
@@ -787,7 +835,6 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     ctx.fillStyle = '#0B0B0B';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Contact sheet header
     ctx.fillStyle = '#FFFFFF';
     ctx.font = 'bold 28px "Plus Jakarta Sans", sans-serif';
     ctx.fillText(`${selectedEvent.title.toUpperCase()} — 35MM CONTACT SHEET`, pad, 54);
@@ -929,7 +976,6 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
         frames.push({ x: areaX, y: areaY + ch + gap, w: cw, h: ch });
         frames.push({ x: areaX + cw + gap, y: areaY + ch + gap, w: cw, h: ch });
       } else {
-        // 5-mosaic: 2 featured frames on top, 3 frames across bottom
         const topH = Math.round(areaH * 0.55);
         const botH = areaH - topH - gap;
         const topW = (areaW - gap) / 2;
@@ -982,7 +1028,6 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
         })
       );
 
-      // Footer editorial stamp
       const footY = height - pad - footerH + 46;
       ctx.fillStyle = isDark ? '#FFFFFF' : '#0B0B0B';
       ctx.font = 'bold 38px "Plus Jakarta Sans", sans-serif';
@@ -994,7 +1039,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       ctx.fillStyle = isDark ? '#A1A1AA' : '#71717A';
       ctx.font = '20px "JetBrains Mono", monospace';
       ctx.fillText(
-        `${selectedEvent?.date || ''} · ${selectedEvent?.city || ''} · ${collageShots.length} FRAMES · EVENTS APP 35MM`.toUpperCase(),
+        `${selectedEvent?.date || ''} · ${selectedEvent?.city || ''} · ${collageShots.length} FRAMES · EVENTS BY YOU 35MM`.toUpperCase(),
         areaX,
         footY + 56
       );
@@ -1051,19 +1096,21 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     handleDownloadCollage();
   };
 
+  const latestShot = eventShots[0] ?? null;
+
   return (
     <div
       className={
         mode === 'public'
-          ? 'min-h-screen bg-[#F5F5F7] text-[#0B0B0B] antialiased flex flex-col'
-          : 'space-y-6'
+          ? 'min-h-dvh bg-[#0B0B0B] lg:bg-[#F5F5F7] text-white lg:text-[#0B0B0B] antialiased flex flex-col overflow-x-hidden'
+          : 'space-y-4 lg:space-y-6 overflow-x-hidden'
       }
     >
-      {/* Public Standalone Top Bar (only when accessed outside Studio) */}
+      {/* Compact Public Top Bar — Mobile WhatsApp Dark Header / Desktop Frosted Bar */}
       {mode === 'public' && (
-        <header className="sticky top-0 z-40 w-full bg-[#F5F5F7]/90 backdrop-blur-xl border-b border-[#E5E5EA]">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 h-16 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 min-w-0">
+        <header className="sticky top-0 z-40 w-full bg-[#0B0B0B]/95 lg:bg-[#F5F5F7]/90 backdrop-blur-xl border-b border-white/10 lg:border-[#E5E5EA]">
+          <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-10 h-14 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
               {onBack && (
                 <button
                   type="button"
@@ -1072,19 +1119,48 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                     onBack();
                   }}
                   aria-label="Go Back"
-                  className="w-10 h-10 rounded-full hover:bg-[#E8E8EA] flex items-center justify-center text-[#0B0B0B] transition-colors shrink-0"
+                  className="w-11 h-11 rounded-full hover:bg-white/10 lg:hover:bg-[#E8E8EA] flex items-center justify-center text-white lg:text-[#0B0B0B] transition-colors shrink-0"
                 >
                   <ArrowLeft className="w-5 h-5" />
                 </button>
               )}
               <div className="min-w-0">
-                <h1 className="font-display text-base sm:text-lg font-bold text-[#0B0B0B] truncate">
-                  Event Disposable Camera
+                <h1 className="font-display text-sm sm:text-base font-bold text-white lg:text-[#0B0B0B] truncate">
+                  {selectedEvent?.title || 'Disposable Camera'}
                 </h1>
+                <p className="text-[11px] font-mono text-zinc-400 lg:text-[#71717A] truncate tabular-nums">
+                  {userShotsLeft}/{MAX_SHOTS_PER_USER} shots left · {eventShots.length}/{currentRollConfig.exposuresLimit} roll
+                </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* Mobile Camera / Roll Quick Toggle */}
+              <div className="lg:hidden inline-flex items-center p-0.5 rounded-full bg-white/10 border border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setMobilePanel('camera')}
+                  className={`min-h-[36px] px-3 rounded-full text-[11px] font-semibold transition-colors ${
+                    mobilePanel === 'camera'
+                      ? 'bg-white text-[#0B0B0B]'
+                      : 'text-zinc-300'
+                  }`}
+                >
+                  Camera
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobilePanel('roll')}
+                  className={`min-h-[36px] px-3 rounded-full text-[11px] font-semibold transition-colors tabular-nums ${
+                    mobilePanel === 'roll'
+                      ? 'bg-white text-[#0B0B0B]'
+                      : 'text-zinc-300'
+                  }`}
+                >
+                  Roll ({eventShots.length})
+                </button>
+              </div>
+
               {onOpenStudio && (
                 <button
                   type="button"
@@ -1092,42 +1168,58 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                     stopCamera();
                     onOpenStudio();
                   }}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 transition-colors whitespace-nowrap"
+                  aria-label="Open Studio"
+                  className="min-h-[40px] px-3 sm:px-4 rounded-full bg-white/15 lg:bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-white/25 lg:hover:bg-neutral-800 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 >
                   <User className="w-3.5 h-3.5" />
-                  <span>Open Studio</span>
+                  <span className="hidden sm:inline">Open Studio</span>
                 </button>
               )}
             </div>
           </div>
+
+          {/* Slim Single-Line Checked-In Pass Strip */}
+          {(verifiedPass || activePassCode || initialGuestName) && (
+            <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-10 py-1.5 border-t border-white/10 lg:border-[#E5E5EA] bg-emerald-500/10 lg:bg-[#0B0B0B] text-emerald-200 lg:text-white flex items-center justify-between gap-2 text-[11px]">
+              <span className="inline-flex items-center gap-1.5 font-medium truncate">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span className="truncate">
+                  {verifiedPass?.attendeeName || initialGuestName || 'Checked-In Guest'}
+                  {activePassCode ? ` · ${activePassCode}` : ''}
+                </span>
+              </span>
+              <span className="font-mono font-bold tabular-nums shrink-0 text-white">
+                {userShotsLeft}/{MAX_SHOTS_PER_USER} left
+              </span>
+            </div>
+          )}
         </header>
       )}
 
       <div
         className={
           mode === 'public'
-            ? 'flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 py-6 sm:py-8 space-y-6'
-            : 'space-y-6'
+            ? 'flex-1 w-full max-w-7xl mx-auto px-0 sm:px-6 lg:px-10 py-0 sm:py-5 lg:py-8 flex flex-col lg:block space-y-0 lg:space-y-6'
+            : 'space-y-4 lg:space-y-6'
         }
       >
         {/* Toast feedback */}
         {toastMsg && (
-          <div className="fixed bottom-20 md:bottom-6 right-4 sm:right-6 z-50 px-4 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold shadow-xl flex items-center gap-2">
-            <Check className="w-3.5 h-3.5 text-emerald-400" />
-            <span>{toastMsg}</span>
+          <div className="fixed bottom-24 lg:bottom-6 left-1/2 -translate-x-1/2 lg:left-auto lg:translate-x-0 lg:right-6 z-50 px-4 py-2.5 rounded-full bg-white lg:bg-[#0B0B0B] text-[#0B0B0B] lg:text-white text-xs font-semibold shadow-2xl border border-black/10 lg:border-white/15 flex items-center gap-2 whitespace-nowrap max-w-[92vw]">
+            <Check className="w-3.5 h-3.5 text-emerald-600 lg:text-emerald-400 shrink-0" />
+            <span className="truncate">{toastMsg}</span>
           </div>
         )}
 
         {/* Studio Header & Utility Bar */}
         {mode === 'studio' && (
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <div>
-              <h1 className="font-display text-[28px] sm:text-[34px] font-bold tracking-[-0.02em] text-[#0B0B0B]">
+              <h1 className="font-display text-2xl sm:text-[32px] font-bold tracking-[-0.02em] text-[#0B0B0B]">
                 Event Disposable Camera
               </h1>
-              <p className="text-sm text-[#71717A] mt-0.5">
-                Shared 35mm analog film rolls for guests — shoot candid frames, seal in darkroom,
-                and export contact sheets.
+              <p className="text-xs sm:text-sm text-[#71717A] mt-0.5">
+                35mm shared guest film rolls — capture, review, delete, develop, and export contact sheets.
               </p>
             </div>
 
@@ -1149,52 +1241,21 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
           </div>
         )}
 
-        {/* Checked-In SMS / Pass Auto-Access Banner */}
-        {mode === 'public' && (verifiedPass || activePassCode || initialGuestName) && (
-          <section className="p-4 sm:p-5 rounded-3xl bg-[#0B0B0B] text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 shadow-sm">
-            <div className="flex items-start sm:items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-2xl bg-emerald-400/15 border border-emerald-400/30 text-emerald-300 flex items-center justify-center shrink-0">
-                <ShieldCheck className="w-5 h-5" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs sm:text-sm font-bold text-white">
-                    {verifiedPass
-                      ? `${verifiedPass.attendeeName} · Check-In Camera Unlocked`
-                      : initialGuestName
-                        ? `${initialGuestName} · Guest Camera Unlocked`
-                        : 'Check-In Camera Pass Unlocked'}
-                  </span>
-                  {activePassCode && (
-                    <span className="px-2.5 py-0.5 rounded-full bg-white/15 font-mono text-[11px] font-semibold text-white">
-                      {activePassCode}
-                    </span>
-                  )}
-                </div>
-                <p className="text-[11px] text-zinc-300 mt-0.5">
-                  All features ready: live 35mm camera, 4 film stocks, {MAX_SHOTS_PER_USER} personal shots, &amp; Collage Studio.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="px-3 py-1.5 rounded-full bg-white text-[#0B0B0B] font-mono text-xs font-bold tabular-nums">
-                {userShotsLeft}/{MAX_SHOTS_PER_USER} Shots Left
-              </span>
-            </div>
-          </section>
-        )}
-
-        {/* Active Event Film Roll Context Bar */}
+        {/* Active Event Film Roll Context Bar (Compact on mobile; full stats on desktop) */}
         {selectedEvent && (
-          <section className="p-4 sm:p-6 rounded-3xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3.5 min-w-0">
-              <div className="w-12 h-12 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
-                <Film className="w-6 h-6" />
+          <section
+            className={`${
+              mode === 'public' ? 'hidden lg:flex' : 'flex'
+            } p-3.5 sm:p-5 rounded-2xl sm:rounded-3xl bg-[#F5F5F7] border border-[#E5E5EA] flex-col lg:flex-row lg:items-center justify-between gap-3`}
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
+                <Film className="w-5 h-5" />
               </div>
               <div className="min-w-0 flex-1">
-                <span className="block text-[11px] font-semibold text-[#71717A]">
-                  Active Film Roll · {selectedEvent.category} · {selectedEvent.city}
+                <span className="block text-[11px] font-semibold text-[#71717A] truncate">
+                  {selectedEvent.category} · {selectedEvent.city} · {userShotsUsed}/{MAX_SHOTS_PER_USER} yours ·{' '}
+                  {String(eventShots.length).padStart(2, '0')}/{currentRollConfig.exposuresLimit} EXP
                 </span>
                 <select
                   aria-label="Select event film roll"
@@ -1203,7 +1264,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                     setSelectedEventId(e.target.value);
                     setLightboxShot(null);
                   }}
-                  className="mt-1 w-full sm:w-auto max-w-full h-10 px-4 rounded-full bg-white border border-[#E5E5EA] text-sm font-bold text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none cursor-pointer"
+                  className="mt-1 w-full sm:w-auto max-w-full h-10 px-3.5 rounded-full bg-white border border-[#E5E5EA] text-xs sm:text-sm font-bold text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none cursor-pointer"
                 >
                   {events.map((evt) => (
                     <option key={evt.id} value={evt.id}>
@@ -1214,111 +1275,80 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 sm:gap-4 shrink-0">
-              <div className="px-4 py-2 rounded-2xl bg-white border border-[#E5E5EA] flex items-center gap-3">
-                <div>
-                  <span className="text-[10px] uppercase tracking-wider text-[#71717A] block">
-                    Your Allowance
-                  </span>
-                  <span
-                    className={`font-mono text-base font-bold tabular-nums ${
-                      isUserLimitReached ? 'text-amber-600' : 'text-[#0B0B0B]'
+            <div className="flex flex-wrap items-center justify-between lg:justify-end gap-2.5 shrink-0">
+              <div className="hidden sm:flex items-center gap-3 px-4 py-2 rounded-2xl bg-white border border-[#E5E5EA] text-xs tabular-nums">
+                <span className="font-mono font-bold text-[#0B0B0B]">
+                  {userShotsUsed}/{MAX_SHOTS_PER_USER} Shots
+                </span>
+                <span className="text-[#D4D4D8]">·</span>
+                <span className="font-mono font-bold text-[#0B0B0B]">
+                  {String(eventShots.length).padStart(2, '0')}/{currentRollConfig.exposuresLimit} EXP
+                </span>
+                <span className="text-[#D4D4D8]">·</span>
+                <span className="font-mono font-bold text-emerald-700">{rollRemaining} Left</span>
+              </div>
+
+              {/* Studio Mobile View Switcher */}
+              {mode === 'studio' && (
+                <div className="lg:hidden inline-flex items-center p-1 rounded-full bg-white border border-[#E5E5EA]">
+                  <button
+                    type="button"
+                    onClick={() => setMobilePanel('camera')}
+                    className={`min-h-[36px] px-3.5 rounded-full text-xs font-semibold transition-colors ${
+                      mobilePanel === 'camera'
+                        ? 'bg-[#0B0B0B] text-white'
+                        : 'text-[#71717A]'
                     }`}
                   >
-                    {userShotsUsed} / {MAX_SHOTS_PER_USER} Shots
-                  </span>
+                    Camera
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMobilePanel('roll')}
+                    className={`min-h-[36px] px-3.5 rounded-full text-xs font-semibold transition-colors tabular-nums ${
+                      mobilePanel === 'roll'
+                        ? 'bg-[#0B0B0B] text-white'
+                        : 'text-[#71717A]'
+                    }`}
+                  >
+                    Roll ({eventShots.length})
+                  </button>
                 </div>
-                <div className="h-7 w-px bg-[#E5E5EA]" />
-                <div>
-                  <span className="text-[10px] uppercase tracking-wider text-[#71717A] block">
-                    Exposures
-                  </span>
-                  <span className="font-mono text-base font-bold text-[#0B0B0B] tabular-nums">
-                    {String(eventShots.length).padStart(2, '0')} /{' '}
-                    {currentRollConfig.exposuresLimit} EXP
-                  </span>
-                </div>
-                <div className="h-7 w-px bg-[#E5E5EA]" />
-                <div>
-                  <span className="text-[10px] uppercase tracking-wider text-[#71717A] block">
-                    Roll Left
-                  </span>
-                  <span className="font-mono text-base font-bold text-emerald-700 tabular-nums">
-                    {rollRemaining} Left
-                  </span>
-                </div>
-              </div>
+              )}
 
               {mode === 'studio' && onManageEvent && (
                 <button
                   type="button"
                   onClick={() => onManageEvent(selectedEvent)}
-                  className="px-4 py-2.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap"
+                  className="min-h-[40px] px-4 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap"
                 >
-                  Open Event Workspace
+                  Workspace
                 </button>
               )}
             </div>
           </section>
         )}
 
-        {/* MAIN SPLIT: DISPOSABLE CAMERA BODY (Left 5 cols) + 35MM CONTACT SHEET (Right 7 cols) */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* LEFT 5 COLS: Tactile Disposable Camera Body */}
-          <section className="lg:col-span-5 bg-[#0B0B0B] text-white rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
-            {/* Top Camera Deck: Optical Indicator + Flash + Flip */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-2xl bg-white/10 flex items-center justify-center">
-                  <Aperture className={`w-5 h-5 text-white ${winding ? 'animate-spin' : ''}`} />
-                </div>
-                <div>
-                  <h2 className="font-display text-base font-bold leading-none">
-                    35mm QuickSnap
-                  </h2>
-                  <span className="font-mono text-[11px] text-zinc-400 tabular-nums">
-                    {activeStockMeta.label} · {activeStockMeta.iso}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setFlashMode((prev) =>
-                      prev === 'auto' ? 'on' : prev === 'on' ? 'off' : 'auto'
-                    )
-                  }
-                  title="Toggle Flash Mode"
-                  className={`h-9 px-3 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 transition-colors whitespace-nowrap ${
-                    flashMode === 'off'
-                      ? 'bg-white/10 text-zinc-400'
-                      : 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
-                  }`}
-                >
-                  {flashMode === 'off' ? (
-                    <ZapOff className="w-3.5 h-3.5" />
-                  ) : (
-                    <Zap className="w-3.5 h-3.5" />
-                  )}
-                  <span className="capitalize">{flashMode}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleFlipCamera}
-                  aria-label="Flip front or rear camera"
-                  title="Flip Camera"
-                  className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* Optical Viewfinder Window */}
-            <div className="relative aspect-[4/3] w-full rounded-2xl bg-zinc-900 border border-white/15 overflow-hidden flex items-center justify-center">
+        {/* MAIN RESPONSIVE LAYOUT: WhatsApp Camera UI (Left 5 cols) + Event Film Roll (Right 7 cols) */}
+        <div
+          className={
+            mode === 'public'
+              ? 'flex-1 flex flex-col lg:grid lg:grid-cols-12 lg:gap-6 lg:items-start'
+              : 'grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-6 items-start'
+          }
+        >
+          {/* LEFT 5 COLS: WhatsApp-Style Full-Bleed Dark Camera UI */}
+          <section
+            className={`${
+              mobilePanel === 'camera' ? 'flex' : 'hidden lg:flex'
+            } lg:col-span-5 flex-col bg-[#0B0B0B] text-white overflow-hidden shadow-2xl ${
+              mode === 'public'
+                ? 'flex-1 min-h-[calc(100dvh-3.6rem)] sm:min-h-[600px] sm:rounded-3xl lg:min-h-0'
+                : 'rounded-2xl sm:rounded-3xl min-h-[540px] sm:min-h-0'
+            }`}
+          >
+            {/* Full-Bleed Viewfinder Canvas with Floating WhatsApp Overlays */}
+            <div className="relative flex-1 min-h-[290px] sm:min-h-[320px] lg:aspect-[4/3] lg:flex-none w-full bg-zinc-950 overflow-hidden flex items-center justify-center">
               {cameraActive ? (
                 <video
                   ref={videoRef}
@@ -1331,35 +1361,198 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <div className="p-6 text-center space-y-3 max-w-xs">
-                  <div className="w-14 h-14 rounded-2xl bg-white/10 border border-white/15 mx-auto flex items-center justify-center">
+                <div className="p-6 text-center space-y-3.5 max-w-xs z-10">
+                  <button
+                    type="button"
+                    onClick={() => void startCamera()}
+                    className="w-16 h-16 rounded-full bg-white/15 hover:bg-white/25 border border-white/25 mx-auto flex items-center justify-center transition-all active:scale-95"
+                    aria-label="Enable live camera viewfinder"
+                  >
                     <Camera className="w-7 h-7 text-white" />
+                  </button>
+                  <div className="space-y-1">
+                    <p className="text-xs font-semibold text-white">
+                      {cameraError ? 'Live Viewfinder Offline' : 'Tap to Open Camera'}
+                    </p>
+                    <p className="text-[11px] text-zinc-300 leading-relaxed">
+                      {cameraError
+                        ? cameraError
+                        : 'Enable your camera or tap the shutter below to snap an instant 35mm film frame.'}
+                    </p>
                   </div>
-                  <p className="text-xs text-zinc-300 leading-relaxed">
-                    {cameraError
-                      ? cameraError
-                      : 'Start your device camera for a live optical viewfinder, upload a photo, or snap an instant 35mm film frame.'}
-                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void startCamera()}
+                    className="min-h-[44px] px-5 rounded-full bg-white text-[#0B0B0B] text-xs font-bold hover:bg-zinc-200 transition-colors inline-flex items-center gap-2"
+                  >
+                    <Camera className="w-4 h-4" />
+                    <span>Enable Live Camera</span>
+                  </button>
                 </div>
               )}
 
-              {/* Optical Viewfinder Framing Corners */}
-              <div className="absolute inset-3 pointer-events-none">
-                <div className="absolute top-0 left-0 w-5 h-5 border-t-2 border-l-2 border-white/75 rounded-tl-md" />
-                <div className="absolute top-0 right-0 w-5 h-5 border-t-2 border-r-2 border-white/75 rounded-tr-md" />
-                <div className="absolute bottom-0 left-0 w-5 h-5 border-b-2 border-l-2 border-white/75 rounded-bl-md" />
-                <div className="absolute bottom-0 right-0 w-5 h-5 border-b-2 border-r-2 border-white/75 rounded-br-md" />
+              {/* Subtle Viewfinder Framing Corners */}
+              <div className="absolute inset-3 sm:inset-4 pointer-events-none">
+                <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-white/60 rounded-tl-md" />
+                <div className="absolute top-0 right-0 w-4 h-4 border-t-2 border-r-2 border-white/60 rounded-tr-md" />
+                <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2 border-white/60 rounded-bl-md" />
+                <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-white/60 rounded-br-md" />
               </div>
 
-              {/* Exposure Counter Overlay Window */}
-              <div className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-md text-[11px] font-mono text-white tabular-nums flex items-center gap-1.5 pointer-events-none">
-                <span>
-                  EXP {String(eventShots.length).padStart(2, '0')}/{currentRollConfig.exposuresLimit}
-                </span>
+              {/* Floating Top Translucent Toolbar (Flash, Date Stamp, Event Roll Switcher, Camera Power) */}
+              <div className="absolute top-0 inset-x-0 p-2.5 sm:p-3 bg-gradient-to-b from-black/75 via-black/35 to-transparent flex items-center justify-between gap-2 z-20">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFlashMode((prev) =>
+                        prev === 'auto' ? 'on' : prev === 'on' ? 'off' : 'auto'
+                      )
+                    }
+                    title="Cycle Flash Mode"
+                    aria-label={`Flash ${flashMode}`}
+                    className={`min-h-[44px] min-w-[44px] px-3 rounded-full backdrop-blur-md text-[11px] font-semibold inline-flex items-center justify-center gap-1 transition-colors ${
+                      flashMode === 'off'
+                        ? 'bg-black/50 text-zinc-300'
+                        : 'bg-amber-400/25 text-amber-200 border border-amber-300/30'
+                    }`}
+                  >
+                    {flashMode === 'off' ? (
+                      <ZapOff className="w-4 h-4" />
+                    ) : (
+                      <Zap className="w-4 h-4" />
+                    )}
+                    <span className="capitalize">{flashMode}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDateStampEnabled((v) => !v)}
+                    aria-label="Toggle 35mm date stamp"
+                    className={`min-h-[44px] px-3 rounded-full backdrop-blur-md font-mono text-[11px] font-bold transition-colors ${
+                      dateStampEnabled
+                        ? 'bg-black/55 text-[#FF8A2B] border border-[#FF8A2B]/35'
+                        : 'bg-black/45 text-zinc-400'
+                    }`}
+                  >
+                    {dateStampEnabled ? formatQuartzDateStamp() : 'Stamp Off'}
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {events.length > 1 && mode === 'public' && (
+                    <select
+                      aria-label="Switch event roll"
+                      value={selectedEvent?.id || ''}
+                      onChange={(e) => {
+                        setSelectedEventId(e.target.value);
+                        setLightboxShot(null);
+                      }}
+                      className="h-11 max-w-[130px] px-3 rounded-full bg-black/55 backdrop-blur-md border border-white/20 text-[11px] font-semibold text-white focus:outline-none truncate"
+                    >
+                      {events.map((evt) => (
+                        <option key={evt.id} value={evt.id} className="text-[#0B0B0B]">
+                          {evt.title}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => (cameraActive ? stopCamera() : void startCamera())}
+                    aria-label={cameraActive ? 'Pause live camera' : 'Start live camera'}
+                    className={`w-11 h-11 rounded-full backdrop-blur-md flex items-center justify-center transition-colors ${
+                      cameraActive
+                        ? 'bg-black/55 text-white hover:bg-black/75'
+                        : 'bg-white/20 text-white hover:bg-white/30'
+                    }`}
+                  >
+                    {cameraActive ? (
+                      <CameraOff className="w-4 h-4" />
+                    ) : (
+                      <Camera className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
               </div>
 
-              {/* Quartz Date Stamp Preview */}
-              {dateStampEnabled && (
+              {/* WhatsApp-Style Floating Recent Captures Strip at Bottom of Viewfinder */}
+              {eventShots.length > 0 && (
+                <div className="absolute bottom-0 inset-x-0 px-2.5 pt-6 pb-2 bg-gradient-to-t from-black/80 via-black/40 to-transparent z-20">
+                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-0.5">
+                    {eventShots.slice(0, 10).map((shot) => {
+                      const canDel = canDeleteShot(shot);
+                      const isConfirming = confirmDeleteId === shot.id;
+                      const frameCode = `${String(shot.frameNumber).padStart(2, '0')}A`;
+                      return (
+                        <div
+                          key={shot.id}
+                          className="relative w-14 h-14 rounded-xl overflow-hidden border border-white/30 bg-zinc-900 shrink-0 shadow-md"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (shot.developed) {
+                                setLightboxShot(shot);
+                              } else {
+                                setMobilePanel('roll');
+                                contactSheetRef.current?.scrollIntoView({ behavior: 'smooth' });
+                              }
+                            }}
+                            aria-label={`Preview frame ${frameCode}`}
+                            className="w-full h-full block"
+                          >
+                            {shot.developed ? (
+                              <img
+                                src={shot.dataUrl}
+                                alt={shot.caption || `Frame ${frameCode}`}
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex flex-col items-center justify-center bg-[#18181B] text-zinc-300">
+                                <Lock className="w-3.5 h-3.5" />
+                                <span className="text-[9px] font-mono mt-0.5">{frameCode}</span>
+                              </div>
+                            )}
+                          </button>
+                          {canDel && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleRequestDeleteShot(shot);
+                              }}
+                              disabled={deletingShotId === shot.id}
+                              aria-label={
+                                isConfirming
+                                  ? `Confirm delete frame ${frameCode}`
+                                  : `Delete frame ${frameCode}`
+                              }
+                              title={isConfirming ? 'Tap again to delete' : 'Delete photo'}
+                              className={`absolute top-0.5 right-0.5 min-w-[24px] h-6 px-1 rounded-full flex items-center justify-center transition-colors shadow ${
+                                isConfirming
+                                  ? 'bg-[#EF4444] text-white text-[9px] font-bold'
+                                  : 'bg-black/70 hover:bg-[#EF4444] text-white'
+                              }`}
+                            >
+                              {isConfirming ? (
+                                <span>Del?</span>
+                              ) : (
+                                <X className="w-3 h-3" />
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Quartz Date Stamp Overlay Preview (when no bottom strip overlap or subtle top-right under toolbar) */}
+              {dateStampEnabled && eventShots.length === 0 && (
                 <span className="absolute bottom-3 right-3.5 font-mono text-xs font-bold text-[#FF8A2B] tracking-wider drop-shadow pointer-events-none">
                   {formatQuartzDateStamp()}
                 </span>
@@ -1367,68 +1560,20 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
 
               {/* Shutter Flash Pulse Overlay */}
               {flashPulse && (
-                <div className="absolute inset-0 bg-white pointer-events-none transition-opacity duration-200" />
+                <div className="absolute inset-0 bg-white pointer-events-none z-30 transition-opacity duration-200" />
               )}
             </div>
 
-            {/* Camera Source Controls */}
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => (cameraActive ? stopCamera() : startCamera())}
-                className={`h-10 px-3 rounded-full text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap ${
-                  cameraActive
-                    ? 'bg-[#EF4444] text-white hover:bg-red-600'
-                    : 'bg-white/10 text-white hover:bg-white/20 border border-white/15'
-                }`}
-              >
-                {cameraActive ? (
-                  <>
-                    <CameraOff className="w-3.5 h-3.5" />
-                    <span>Stop Camera</span>
-                  </>
-                ) : (
-                  <>
-                    <Camera className="w-3.5 h-3.5" />
-                    <span>Live Viewfinder</span>
-                  </>
-                )}
-              </button>
+            {/* Bottom WhatsApp Camera Controls Deck */}
+            <div className="bg-[#0B0B0B] px-3 sm:px-4 pt-2.5 pb-4 sm:pb-5 space-y-2.5 border-t border-white/10">
+              {shotError && (
+                <div className="px-3 py-2 rounded-2xl bg-[#EF4444]/15 border border-[#EF4444]/35 text-[11px] text-red-200 text-center">
+                  {shotError}
+                </div>
+              )}
 
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isCaptureDisabled}
-                className="h-10 px-3 rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-40 border border-white/15 text-xs font-semibold text-white inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
-              >
-                <ImagePlus className="w-3.5 h-3.5" />
-                <span>Upload to Film</span>
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={handleUploadPhoto}
-                className="hidden"
-              />
-            </div>
-
-            {/* Film Stock Selector */}
-            <div>
-              <div className="flex items-center justify-between text-[11px] text-zinc-400 mb-2">
-                <span>Film Emulsion Stock</span>
-                <button
-                  type="button"
-                  onClick={() => setDateStampEnabled((v) => !v)}
-                  className={`font-mono transition-colors ${
-                    dateStampEnabled ? 'text-[#FF8A2B] font-semibold' : 'text-zinc-500'
-                  }`}
-                >
-                  Date Stamp: {dateStampEnabled ? 'ON' : 'OFF'}
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
+              {/* Film Emulsion Single-Row Horizontal Selector */}
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
                 {FILM_STOCKS.map((stock) => {
                   const active = selectedStock === stock.id;
                   return (
@@ -1436,133 +1581,232 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                       key={stock.id}
                       type="button"
                       onClick={() => setSelectedStock(stock.id)}
-                      className={`px-3 py-2 rounded-2xl text-left border transition-colors ${
+                      className={`min-h-[36px] px-3 rounded-full text-[11px] font-semibold whitespace-nowrap shrink-0 border transition-colors ${
                         active
                           ? 'bg-white text-[#0B0B0B] border-white'
-                          : 'bg-white/5 text-zinc-300 border-white/10 hover:bg-white/10'
+                          : 'bg-white/5 text-zinc-300 border-white/15 hover:bg-white/15'
                       }`}
                     >
-                      <span className="text-xs font-bold block leading-tight">{stock.label}</span>
-                      <span
-                        className={`text-[10px] font-mono block mt-0.5 ${
-                          active ? 'text-[#71717A]' : 'text-zinc-400'
-                        }`}
-                      >
-                        {stock.iso}
-                      </span>
+                      {stock.label}
                     </button>
                   );
                 })}
               </div>
-            </div>
 
-            {/* Guest Attribution + Optional Caption */}
-            <div className="space-y-2.5 pt-1">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <input
-                  type="text"
-                  value={guestName}
-                  onChange={(e) => {
-                    setGuestNameTouched(true);
-                    setGuestName(e.target.value);
-                  }}
-                  placeholder="Your name"
-                  aria-label="Photographer name"
-                  className="h-10 px-3.5 rounded-2xl bg-white/10 border border-white/15 text-xs text-white placeholder:text-zinc-400 focus:bg-white focus:text-[#0B0B0B] focus:outline-none transition-colors"
-                />
-                <input
-                  type="text"
-                  value={caption}
-                  onChange={(e) => setCaption(e.target.value)}
-                  placeholder="Moment caption (optional)"
-                  aria-label="Photo caption"
-                  className="h-10 px-3.5 rounded-2xl bg-white/10 border border-white/15 text-xs text-white placeholder:text-zinc-400 focus:bg-white focus:text-[#0B0B0B] focus:outline-none transition-colors"
-                />
+              {/* WhatsApp-Style "Add a caption..." Bar + Collapsible Photographer Chip */}
+              <div className="flex items-center gap-2">
+                {editingGuestName ? (
+                  <div className="flex items-center gap-1.5 flex-1 bg-white/10 border border-white/25 rounded-full px-3 h-10">
+                    <User className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                    <input
+                      type="text"
+                      value={guestName}
+                      onChange={(e) => {
+                        setGuestNameTouched(true);
+                        setGuestName(e.target.value);
+                      }}
+                      placeholder="Your name"
+                      aria-label="Photographer name"
+                      autoFocus
+                      className="w-full bg-transparent text-xs text-white placeholder:text-zinc-400 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setEditingGuestName(false)}
+                      aria-label="Done editing name"
+                      className="w-7 h-7 rounded-full bg-white text-[#0B0B0B] flex items-center justify-center shrink-0"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setEditingGuestName(true)}
+                      aria-label="Change photographer name"
+                      className="h-10 max-w-[132px] px-3 rounded-full bg-white/10 hover:bg-white/15 border border-white/15 text-[11px] font-semibold text-zinc-200 inline-flex items-center gap-1.5 shrink-0"
+                    >
+                      <User className="w-3 h-3 text-zinc-400 shrink-0" />
+                      <span className="truncate">{guestName || 'Guest'}</span>
+                      <Pencil className="w-2.5 h-2.5 text-zinc-400 shrink-0" />
+                    </button>
+                    <input
+                      type="text"
+                      value={caption}
+                      onChange={(e) => setCaption(e.target.value)}
+                      placeholder="Add a caption..."
+                      aria-label="Photo caption"
+                      className="flex-1 min-w-0 h-10 px-3.5 rounded-full bg-white/10 border border-white/15 text-xs text-white placeholder:text-zinc-400 focus:bg-white focus:text-[#0B0B0B] focus:outline-none transition-colors"
+                    />
+                  </>
+                )}
               </div>
-            </div>
 
-            {/* Big Tactile Shutter Button */}
-            <div className="pt-1 flex flex-col items-center gap-2">
-              {shotError && (
-                <div className="w-full px-3.5 py-2 rounded-2xl bg-[#EF4444]/15 border border-[#EF4444]/30 text-xs text-red-200 text-center">
-                  {shotError}
+              {/* Iconic 3-Zone WhatsApp Thumb-Zone Shutter Deck */}
+              <div className="flex items-center justify-between gap-2 pt-1">
+                {/* Left Zone: Roll Gallery Button + Device Upload */}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobilePanel('roll');
+                      contactSheetRef.current?.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    aria-label="Open event film roll gallery"
+                    className="relative w-12 h-12 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/20 overflow-hidden flex items-center justify-center transition-colors shrink-0"
+                  >
+                    {latestShot && latestShot.developed ? (
+                      <img
+                        src={latestShot.dataUrl}
+                        alt="Latest captured frame"
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Film className="w-5 h-5 text-white" />
+                    )}
+                    <span className="absolute -bottom-0.5 -right-0.5 min-w-[20px] h-5 px-1 rounded-tl-lg bg-[#0B0B0B]/90 text-white text-[10px] font-mono font-bold flex items-center justify-center tabular-nums">
+                      {eventShots.length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isCaptureDisabled}
+                    aria-label="Upload photo from gallery"
+                    title="Upload photo from device"
+                    className="w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-40 text-white flex items-center justify-center transition-colors shrink-0"
+                  >
+                    <ImagePlus className="w-5 h-5" />
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleUploadPhoto}
+                    className="hidden"
+                  />
                 </div>
-              )}
-              <button
-                type="button"
-                onClick={handleCaptureLiveOrDemo}
-                disabled={isCaptureDisabled}
-                className="w-full h-14 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 disabled:bg-zinc-700 disabled:text-zinc-300 active:scale-[0.98] transition-all font-display text-sm font-bold flex items-center justify-center gap-2.5 shadow-lg"
-              >
-                <span className="w-7 h-7 rounded-full border-2 border-[#0B0B0B] flex items-center justify-center">
-                  <span className="w-3.5 h-3.5 rounded-full bg-[#0B0B0B]" />
-                </span>
+
+                {/* Center Zone: Circular Tactile WhatsApp Shutter Ring */}
+                <div className="flex flex-col items-center">
+                  <button
+                    type="button"
+                    onClick={handleCaptureLiveOrDemo}
+                    disabled={isCaptureDisabled}
+                    aria-label={
+                      isRollFull
+                        ? 'Film roll full'
+                        : isUserLimitReached
+                          ? 'User shot limit reached'
+                          : 'Take photo'
+                    }
+                    className={`w-[72px] h-[72px] rounded-full p-1 flex items-center justify-center transition-all active:scale-90 shadow-xl ${
+                      isCaptureDisabled
+                        ? 'border-[4px] border-zinc-600 opacity-60 cursor-not-allowed'
+                        : 'border-[4px] border-white hover:scale-[1.03]'
+                    }`}
+                  >
+                    <span
+                      className={`w-full h-full rounded-full flex items-center justify-center transition-colors ${
+                        isCaptureDisabled ? 'bg-zinc-600' : 'bg-white'
+                      }`}
+                    >
+                      {savingShot || winding ? (
+                        <Aperture className="w-6 h-6 text-[#0B0B0B] animate-spin" />
+                      ) : null}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Right Zone: Flip Camera + Quick Collage Icon */}
+                <div className="flex items-center gap-2">
+                  {developedShots.length >= 2 && (
+                    <button
+                      type="button"
+                      onClick={() => openCollageStudio(myDevelopedShots.length >= 2)}
+                      aria-label="Open photo collage studio"
+                      title="Photo Collage"
+                      className="w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors shrink-0"
+                    >
+                      <LayoutGrid className="w-5 h-5" />
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleFlipCamera}
+                    aria-label="Flip front or rear camera"
+                    title="Flip Camera"
+                    className="w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors shrink-0"
+                  >
+                    <RefreshCw className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Compact Bottom Counter + Hi-Res Export Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-[11px] font-mono text-zinc-400 tabular-nums">
                 <span>
                   {isRollFull
-                    ? `Film Roll Full (${currentRollConfig.exposuresLimit}/${currentRollConfig.exposuresLimit})`
+                    ? `Roll full (${currentRollConfig.exposuresLimit}/${currentRollConfig.exposuresLimit})`
                     : isUserLimitReached
-                      ? `${MAX_SHOTS_PER_USER}/${MAX_SHOTS_PER_USER} Shot Limit Reached`
-                      : savingShot
-                        ? 'Developing Frame...'
-                        : cameraActive
-                          ? `Snap Photo (${userShotsLeft} left)`
-                          : `Snap Film Frame (${userShotsLeft} left)`}
+                      ? `${MAX_SHOTS_PER_USER}/${MAX_SHOTS_PER_USER} used · Delete one to retake`
+                      : currentRollConfig.darkroomMode
+                        ? `Darkroom · ${userShotsLeft}/${MAX_SHOTS_PER_USER} left`
+                        : `${userShotsLeft}/${MAX_SHOTS_PER_USER} shots left · ${activeStockMeta.shortLabel}`}
                 </span>
-              </button>
-              <span className="text-[11px] text-zinc-400 font-mono tabular-nums text-center">
-                {isUserLimitReached
-                  ? `You've captured ${userShotsUsed}/${MAX_SHOTS_PER_USER} shots. Combine them in the Collage Studio!`
-                  : currentRollConfig.darkroomMode
-                    ? `Darkroom Seal Active · ${userShotsLeft} of ${MAX_SHOTS_PER_USER} user shots left`
-                    : `Instant Reveal · ${userShotsLeft} of ${MAX_SHOTS_PER_USER} user shots left`}
-              </span>
 
-              {myDevelopedShots.length > 0 && (
-                <button
-                  type="button"
-                  disabled={zippingPhotos}
-                  onClick={() => void handleDownloadMyPhotosZip()}
-                  className="w-full h-11 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 disabled:opacity-50 text-xs font-bold inline-flex items-center justify-center gap-2 transition-colors"
-                >
-                  <Archive className="w-4 h-4" />
-                  <span>
-                    {zippingPhotos
-                      ? 'Packing Hi-Res .ZIP...'
-                      : `Download My ${Math.min(MAX_SHOTS_PER_USER, myDevelopedShots.length)} Hi-Res Photos (.ZIP)`}
-                  </span>
-                </button>
-              )}
-
-              {developedShots.length >= 2 && (
-                <button
-                  type="button"
-                  onClick={() => openCollageStudio(myDevelopedShots.length >= 2)}
-                  className="w-full h-11 rounded-full bg-white/15 hover:bg-white/25 border border-white/20 text-white text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors"
-                >
-                  <LayoutGrid className="w-4 h-4" />
-                  <span>
-                    {myDevelopedShots.length >= 2
-                      ? `Turn My ${Math.min(MAX_SHOTS_PER_USER, myDevelopedShots.length)} Photos into a Collage`
-                      : 'Open Photo Collage Studio (2–5 Shots)'}
-                  </span>
-                </button>
-              )}
+                <div className="flex items-center gap-2">
+                  {myDevelopedShots.length > 0 && (
+                    <button
+                      type="button"
+                      disabled={zippingPhotos}
+                      onClick={() => void handleDownloadMyPhotosZip()}
+                      className="px-2.5 py-1 rounded-full bg-white text-[#0B0B0B] font-sans font-bold text-[11px] inline-flex items-center gap-1 hover:bg-zinc-200 disabled:opacity-50"
+                    >
+                      <Archive className="w-3 h-3" />
+                      <span>{zippingPhotos ? 'ZIP...' : `My ZIP (${myDevelopedShots.length})`}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
           </section>
 
-          {/* RIGHT 7 COLS: 35mm Contact Sheet & Darkroom Controls */}
-          <section className="lg:col-span-7 bg-white rounded-3xl border border-[#E5E5EA] overflow-hidden shadow-sm">
+          {/* RIGHT 7 COLS: 35mm Event Film Roll & Contact Sheet */}
+          <section
+            ref={contactSheetRef}
+            className={`${
+              mobilePanel === 'roll' ? 'block' : 'hidden lg:block'
+            } lg:col-span-7 bg-white text-[#0B0B0B] rounded-none sm:rounded-3xl border-0 sm:border border-[#E5E5EA] overflow-hidden shadow-sm`}
+          >
             {/* Contact Sheet Toolbar */}
-            <div className="p-5 border-b border-[#E5E5EA] bg-[#F5F5F7]/70 flex flex-col gap-4">
+            <div className="p-4 sm:p-5 border-b border-[#E5E5EA] bg-[#F5F5F7]/80 flex flex-col gap-3.5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <h2 className="font-display text-lg font-bold text-[#0B0B0B]">
-                    35mm Event Contact Sheet
-                  </h2>
-                  <p className="text-xs text-[#71717A] tabular-nums">
-                    {eventShots.length} exposures captured · {developedShots.length} developed ·{' '}
-                    {sealedCount} sealed in darkroom
-                  </p>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <h2 className="font-display text-base sm:text-lg font-bold text-[#0B0B0B]">
+                      35mm Event Film Roll
+                    </h2>
+                    <p className="text-xs text-[#71717A] tabular-nums">
+                      {eventShots.length} exposures · {developedShots.length} developed ·{' '}
+                      {sealedCount} sealed
+                    </p>
+                  </div>
+
+                  {/* Mobile quick return to Camera */}
+                  <button
+                    type="button"
+                    onClick={() => setMobilePanel('camera')}
+                    className="lg:hidden min-h-[40px] px-3.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold inline-flex items-center gap-1.5 shrink-0"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>Snap Photo</span>
+                  </button>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -1570,12 +1814,12 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => openCollageStudio(myDevelopedShots.length >= 2)}
-                      className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white hover:bg-neutral-800 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                      className="min-h-[40px] px-3.5 rounded-full bg-[#0B0B0B] text-white hover:bg-neutral-800 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
                     >
                       <LayoutGrid className="w-3.5 h-3.5" />
                       <span>
                         {myDevelopedShots.length >= 2
-                          ? `Make Collage (${Math.min(MAX_SHOTS_PER_USER, myDevelopedShots.length)})`
+                          ? `Collage (${Math.min(MAX_SHOTS_PER_USER, myDevelopedShots.length)})`
                           : 'Make Collage'}
                       </span>
                     </button>
@@ -1586,31 +1830,25 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                       type="button"
                       disabled={zippingPhotos}
                       onClick={() => void handleDownloadMyPhotosZip()}
-                      className="px-3.5 py-2 rounded-full bg-white border border-[#0B0B0B] hover:bg-[#0B0B0B] hover:text-white disabled:opacity-50 text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                      className="min-h-[40px] px-3.5 rounded-full bg-white border border-[#0B0B0B] hover:bg-[#0B0B0B] hover:text-white disabled:opacity-50 text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
                     >
                       <Archive className="w-3.5 h-3.5" />
                       <span>
                         {zippingPhotos
                           ? 'Packing .ZIP...'
-                          : `My Hi-Res .ZIP (${Math.min(MAX_SHOTS_PER_USER, myDevelopedShots.length)}/${MAX_SHOTS_PER_USER})`}
+                          : `My .ZIP (${Math.min(MAX_SHOTS_PER_USER, myDevelopedShots.length)}/${MAX_SHOTS_PER_USER})`}
                       </span>
                     </button>
-                  )}
-
-                  {myEventShots.length > 0 && myDevelopedShots.length === 0 && (
-                    <span className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-medium text-[#71717A] whitespace-nowrap">
-                      Hi-Res .ZIP unlocks once darkroom develops roll
-                    </span>
                   )}
 
                   {developedShots.length > 0 && (
                     <button
                       type="button"
                       onClick={handleDownloadContactSheet}
-                      className="px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                      className="min-h-[40px] px-3.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
                     >
                       <Download className="w-3.5 h-3.5" />
-                      <span>Export Sheet</span>
+                      <span>Contact Sheet</span>
                     </button>
                   )}
 
@@ -1631,7 +1869,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                           }
                         })();
                       }}
-                      className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white hover:bg-neutral-800 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                      className="min-h-[40px] px-4 rounded-full bg-[#0B0B0B] text-white hover:bg-neutral-800 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
                     >
                       <Sparkles className="w-3.5 h-3.5" />
                       <span>Develop {sealedCount} Negatives</span>
@@ -1641,15 +1879,15 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
               </div>
 
               {/* Filter Tabs + Organizer Darkroom Controls */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="inline-flex items-center gap-1 p-1 bg-white rounded-full border border-[#E5E5EA] self-start">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="inline-flex items-center gap-1 p-1 bg-white rounded-full border border-[#E5E5EA] self-start overflow-x-auto max-w-full">
                   {(
                     [
                       { id: 'all', label: `All (${eventShots.length})` },
                       { id: 'developed', label: `Developed (${developedShots.length})` },
                       {
                         id: 'favorites',
-                        label: `Favorites (${eventShots.filter((s) => s.liked).length})`,
+                        label: `Favs (${eventShots.filter((s) => s.liked).length})`,
                       },
                     ] as const
                   ).map((tab) => (
@@ -1657,7 +1895,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                       key={tab.id}
                       type="button"
                       onClick={() => setGalleryTab(tab.id)}
-                      className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                      className={`min-h-[34px] px-3 rounded-full text-[11px] font-semibold transition-colors whitespace-nowrap tabular-nums ${
                         galleryTab === tab.id
                           ? 'bg-[#0B0B0B] text-white'
                           : 'text-[#71717A] hover:text-[#0B0B0B]'
@@ -1686,7 +1924,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                           );
                         });
                       }}
-                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1.5 transition-colors whitespace-nowrap ${
+                      className={`min-h-[36px] px-3 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1.5 transition-colors whitespace-nowrap ${
                         currentRollConfig.darkroomMode
                           ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
                           : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
@@ -1725,7 +1963,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                               );
                             });
                           }}
-                          className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-semibold transition-colors ${
+                          className={`min-w-[28px] min-h-[28px] px-2 rounded-full text-[11px] font-mono font-semibold transition-colors ${
                             currentRollConfig.exposuresLimit === limit
                               ? 'bg-[#0B0B0B] text-white'
                               : 'text-[#71717A] hover:text-[#0B0B0B]'
@@ -1737,7 +1975,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <span className="px-3 py-1 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-semibold text-[#71717A] inline-flex items-center gap-1.5 self-start sm:self-auto">
+                  <span className="text-[11px] font-medium text-[#71717A] inline-flex items-center gap-1.5">
                     {currentRollConfig.darkroomMode ? (
                       <>
                         <Lock className="w-3 h-3 text-[#0B0B0B]" />
@@ -1755,26 +1993,36 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
             </div>
 
             {/* Film Frames Grid */}
-            <div className="p-5">
+            <div className="p-3.5 sm:p-5">
               {filteredShots.length === 0 ? (
-                <div className="py-16 text-center space-y-3 bg-[#F5F5F7] rounded-2xl">
+                <div className="py-14 px-4 text-center space-y-3 bg-[#F5F5F7] rounded-2xl">
                   <Film className="w-8 h-8 text-[#71717A] mx-auto" />
                   <div>
                     <p className="text-sm font-semibold text-[#0B0B0B]">
                       No film frames in this view yet
                     </p>
                     <p className="text-xs text-[#71717A] mt-1">
-                      Use the 35mm QuickSnap camera to capture the first candid moment for{' '}
-                      {selectedEvent?.title}.
+                      Tap Snap Photo to capture the first candid moment for {selectedEvent?.title}.
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setMobilePanel('camera')}
+                    className="lg:hidden min-h-[44px] px-5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold inline-flex items-center gap-2"
+                  >
+                    <Camera className="w-4 h-4" />
+                    <span>Open Camera</span>
+                  </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
                   {filteredShots.map((shot) => {
                     const frameCode = `${String(shot.frameNumber).padStart(2, '0')}A`;
                     const stockInfo =
                       FILM_STOCKS.find((f) => f.id === shot.filmStock) ?? FILM_STOCKS[0];
+                    const deletable = canDeleteShot(shot);
+                    const isConfirmingDelete = confirmDeleteId === shot.id;
+                    const isDeleting = deletingShotId === shot.id;
 
                     return (
                       <article
@@ -1800,7 +2048,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                               referrerPolicy="no-referrer"
                               className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-200"
                             />
-                            <span className="absolute top-2.5 right-2.5 w-8 h-8 rounded-full bg-black/60 backdrop-blur-md text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            <span className="absolute top-2.5 right-2.5 w-9 h-9 rounded-full bg-black/60 backdrop-blur-md text-white flex items-center justify-center sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                               <Eye className="w-4 h-4" />
                             </span>
                           </button>
@@ -1818,8 +2066,8 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                           </div>
                         )}
 
-                        {/* Bottom Metadata + Actions */}
-                        <div className="p-3.5 flex items-center justify-between gap-2 bg-[#0B0B0B]">
+                        {/* Bottom Metadata + Actions (Touch-Friendly 44px Height Targets) */}
+                        <div className="p-3 flex items-center justify-between gap-2 bg-[#0B0B0B]">
                           <div className="min-w-0">
                             <p className="text-xs font-semibold text-white truncate">
                               {shot.capturedBy}
@@ -1843,7 +2091,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                                 });
                               }}
                               aria-label={`Favorite frame ${frameCode}`}
-                              className={`h-8 px-2.5 rounded-full text-[11px] font-mono font-semibold inline-flex items-center gap-1 transition-colors tabular-nums ${
+                              className={`min-h-[38px] px-2.5 rounded-full text-[11px] font-mono font-semibold inline-flex items-center gap-1 transition-colors tabular-nums ${
                                 shot.liked
                                   ? 'bg-white text-[#0B0B0B]'
                                   : 'bg-white/10 text-zinc-300 hover:bg-white/20'
@@ -1861,9 +2109,35 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                                 onClick={() => handleDownloadSinglePrint(shot)}
                                 aria-label={`Download frame ${frameCode}`}
                                 title="Download Print"
-                                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+                                className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
                               >
                                 <Download className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            {deletable && (
+                              <button
+                                type="button"
+                                disabled={isDeleting}
+                                onClick={() => void handleRequestDeleteShot(shot)}
+                                aria-label={
+                                  isConfirmingDelete
+                                    ? `Confirm delete frame ${frameCode}`
+                                    : `Delete frame ${frameCode}`
+                                }
+                                title={
+                                  isConfirmingDelete ? 'Tap again to confirm delete' : 'Delete photo'
+                                }
+                                className={`min-h-[38px] rounded-full inline-flex items-center justify-center gap-1 transition-colors ${
+                                  isConfirmingDelete
+                                    ? 'px-2.5 bg-[#EF4444] text-white text-[11px] font-semibold'
+                                    : 'w-9 bg-[#EF4444]/15 hover:bg-[#EF4444]/30 text-[#EF4444]'
+                                }`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                                {isConfirmingDelete && (
+                                  <span>{isDeleting ? '...' : 'Confirm'}</span>
+                                )}
                               </button>
                             )}
                           </div>
@@ -1878,16 +2152,16 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
         </div>
       </div>
 
-      {/* Photo Lightbox Modal */}
+      {/* Photo Lightbox Modal (Full-Screen on Mobile for Thumb Comfort) */}
       {lightboxShot && (
         <div
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-0 sm:p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="dispo-lightbox-title"
         >
-          <div className="bg-[#0B0B0B] text-white w-full max-w-2xl rounded-3xl overflow-hidden border border-white/15 shadow-2xl">
-            <div className="px-5 py-4 flex items-center justify-between border-b border-white/10">
+          <div className="bg-[#0B0B0B] text-white w-full h-dvh sm:h-auto sm:max-h-[90vh] sm:max-w-2xl sm:rounded-3xl overflow-hidden sm:border border-white/15 shadow-2xl flex flex-col">
+            <div className="px-4 sm:px-5 py-3.5 flex items-center justify-between border-b border-white/10 shrink-0">
               <div className="min-w-0">
                 <h3 id="dispo-lightbox-title" className="text-sm font-bold truncate">
                   Frame {String(lightboxShot.frameNumber).padStart(2, '0')}A ·{' '}
@@ -1899,25 +2173,28 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setLightboxShot(null)}
+                onClick={() => {
+                  setConfirmDeleteId(null);
+                  setLightboxShot(null);
+                }}
                 aria-label="Close photo preview"
-                className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white"
+                className="w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white shrink-0"
               >
-                <X className="w-4 h-4" />
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="bg-black flex items-center justify-center max-h-[65vh] overflow-hidden">
+            <div className="flex-1 bg-black flex items-center justify-center overflow-hidden min-h-0">
               <img
                 src={lightboxShot.dataUrl}
                 alt={lightboxShot.caption || `Frame ${lightboxShot.frameNumber}`}
                 referrerPolicy="no-referrer"
-                className="w-full h-full object-contain max-h-[65vh]"
+                className="w-full h-full object-contain max-h-full"
               />
             </div>
 
-            <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-white/10">
-              <p className="text-xs text-zinc-300">
+            <div className="px-4 sm:px-5 py-3.5 pb-6 sm:pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-white/10 shrink-0">
+              <p className="text-xs text-zinc-300 truncate">
                 {lightboxShot.caption || 'Captured on Events By You 35mm Disposable Camera'}
               </p>
               <div className="flex items-center gap-2 shrink-0">
@@ -1943,42 +2220,39 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                       );
                     });
                   }}
-                  className="px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/20 text-xs font-semibold inline-flex items-center gap-1.5 tabular-nums"
+                  className="min-h-[44px] px-4 rounded-full bg-white/10 hover:bg-white/20 text-xs font-semibold inline-flex items-center gap-1.5 tabular-nums"
                 >
-                  <Heart className={`w-3.5 h-3.5 ${lightboxShot.liked ? 'fill-current' : ''}`} />
+                  <Heart className={`w-4 h-4 ${lightboxShot.liked ? 'fill-current' : ''}`} />
                   <span>{lightboxShot.likes}</span>
                 </button>
+
                 <button
                   type="button"
                   onClick={() => handleDownloadSinglePrint(lightboxShot)}
-                  className="px-4 py-2 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 text-xs font-bold inline-flex items-center gap-1.5"
+                  className="flex-1 sm:flex-initial min-h-[44px] px-4 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 text-xs font-bold inline-flex items-center justify-center gap-1.5"
                 >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download Print</span>
+                  <Download className="w-4 h-4" />
+                  <span>Download</span>
                 </button>
-                {mode === 'studio' && (
+
+                {canDeleteShot(lightboxShot) && (
                   <button
                     type="button"
-                    onClick={() => {
-                      const targetId = lightboxShot.id;
-                      void (async () => {
-                        try {
-                          await Promise.resolve(onDeleteShot(targetId));
-                          setLightboxShot(null);
-                          showToast('Frame removed from roll');
-                        } catch (err) {
-                          showToast(
-                            err instanceof Error
-                              ? err.message
-                              : 'Unable to delete frame right now.'
-                          );
-                        }
-                      })();
-                    }}
-                    aria-label="Delete frame"
-                    className="w-9 h-9 rounded-full bg-[#EF4444]/20 hover:bg-[#EF4444]/35 text-[#EF4444] flex items-center justify-center"
+                    disabled={deletingShotId === lightboxShot.id}
+                    onClick={() => void handleRequestDeleteShot(lightboxShot)}
+                    aria-label={
+                      confirmDeleteId === lightboxShot.id ? 'Confirm delete photo' : 'Delete photo'
+                    }
+                    className={`min-h-[44px] rounded-full inline-flex items-center justify-center gap-1.5 text-xs font-bold transition-colors ${
+                      confirmDeleteId === lightboxShot.id
+                        ? 'px-4 bg-[#EF4444] text-white'
+                        : 'w-11 bg-[#EF4444]/20 hover:bg-[#EF4444]/35 text-[#EF4444]'
+                    }`}
                   >
-                    <Trash2 className="w-4 h-4" />
+                    <Trash2 className="w-4 h-4 shrink-0" />
+                    {confirmDeleteId === lightboxShot.id && (
+                      <span>{deletingShotId === lightboxShot.id ? 'Deleting...' : 'Confirm'}</span>
+                    )}
                   </button>
                 )}
               </div>
@@ -1990,32 +2264,32 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       {/* Photo Collage Studio Modal */}
       {collageOpen && (
         <div
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5"
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-2 sm:p-5"
           role="dialog"
           aria-modal="true"
           aria-labelledby="collage-studio-title"
         >
-          <div className="bg-white text-[#0B0B0B] w-full max-w-4xl max-h-[92vh] rounded-3xl overflow-hidden border border-[#E5E5EA] shadow-2xl flex flex-col">
-            <div className="px-5 sm:px-6 py-4 flex items-center justify-between border-b border-[#E5E5EA] bg-[#F5F5F7]">
+          <div className="bg-white text-[#0B0B0B] w-full max-w-4xl max-h-[94dvh] rounded-2xl sm:rounded-3xl overflow-hidden border border-[#E5E5EA] shadow-2xl flex flex-col">
+            <div className="px-4 sm:px-6 py-3.5 sm:py-4 flex items-center justify-between border-b border-[#E5E5EA] bg-[#F5F5F7]">
               <div>
-                <h3 id="collage-studio-title" className="font-display text-lg font-bold text-[#0B0B0B]">
+                <h3 id="collage-studio-title" className="font-display text-base sm:text-lg font-bold text-[#0B0B0B]">
                   35mm Photo Collage Studio
                 </h3>
                 <p className="text-xs text-[#71717A] tabular-nums">
-                  Select 2–{MAX_SHOTS_PER_USER} photos to compose your downloadable keepsake collage ({collageShots.length}/{MAX_SHOTS_PER_USER} selected)
+                  Select 2–{MAX_SHOTS_PER_USER} photos ({collageShots.length}/{MAX_SHOTS_PER_USER} selected)
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setCollageOpen(false)}
                 aria-label="Close collage studio"
-                className="w-9 h-9 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] flex items-center justify-center text-[#0B0B0B]"
+                className="w-10 h-10 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] flex items-center justify-center text-[#0B0B0B]"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-5 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
               {/* Left: Live Rendered Collage Canvas Preview */}
               <div className="lg:col-span-6 space-y-3">
                 <div className="aspect-square w-full rounded-2xl bg-[#0B0B0B] border border-[#E5E5EA] overflow-hidden flex items-center justify-center relative">
@@ -2062,7 +2336,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
               </div>
 
               {/* Right: Layout, Frame Theme & Photo Picker */}
-              <div className="lg:col-span-6 space-y-5">
+              <div className="lg:col-span-6 space-y-4">
                 <div>
                   <span className="text-xs font-semibold text-[#0B0B0B] block mb-2">
                     Collage Layout
@@ -2080,7 +2354,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                         key={opt.id}
                         type="button"
                         onClick={() => setCollageLayout(opt.id)}
-                        className={`px-3.5 py-2.5 rounded-2xl text-xs font-semibold border transition-colors ${
+                        className={`min-h-[42px] px-3.5 py-2 rounded-2xl text-xs font-semibold border transition-colors ${
                           collageLayout === opt.id
                             ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
                             : 'bg-[#F5F5F7] text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
@@ -2108,7 +2382,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                           key={t.id}
                           type="button"
                           onClick={() => setCollageTheme(t.id)}
-                          className={`px-3 py-2 rounded-xl text-xs font-semibold border ${
+                          className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold border ${
                             collageTheme === t.id
                               ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
                               : 'bg-[#F5F5F7] text-[#0B0B0B] border-[#E5E5EA]'
@@ -2133,7 +2407,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                       value={collageTitle}
                       onChange={(e) => setCollageTitle(e.target.value)}
                       placeholder="Event title or memory"
-                      className="w-full h-9 px-3 rounded-xl bg-[#F5F5F7] border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                      className="w-full h-10 px-3 rounded-xl bg-[#F5F5F7] border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
                     />
                   </div>
                 </div>
@@ -2158,7 +2432,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                     )}
                   </div>
 
-                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-56 overflow-y-auto p-1">
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-52 overflow-y-auto p-1">
                     {developedShots.map((shot) => {
                       const active = collageSelectedIds.includes(shot.id);
                       const orderIdx = collageSelectedIds.indexOf(shot.id);
@@ -2176,6 +2450,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
                           <img
                             src={shot.dataUrl}
                             alt={`Frame ${shot.frameNumber}`}
+                            referrerPolicy="no-referrer"
                             className="w-full h-full object-cover"
                           />
                           {active && (

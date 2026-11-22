@@ -723,6 +723,30 @@ async function mergeEventShotShooter(
   }
 }
 
+async function removeEventShotShooter(
+  client: SupabaseClient,
+  eventId: string,
+  shotId: string
+) {
+  try {
+    const { data: rawRow } = await client
+      .from('events')
+      .select('extra_data_config')
+      .eq('id', eventId)
+      .maybeSingle();
+    const rawExtra = (rawRow as Record<string, unknown> | null)?.extra_data_config;
+    if (!rawExtra || typeof rawExtra !== 'object') return;
+    const currentExtra = { ...(rawExtra as Record<string, unknown>) };
+    const currentMap = extractEventShotShootersMap(currentExtra);
+    if (!(shotId in currentMap)) return;
+    delete currentMap[shotId];
+    currentExtra.__shotShooters = currentMap;
+    await client.from('events').update({ extra_data_config: currentExtra }).eq('id', eventId);
+  } catch {
+    // Non-fatal fallback
+  }
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -2519,6 +2543,60 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       return res.json({ shot: mapShotRow(updated as Record<string, unknown>) });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update like.';
+      return res.status(500).json({ error: message });
+    }
+  });
+
+  app.delete('/api/public/camera/shots/:id', requireSupabaseConfiguredMiddleware, async (req, res) => {
+    try {
+      const rawKey =
+        typeof req.query.shooterKey === 'string'
+          ? req.query.shooterKey
+          : typeof (req.body as Record<string, unknown> | undefined)?.shooterKey === 'string'
+            ? String((req.body as Record<string, unknown>).shooterKey)
+            : typeof req.headers['x-shooter-key'] === 'string'
+              ? req.headers['x-shooter-key']
+              : '';
+      const shooterKey = rawKey.trim();
+      if (!shooterKey) {
+        return res.status(400).json({ error: 'Missing shooterKey to verify photo ownership.' });
+      }
+
+      const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
+      const { data: existing, error: fetchErr } = await supabase
+        .from('disposable_shots')
+        .select('*')
+        .eq('id', req.params.id)
+        .maybeSingle();
+      if (fetchErr || !existing) {
+        return res.status(404).json({ error: 'Photo not found.' });
+      }
+
+      const mapped = mapShotRow(existing as Record<string, unknown>);
+      const { data: rawEvtRow } = await supabase
+        .from('events')
+        .select('extra_data_config')
+        .eq('id', mapped.eventId)
+        .maybeSingle();
+      const shotShooters = extractEventShotShootersMap(
+        (rawEvtRow as Record<string, unknown> | null)?.extra_data_config
+      );
+      const hydrated = hydrateShotWithEventMeta(mapped, shotShooters);
+
+      if (!hydrated.shooterKey || hydrated.shooterKey !== shooterKey) {
+        return res.status(403).json({ error: 'You can only delete photos you captured.' });
+      }
+
+      const { error: delErr } = await supabase
+        .from('disposable_shots')
+        .delete()
+        .eq('id', req.params.id);
+      if (delErr) return res.status(400).json({ error: delErr.message });
+
+      await removeEventShotShooter(supabase, hydrated.eventId, req.params.id);
+      return res.json({ ok: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete photo.';
       return res.status(500).json({ error: message });
     }
   });
@@ -5665,11 +5743,37 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
 
   app.delete('/api/studio/camera/shots/:id', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
-      const { error } = await req
-        .supabase!.from('disposable_shots')
+      const client = req.supabase!;
+      const { data: existing, error: fetchErr } = await client
+        .from('disposable_shots')
+        .select('id, event_id')
+        .eq('id', req.params.id)
+        .maybeSingle();
+      if (fetchErr || !existing) {
+        return res.status(404).json({ error: 'Photo not found.' });
+      }
+      const eventId = String((existing as Record<string, unknown>).event_id || '');
+      if (req.appRole !== 'creator') {
+        const { data: evtRow, error: evtErr } = await client
+          .from('events')
+          .select('organizer_id')
+          .eq('id', eventId)
+          .maybeSingle();
+        if (evtErr || !evtRow || String((evtRow as Record<string, unknown>).organizer_id || '') !== req.user!.id) {
+          return res.status(403).json({ error: 'Unauthorized to delete shots for this event.' });
+        }
+      }
+
+      const { error } = await client
+        .from('disposable_shots')
         .delete()
         .eq('id', req.params.id);
       if (error) return res.status(400).json({ error: error.message });
+
+      const adminOrClient = createServiceSupabaseClient() ?? client;
+      if (eventId) {
+        await removeEventShotShooter(adminOrClient, eventId, req.params.id);
+      }
       return res.json({ ok: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to delete shot.';

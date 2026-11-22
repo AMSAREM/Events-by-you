@@ -1174,6 +1174,26 @@ export async function localFallbackRequest<T>(
     return { shot } as T;
   }
 
+  const publicCamDelMatch = path.match(/^\/public\/camera\/shots\/([^/]+)$/);
+  if (method === 'DELETE' && publicCamDelMatch) {
+    const shotId = decodeURIComponent(publicCamDelMatch[1]);
+    const rawQuery = url.includes('?') ? url.split('?')[1] : '';
+    const queryKey = new URLSearchParams(rawQuery).get('shooterKey')?.trim() || '';
+    const bodyKey = typeof body?.shooterKey === 'string' ? body.shooterKey.trim() : '';
+    const shooterKey = queryKey || bodyKey;
+    if (!shooterKey) {
+      throw new LocalApiError('Missing shooterKey to verify photo ownership.', 400);
+    }
+    const shot = db.disposableShots.find((s) => s.id === shotId);
+    if (!shot) throw new LocalApiError('Photo not found.', 404);
+    if (!shot.shooterKey || shot.shooterKey !== shooterKey) {
+      throw new LocalApiError('You can only delete photos you captured.', 403);
+    }
+    db.disposableShots = db.disposableShots.filter((s) => s.id !== shotId);
+    saveDb(db);
+    return { ok: true } as T;
+  }
+
   // Authenticated Studio & Builder routes
   const user = getAuthenticatedUser(db, accessToken);
 

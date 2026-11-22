@@ -855,6 +855,24 @@ export function createMemoryRouter() {
     }
   });
 
+  router.delete('/public/camera/shots/:id', (req, res) => {
+    try {
+      const rawKey =
+        typeof req.query.shooterKey === 'string'
+          ? req.query.shooterKey
+          : typeof (req.body as Record<string, unknown> | undefined)?.shooterKey === 'string'
+            ? String((req.body as Record<string, unknown>).shooterKey)
+            : typeof req.headers['x-shooter-key'] === 'string'
+              ? req.headers['x-shooter-key']
+              : '';
+      memoryStore.deletePublicShot(req.params.id, rawKey);
+      return res.json({ ok: true });
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to delete photo.' });
+    }
+  });
+
   // =========================================================================
   // STUDIO ROUTES (In-Memory Fallback)
   // =========================================================================

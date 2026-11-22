@@ -655,6 +655,12 @@ export const api = {
         { method: 'PATCH' }
       ),
 
+    deleteCameraShot: (shotId: string, shooterKey: string) =>
+      request<{ ok: boolean }>(
+        `/api/public/camera/shots/${encodeURIComponent(shotId)}?shooterKey=${encodeURIComponent(shooterKey)}`,
+        { method: 'DELETE' }
+      ),
+
     submitGiftTableEntry: (
       slugOrId: string,
       payload: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>

@@ -1053,14 +1053,18 @@ export default function App() {
     }
   };
 
-  const handleDeleteShot = async (shotId: string) => {
+  const handleDeleteShot = async (shotId: string, shooterKey?: string) => {
     const previous = disposableShots;
     setDisposableShots((prev) => prev.filter((s) => s.id !== shotId));
     try {
-      await api.studio.deleteShot(shotId);
+      if (shooterKey || !isSignedIn) {
+        await api.public.deleteCameraShot(shotId, shooterKey || '');
+      } else {
+        await api.studio.deleteShot(shotId);
+      }
     } catch (err) {
       setDisposableShots(previous);
-      notifyError(err, 'Failed to delete shot from Supabase.');
+      notifyError(err, 'Failed to delete photo.');
       throw err;
     }
   };

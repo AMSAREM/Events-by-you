@@ -2229,6 +2229,27 @@ export const memoryStore = {
     db.disposableShots.delete(shotId);
   },
 
+  deletePublicShot(shotId: string, shooterKey: string) {
+    const key = shooterKey.trim();
+    if (!key) {
+      const err = new Error('Missing shooterKey to verify photo ownership.');
+      (err as Error & { status?: number }).status = 400;
+      throw err;
+    }
+    const shot = db.disposableShots.get(shotId);
+    if (!shot) {
+      const err = new Error('Photo not found.');
+      (err as Error & { status?: number }).status = 404;
+      throw err;
+    }
+    if (!shot.shooterKey || shot.shooterKey !== key) {
+      const err = new Error('You can only delete photos you captured.');
+      (err as Error & { status?: number }).status = 403;
+      throw err;
+    }
+    db.disposableShots.delete(shotId);
+  },
+
   developRoll(userId: string, eventId: string) {
     const evt = db.events.get(eventId);
     if (!evt || evt.organizerId !== userId) throw new Error('Unauthorized.');
