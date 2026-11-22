@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Gift,
   Layers,
   Mail,
   MapPin,
@@ -56,6 +57,42 @@ interface LandingScreenProps {
 }
 
 const HERO_BACKDROP_IMG = '/src/assets/images/flyer_corporate_gala_1795075792816.jpg';
+
+const SHOWCASE_PREVIEW_EVENT = {
+  title: 'Accra Tech Founders Summit 2026',
+  subtitle:
+    'Keynotes, circle-validated VIP networking, and instant QR turnstile check-in.',
+  slug: 'accra-tech-summit',
+  category: 'Tech',
+  city: 'Accra',
+  venue: 'Kempinski Gold Coast Hotel',
+  date: 'Sat, Nov 14 · 6:00 PM',
+  venueFormat: 'In-Person',
+  capacity: 500,
+  registered: 420,
+  checkedIn: 318,
+  smsDispatched: 420,
+  occupancyPct: 84,
+  senderId: 'SUMMIT26',
+  flyerUrl: getCategoryPreset('Tech').flyerUrl,
+};
+
+const SHOWCASE_PREVIEW_ATTENDEES = [
+  {
+    id: 'demo-att-1',
+    name: 'Kwame Mensah',
+    phone: '+233 24 000 1842',
+    tier: 'VIP Circle',
+    ticketCode: 'EBY-9482-KM',
+  },
+  {
+    id: 'demo-att-2',
+    name: 'Ama Boateng',
+    phone: '+233 55 000 3109',
+    tier: 'General Pass',
+    ticketCode: 'EBY-7120-AB',
+  },
+];
 
 export const LandingScreen: React.FC<LandingScreenProps> = ({
   featuredEvent = null,
@@ -131,8 +168,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
     e.preventDefault();
     if (!quickEmail.trim()) return;
     setQuickSent(true);
+    const trimmed = quickEmail.trim();
     setTimeout(() => {
-      onQuickStartEmail(quickEmail.trim());
+      if (isSignedIn) {
+        onQuickStartEmail(trimmed);
+      } else {
+        onNavigateSignIn(trimmed);
+      }
     }, 350);
   };
 
@@ -143,13 +185,25 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
     }
   };
 
-  const primaryAttendees = featuredEvent
-    ? recentAttendees.filter((a) => a.eventId === featuredEvent.id).slice(0, 2)
-    : [];
+  const goAuthOrStudio = () => {
+    if (isSignedIn) {
+      onNavigateStudio();
+      return;
+    }
+    onNavigateSignIn();
+  };
 
-  const occupancyPct = featuredEvent
-    ? Math.round((featuredEvent.registered / Math.max(1, featuredEvent.capacity)) * 100)
-    : 0;
+  const goCreateOrLogin = () => {
+    if (isSignedIn) {
+      if (onCreateEvent) {
+        onCreateEvent();
+      } else {
+        onNavigateStudio();
+      }
+      return;
+    }
+    onNavigateSignIn();
+  };
 
   return (
     <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col overflow-x-clip">
@@ -211,7 +265,6 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
           </nav>
 
           <div className="order-2 md:order-3 xl:justify-self-end flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <PWAInstallButton variant="header-dark" className="h-9" />
             <button
               type="button"
               onClick={() => (isSignedIn && onSignOut ? onSignOut() : onNavigateSignIn())}
@@ -221,9 +274,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
             </button>
             <button
               type="button"
-              onClick={() =>
-                onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignUp()
-              }
+              onClick={goCreateOrLogin}
               className="inline-flex items-center justify-center h-9 bg-[#0B0B0B] text-white text-xs font-semibold px-3.5 sm:px-4 lg:px-5 rounded-full hover:bg-neutral-800 active:scale-[0.98] transition-all shadow-[0_6px_16px_-4px_rgba(11,11,11,0.22)] whitespace-nowrap shrink-0"
             >
               <span className="lg:hidden">{isSignedIn ? 'Studio' : 'Create Event'}</span>
@@ -295,86 +346,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
 
                   {/* Prominent Hero CTAs */}
                   <div className="mt-7 sm:mt-8 flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-3.5">
-                    <button
-                      type="button"
-                      disabled
-                      aria-disabled="true"
-                      className="w-full sm:w-[calc(50%-0.5rem)] inline-flex items-center gap-3 text-left bg-white/[0.12] border border-white/25 text-white px-4 py-3 rounded-2xl shadow-[0_12px_30px_-10px_rgba(0,0,0,0.65)] backdrop-blur-md cursor-default"
-                    >
-                      <span className="w-9 h-9 rounded-xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0 shadow-sm">
-                        <QrCode className="w-4 h-4" />
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block text-xs font-bold text-white leading-tight truncate">
-                          Check-In &amp; QR Screen
-                        </span>
-                        <span className="block text-[11px] font-medium text-zinc-300 leading-tight mt-0.5 truncate">
-                          Self check-in &amp; instant passes
-                        </span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled
-                      aria-disabled="true"
-                      className="w-full sm:w-[calc(50%-0.5rem)] inline-flex items-center gap-3 text-left bg-white/[0.12] border border-white/25 text-white px-4 py-3 rounded-2xl shadow-[0_12px_30px_-10px_rgba(0,0,0,0.65)] backdrop-blur-md cursor-default"
-                    >
-                      <span className="w-9 h-9 rounded-xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0 shadow-sm">
-                        <UserPlus className="w-4 h-4" />
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block text-xs font-bold text-white leading-tight truncate">
-                          RSVP &amp; Guest Validation
-                        </span>
-                        <span className="block text-[11px] font-medium text-zinc-300 leading-tight mt-0.5 truncate">
-                          Circle rules &amp; smart approval
-                        </span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled
-                      aria-disabled="true"
-                      className="w-full sm:w-[calc(50%-0.5rem)] inline-flex items-center gap-3 text-left bg-white/[0.12] border border-white/25 text-white px-4 py-3 rounded-2xl shadow-[0_12px_30px_-10px_rgba(0,0,0,0.65)] backdrop-blur-md cursor-default"
-                    >
-                      <span className="w-9 h-9 rounded-xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0 shadow-sm">
-                        <Shield className="w-4 h-4" />
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block text-xs font-bold text-white leading-tight truncate">
-                          Gate Scanner
-                        </span>
-                        <span className="block text-[11px] font-medium text-zinc-300 leading-tight mt-0.5 truncate">
-                          Offline-ready door verification
-                        </span>
-                      </span>
-                    </button>
-                    {onOpenDisposableCamera && (
-                      <button
-                        type="button"
-                        disabled
-                        aria-disabled="true"
-                        className="w-full sm:w-[calc(50%-0.5rem)] inline-flex items-center gap-3 text-left bg-white/[0.12] border border-white/25 text-white px-4 py-3 rounded-2xl shadow-[0_12px_30px_-10px_rgba(0,0,0,0.65)] backdrop-blur-md cursor-default"
-                      >
-                        <span className="w-9 h-9 rounded-xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0 shadow-sm">
-                          <Camera className="w-4 h-4" />
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block text-xs font-bold text-white leading-tight truncate">
-                            Disposable Camera
-                          </span>
-                          <span className="block text-[11px] font-medium text-zinc-300 leading-tight mt-0.5 truncate">
-                            Shared 35mm live guest film roll
-                          </span>
-                        </span>
-                      </button>
-                    )}
                     <PWAInstallButton variant="hero" className="w-full sm:w-auto" />
                     <button
                       type="button"
-                      onClick={() =>
-                        onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignIn()
-                      }
+                      onClick={goCreateOrLogin}
                       className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-transparent text-white/85 hover:text-white text-xs font-semibold px-4 py-3 sm:py-3.5 rounded-full transition-colors whitespace-nowrap shrink-0"
                     >
                       <span>Create Your Event</span>
@@ -383,7 +358,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   </div>
                   {!isSignedIn && (
                     <p className="mt-3 text-[11px] text-white/60">
-                      Open any invitation link to validate your circle &amp; claim a QR pass — or sign up free in seconds to host events.
+                      Open any invitation link to validate your circle &amp; claim a QR pass — or sign in in seconds to host events.
                     </p>
                   )}
                 </div>
@@ -413,15 +388,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <form
                       onSubmit={(e) => {
                         e.preventDefault();
-                        if (topMatchedEvent) {
-                          onNavigateDemoEvent(topMatchedEvent.id);
-                        } else if (onCreateEvent) {
-                          onCreateEvent();
-                        } else if (isSignedIn) {
-                          onNavigateStudio();
-                        } else {
-                          onNavigateSignUp();
-                        }
+                        goCreateOrLogin();
                       }}
                       className="mt-5 flex flex-col gap-3.5"
                     >
@@ -515,8 +482,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                           {onOpenQrScanner && (
                             <button
                               type="button"
-                              onClick={() => onOpenQrScanner(topMatchedEvent.id)}
-                              title="Open QR Gate Scanner for this event"
+                              onClick={goAuthOrStudio}
+                              title="Sign in to open QR Gate Scanner"
                               className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1 whitespace-nowrap shrink-0"
                             >
                               <QrCode className="w-3.5 h-3.5" />
@@ -540,21 +507,19 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                           type="submit"
                           className="w-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-bold py-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
                         >
-                          <span>{topMatchedEvent ? 'Find Event & Register' : 'Create Your First Event'}</span>
-                          <Search className="w-4 h-4" />
+                          <span>{isSignedIn ? 'Open Studio & Host Event' : 'Sign In to Host or Manage Events'}</span>
+                          <ArrowRight className="w-4 h-4" />
                         </button>
                       </div>
 
                       <div className="pt-2 text-center border-t border-[#E5E5EA]">
                         <button
                           type="button"
-                          onClick={() =>
-                            onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignUp()
-                          }
+                          onClick={goAuthOrStudio}
                           className="text-xs text-[#71717A] hover:text-[#0B0B0B] transition-colors inline-flex items-center gap-1"
                         >
                           <span className="text-[#0B0B0B] font-semibold">Hosting an event or program?</span>
-                          <span>Sign up free &amp; create in 2 minutes</span>
+                          <span>Sign in &amp; create in 2 minutes</span>
                           <ArrowRight className="w-3.5 h-3.5" />
                         </button>
                       </div>
@@ -567,101 +532,185 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
 
           {/* Secondary Light Canvas Container: Prominent Check-In Registration & QR Scanner Spotlight + Walkthrough */}
           <section className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 xl:px-12 pt-10 sm:pt-14 pb-14 sm:pb-20">
-            {/* PROMINENT CHECK-IN REGISTRATION & QR CODE SCANNER COMMAND SPOTLIGHT */}
-            <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5 lg:gap-6 relative z-10">
-              <div className="bg-[#0B0B0B] text-white rounded-2xl sm:rounded-[28px] p-5 sm:p-7 flex flex-col justify-between gap-5 shadow-xl min-w-0">
+            {/* ALL CORE PLATFORM FEATURES SHOWCASE (NON-CLICKABLE FEATURE CARDS) */}
+            <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 relative z-10">
+              {/* Feature 1: Check-In & QR Pass Screen */}
+              <div className="bg-[#0B0B0B] text-white rounded-2xl sm:rounded-[28px] p-5 sm:p-6 flex flex-col justify-between gap-4 shadow-xl min-w-0">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0">
-                    <QrCode className="w-5 h-5 sm:w-6 sm:h-6" />
+                  <div className="w-11 h-11 rounded-2xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0">
+                    <QrCode className="w-5 h-5" />
                   </div>
-                  <span className="text-[11px] font-mono text-emerald-400 bg-white/10 px-3 py-1 rounded-full whitespace-nowrap">
+                  <span className="text-[11px] font-mono text-emerald-400 bg-white/10 px-2.5 py-1 rounded-full whitespace-nowrap">
                     0.3s Camera &amp; Kiosk QR
                   </span>
                 </div>
                 <div>
-                  <h2 className="font-display text-lg sm:text-xl lg:text-2xl font-bold tracking-tight">
-                    Prominent Check-In &amp; QR Pass Screen
+                  <h2 className="font-display text-lg sm:text-xl font-bold tracking-tight">
+                    Check-In &amp; QR Pass Screen
                   </h2>
-                  <p className="text-xs sm:text-sm text-zinc-300 mt-1.5 leading-relaxed">
-                    Display the fullscreen guest Check-In QR Pass screen at the venue entrance or
-                    launch the volunteer gate scanner to block duplicate entries in real time.
+                  <p className="text-xs sm:text-[13px] text-zinc-300 mt-1.5 leading-relaxed">
+                    Fullscreen guest Check-In QR Pass screen at venue entrances paired with an
+                    anti-passback volunteer gate scanner.
                   </p>
                 </div>
-                <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 pt-1">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      topMatchedEvent
-                        ? onNavigateDemoEvent(topMatchedEvent.id, 'checkin')
-                        : onCreateEvent
-                          ? onCreateEvent()
-                          : onNavigateStudio()
-                    }
-                    className="w-full sm:w-auto justify-center px-5 py-2.5 rounded-full bg-white text-[#0B0B0B] text-xs font-bold hover:bg-zinc-200 transition-colors inline-flex items-center gap-2 whitespace-nowrap"
-                  >
-                    <QrCode className="w-4 h-4" />
-                    <span>Open Check-In &amp; QR Screen</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onOpenQrScanner ? onOpenQrScanner(topMatchedEvent?.id) : onNavigateStudio()
-                    }
-                    className="w-full sm:w-auto justify-center px-4 py-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition-colors whitespace-nowrap"
-                  >
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <span className="px-3 py-1.5 rounded-full bg-white/10 border border-white/15 text-white text-[11px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <QrCode className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Fullscreen Kiosk QR</span>
+                  </span>
+                  <span className="px-3 py-1.5 rounded-full bg-white/10 border border-white/15 text-zinc-200 text-[11px] font-medium whitespace-nowrap">
                     Gate Scanner
-                  </button>
+                  </span>
                 </div>
               </div>
 
-              <div className="bg-white text-[#0B0B0B] rounded-2xl sm:rounded-[28px] p-5 sm:p-7 border border-[#E5E5EA] flex flex-col justify-between gap-5 shadow-sm min-w-0">
+              {/* Feature 2: Guest Validation, Custom Forms & RSVP */}
+              <div className="bg-white text-[#0B0B0B] rounded-2xl sm:rounded-[28px] p-5 sm:p-6 border border-[#E5E5EA] flex flex-col justify-between gap-4 shadow-sm min-w-0">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center shrink-0">
-                    <UserPlus className="w-5 h-5 sm:w-6 sm:h-6" />
+                  <div className="w-11 h-11 rounded-2xl bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center shrink-0">
+                    <UserPlus className="w-5 h-5" />
                   </div>
-                  <span className="text-[11px] font-mono text-[#0B0B0B] bg-[#F5F5F7] px-3 py-1 rounded-full whitespace-nowrap">
-                    Validation · Custom Forms · RSVP
+                  <span className="text-[11px] font-mono text-[#0B0B0B] bg-[#F5F5F7] px-2.5 py-1 rounded-full whitespace-nowrap">
+                    Forms · E.164 RSVP
                   </span>
                 </div>
                 <div>
-                  <h2 className="font-display text-lg sm:text-xl lg:text-2xl font-bold tracking-tight">
-                    Guest Validation, Custom Forms &amp; RSVP
+                  <h2 className="font-display text-lg sm:text-xl font-bold tracking-tight">
+                    Guest Validation &amp; Custom Forms
                   </h2>
-                  <p className="text-xs sm:text-sm text-[#71717A] mt-1.5 leading-relaxed">
-                    Every invitation includes an event-specific validation form (Family, Friends,
-                    VIP) and custom attendee fields — while standalone Gift Table pages live cleanly on their own dedicated link.
+                  <p className="text-xs sm:text-[13px] text-[#71717A] mt-1.5 leading-relaxed">
+                    Circle-based approval (Family, Friends, VIP), custom registration fields, and
+                    strict duplicate phone protection.
                   </p>
                 </div>
-                <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 pt-1">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      topMatchedEvent
-                        ? onNavigateDemoEvent(topMatchedEvent.id, 'register')
-                        : onCreateEvent
-                          ? onCreateEvent()
-                          : onNavigateStudio()
-                    }
-                    className="w-full sm:w-auto justify-center px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-bold hover:bg-neutral-800 transition-colors inline-flex items-center gap-2 whitespace-nowrap"
-                  >
-                    <UserPlus className="w-4 h-4" />
-                    <span>Open Registration &amp; Validation</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      topMatchedEvent
-                        ? onNavigateDemoEvent(topMatchedEvent.id, 'gifts')
-                        : onCreateEvent
-                          ? onCreateEvent()
-                          : onNavigateStudio()
-                    }
-                    className="w-full sm:w-auto justify-center px-4 py-2.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-[#0B0B0B] text-xs font-semibold transition-colors whitespace-nowrap"
-                  >
-                    Open Standalone Gift Table
-                  </button>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <span className="px-3 py-1.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#0B0B0B] text-[11px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <UserPlus className="w-3.5 h-3.5" />
+                    <span>Circle Validation</span>
+                  </span>
+                  <span className="px-3 py-1.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#444748] text-[11px] font-medium whitespace-nowrap">
+                    Custom RSVP Fields
+                  </span>
+                </div>
+              </div>
+
+              {/* Feature 3: Event Disposable Camera */}
+              <div className="bg-white text-[#0B0B0B] rounded-2xl sm:rounded-[28px] p-5 sm:p-6 border border-[#E5E5EA] flex flex-col justify-between gap-4 shadow-sm min-w-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center shrink-0">
+                    <Camera className="w-5 h-5" />
+                  </div>
+                  <span className="text-[11px] font-mono text-[#0B0B0B] bg-[#F5F5F7] px-2.5 py-1 rounded-full whitespace-nowrap">
+                    35mm Shared Film
+                  </span>
+                </div>
+                <div>
+                  <h2 className="font-display text-lg sm:text-xl font-bold tracking-tight">
+                    Event Disposable Camera
+                  </h2>
+                  <p className="text-xs sm:text-[13px] text-[#71717A] mt-1.5 leading-relaxed">
+                    Full-viewport guest film camera unlocked by attendee check-in pass with flash,
+                    zoom, film presets, and contact sheets.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <span className="px-3 py-1.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#0B0B0B] text-[11px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>5-Shot Pass Unlock</span>
+                  </span>
+                  <span className="px-3 py-1.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#444748] text-[11px] font-medium whitespace-nowrap">
+                    Printout Archive
+                  </span>
+                </div>
+              </div>
+
+              {/* Feature 4: Standalone Gift Table & Desk Portal */}
+              <div className="bg-white text-[#0B0B0B] rounded-2xl sm:rounded-[28px] p-5 sm:p-6 border border-[#E5E5EA] flex flex-col justify-between gap-4 shadow-sm min-w-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center shrink-0">
+                    <Gift className="w-5 h-5" />
+                  </div>
+                  <span className="text-[11px] font-mono text-[#0B0B0B] bg-[#F5F5F7] px-2.5 py-1 rounded-full whitespace-nowrap">
+                    /e/slug/gifts
+                  </span>
+                </div>
+                <div>
+                  <h2 className="font-display text-lg sm:text-xl font-bold tracking-tight">
+                    Standalone Gift Table &amp; Desk
+                  </h2>
+                  <p className="text-xs sm:text-[13px] text-[#71717A] mt-1.5 leading-relaxed">
+                    Dedicated gift portal and appointed desk attendant ledger for cash, MoMo, and
+                    registry pledges — separate from the Studio.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <span className="px-3 py-1.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#0B0B0B] text-[11px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <Gift className="w-3.5 h-3.5" />
+                    <span>Dedicated Gift Link</span>
+                  </span>
+                  <span className="px-3 py-1.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#444748] text-[11px] font-medium whitespace-nowrap">
+                    Desk Personnel View
+                  </span>
+                </div>
+              </div>
+
+              {/* Feature 5: Arkesel SMS & Resend Email Passes */}
+              <div className="bg-white text-[#0B0B0B] rounded-2xl sm:rounded-[28px] p-5 sm:p-6 border border-[#E5E5EA] flex flex-col justify-between gap-4 shadow-sm min-w-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center shrink-0">
+                    <MessageSquare className="w-5 h-5" />
+                  </div>
+                  <span className="text-[11px] font-mono text-[#0B0B0B] bg-[#F5F5F7] px-2.5 py-1 rounded-full whitespace-nowrap">
+                    MTN · Telecel · AT
+                  </span>
+                </div>
+                <div>
+                  <h2 className="font-display text-lg sm:text-xl font-bold tracking-tight">
+                    Arkesel SMS &amp; Email Passes
+                  </h2>
+                  <p className="text-xs sm:text-[13px] text-[#71717A] mt-1.5 leading-relaxed">
+                    Custom Sender IDs, dynamic QR pass templates, delivery telemetry, and one-click
+                    post-event thank-you SMS blasts.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <span className="px-3 py-1.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#0B0B0B] text-[11px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    <span>Arkesel v2 SMS</span>
+                  </span>
+                  <span className="px-3 py-1.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#444748] text-[11px] font-medium whitespace-nowrap">
+                    Resend Email
+                  </span>
+                </div>
+              </div>
+
+              {/* Feature 6: Program Schedule, Flyers & CSV Exports */}
+              <div className="bg-white text-[#0B0B0B] rounded-2xl sm:rounded-[28px] p-5 sm:p-6 border border-[#E5E5EA] flex flex-col justify-between gap-4 shadow-sm min-w-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center shrink-0">
+                    <Layers className="w-5 h-5" />
+                  </div>
+                  <span className="text-[11px] font-mono text-[#0B0B0B] bg-[#F5F5F7] px-2.5 py-1 rounded-full whitespace-nowrap">
+                    Flyers · Live Agenda
+                  </span>
+                </div>
+                <div>
+                  <h2 className="font-display text-lg sm:text-xl font-bold tracking-tight">
+                    Designer Flyers &amp; Live Schedule
+                  </h2>
+                  <p className="text-xs sm:text-[13px] text-[#71717A] mt-1.5 leading-relaxed">
+                    Editorial invitation cards with OpenGraph previews, real-time run-of-show
+                    program updates, and full CSV guest exports.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <span className="px-3 py-1.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#0B0B0B] text-[11px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Program Schedule</span>
+                  </span>
+                  <span className="px-3 py-1.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#444748] text-[11px] font-medium whitespace-nowrap">
+                    Offline Manifest &amp; CSV
+                  </span>
                 </div>
               </div>
             </div>
@@ -679,9 +728,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={() =>
-                    onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignUp()
-                  }
+                  onClick={goCreateOrLogin}
                   className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors self-start sm:self-auto whitespace-nowrap"
                 >
                   Publish Your Event
@@ -694,8 +741,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <EventFlyerCard
                       key={evt.id}
                       event={evt}
-                      onOpenInvite={(target) => onNavigateDemoEvent(target.id, 'top')}
-                      onOpenCheckIn={(target) => onNavigateDemoEvent(target.id, 'checkin')}
+                      showActions={false}
                     />
                   ))}
                 </div>
@@ -707,9 +753,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   </p>
                   <button
                     type="button"
-                    onClick={() =>
-                      onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignUp()
-                    }
+                    onClick={goCreateOrLogin}
                     className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
                   >
                     Publish Your First Event
@@ -846,7 +890,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                               Event Title
                             </span>
                             <div className="p-3 bg-[#F5F5F7] rounded-xl border border-[#E5E5EA] text-sm font-semibold text-[#0B0B0B]">
-                              {featuredEvent?.title ?? 'Your Event Title'}
+                              {SHOWCASE_PREVIEW_EVENT.title}
                             </div>
                           </div>
 
@@ -857,7 +901,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                               </span>
                               <div className="p-2.5 bg-[#F5F5F7] rounded-xl border border-[#E5E5EA] font-mono text-xs text-[#0B0B0B] flex items-center justify-between gap-2">
                                 <span className="truncate">
-                                  /e/{featuredEvent?.slug ?? 'your-event-slug'}
+                                  /e/{SHOWCASE_PREVIEW_EVENT.slug}
                                 </span>
                                 <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                               </div>
@@ -868,7 +912,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                               </span>
                               <div className="p-2.5 bg-[#F5F5F7] rounded-xl border border-[#E5E5EA] text-xs text-[#0B0B0B] flex items-center justify-between gap-2">
                                 <span className="truncate tabular-nums">
-                                  {featuredEvent?.city ?? 'Your City'} · {featuredEvent?.capacity ?? 200} max
+                                  {SHOWCASE_PREVIEW_EVENT.city} · {SHOWCASE_PREVIEW_EVENT.capacity} max
                                 </span>
                                 <MapPin className="w-4 h-4 text-[#71717A] shrink-0" />
                               </div>
@@ -878,25 +922,22 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                           <div className="p-3 bg-[#F5F5F7] rounded-xl border border-dashed border-[#C4C7C7] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                             <div className="flex items-center gap-3 min-w-0">
                               <img
-                                src={
-                                  featuredEvent?.flyerUrl ||
-                                  getCategoryPreset(featuredEvent?.category ?? 'Events').flyerUrl
-                                }
-                                alt={`${featuredEvent?.title ?? 'Event'} hero flyer`}
+                                src={SHOWCASE_PREVIEW_EVENT.flyerUrl}
+                                alt={`${SHOWCASE_PREVIEW_EVENT.title} sample hero flyer`}
                                 className="w-12 h-10 rounded-lg object-cover border border-[#E5E5EA] shrink-0"
                               />
                               <div className="min-w-0">
                                 <span className="text-xs font-semibold text-[#0B0B0B] block truncate">
-                                  {featuredEvent ? `Hero Flyer Active · ${featuredEvent.title}` : 'Upload Custom Hero Flyer'}
+                                  Hero Flyer Sample · {SHOWCASE_PREVIEW_EVENT.title}
                                 </span>
                                 <span className="text-[11px] text-[#71717A] block truncate">
-                                  {featuredEvent?.venue ?? 'Venue configured in Event Wizard'} · Instant edge deploy
+                                  {SHOWCASE_PREVIEW_EVENT.venue} · Instant edge deploy
                                 </span>
                               </div>
                             </div>
                             <button
                               type="button"
-                              onClick={onNavigateStudio}
+                              onClick={goCreateOrLogin}
                               className="self-start sm:self-auto px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] shrink-0 transition-colors"
                             >
                               Open Wizard
@@ -923,22 +964,21 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                       <div>
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-[11px] uppercase tracking-wider text-zinc-400 font-mono">
-                            Public Preview · /e/{featuredEvent?.slug ?? 'your-event'}
+                            Sample Preview · /e/{SHOWCASE_PREVIEW_EVENT.slug}
                           </span>
                           <span className="text-[11px] text-emerald-400 bg-white/10 px-2.5 py-0.5 rounded-full font-medium">
-                            {featuredEvent ? `Published (${occupancyPct}%)` : 'Ready to Publish'}
+                            Sample ({SHOWCASE_PREVIEW_EVENT.occupancyPct}%)
                           </span>
                         </div>
                         <div className="mt-4">
                           <span className="text-[11px] text-zinc-400 tabular-nums">
-                            {featuredEvent?.date ?? 'Upcoming Date'} · {featuredEvent?.venueFormat ?? 'In-Person'}
+                            {SHOWCASE_PREVIEW_EVENT.date} · {SHOWCASE_PREVIEW_EVENT.venueFormat}
                           </span>
                           <h3 className="text-xl font-bold text-white mt-1">
-                            {featuredEvent?.title ?? 'Your Live Event Page'}
+                            {SHOWCASE_PREVIEW_EVENT.title}
                           </h3>
                           <p className="text-xs text-zinc-400 mt-1.5 line-clamp-2">
-                            {featuredEvent?.subtitle ??
-                              'Create an event in Creator Studio to preview live capacity, SMS passes, and QR registration.'}
+                            {SHOWCASE_PREVIEW_EVENT.subtitle}
                           </p>
                         </div>
 
@@ -949,28 +989,22 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                           </div>
                           <div className="space-y-2 font-mono text-xs">
                             <div className="p-2.5 bg-[#0B0B0B]/60 rounded-xl border border-white/10 text-white/90 flex items-center justify-between">
-                              <span>{primaryAttendees[0]?.name ?? 'Guest Full Name'}</span>
+                              <span>{SHOWCASE_PREVIEW_ATTENDEES[0].name}</span>
                               <span className="text-white/40 text-[10px]">Name</span>
                             </div>
                             <div className="p-2.5 bg-[#0B0B0B]/60 rounded-xl border border-white/10 text-emerald-400 flex items-center justify-between">
                               <span className="tabular-nums">
-                                {primaryAttendees[0]?.phone ?? '+233 XX XXX XXXX'}
+                                {SHOWCASE_PREVIEW_ATTENDEES[0].phone}
                               </span>
                               <span className="text-emerald-400/70 text-[10px]">E.164</span>
                             </div>
                           </div>
                           <button
                             type="button"
-                            onClick={() =>
-                              featuredEvent
-                                ? onNavigateDemoEvent(featuredEvent.id)
-                                : onCreateEvent
-                                  ? onCreateEvent()
-                                  : onNavigateStudio()
-                            }
+                            onClick={goCreateOrLogin}
                             className="w-full py-2.5 bg-white text-[#0B0B0B] text-xs font-bold rounded-full hover:bg-neutral-200 transition-colors"
                           >
-                            {featuredEvent ? 'Open Registration Page' : 'Create Event & Publish'}
+                            Create Event &amp; Publish
                           </button>
                         </div>
                       </div>
@@ -1003,7 +1037,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             </div>
                           </div>
                           <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-700 text-[11px] font-semibold tabular-nums">
-                            {featuredEvent?.smsDispatched ?? 0} / {featuredEvent?.registered ?? 0} Dispatched
+                            {SHOWCASE_PREVIEW_EVENT.smsDispatched} / {SHOWCASE_PREVIEW_EVENT.registered} Dispatched
                           </span>
                         </div>
 
@@ -1013,7 +1047,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                               <span>
                                 Sender ID:{' '}
                                 <strong className="text-[#0B0B0B]">
-                                  {featuredEvent?.senderId || 'EVENTSAPP'}
+                                  {SHOWCASE_PREVIEW_EVENT.senderId}
                                 </strong>
                               </span>
                               <span className="font-mono text-emerald-700 font-semibold tabular-nums">
@@ -1021,12 +1055,12 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                               </span>
                             </div>
                             <p className="font-mono text-xs text-[#0B0B0B] leading-relaxed bg-white p-3 rounded-xl border border-[#E5E5EA]">
-                              Hi {primaryAttendees[0]?.name.split(' ')[0] ?? 'Guest'}, your pass for{' '}
-                              {featuredEvent?.title ?? 'your event'} is confirmed. Show QR token{' '}
+                              Hi {SHOWCASE_PREVIEW_ATTENDEES[0].name.split(' ')[0]}, your pass for{' '}
+                              {SHOWCASE_PREVIEW_EVENT.title} is confirmed. Show QR token{' '}
                               <span className="text-emerald-700 font-bold">
-                                {primaryAttendees[0]?.ticketCode ?? '#PASS-CODE'}
+                                {SHOWCASE_PREVIEW_ATTENDEES[0].ticketCode}
                               </span>{' '}
-                              at {featuredEvent?.venue ?? 'the event venue'}.
+                              at {SHOWCASE_PREVIEW_EVENT.venue}.
                             </p>
                           </div>
 
@@ -1097,31 +1131,23 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                           <div className="flex items-center justify-between pb-2 border-b border-[#EEEEF0] mb-2">
                             <span className="inline-flex items-center gap-1.5 text-xs font-bold">
                               <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                              {featuredEvent?.senderId || 'EVENTSAPP'}
+                              {SHOWCASE_PREVIEW_EVENT.senderId}
                             </span>
                             <span className="text-[11px] font-mono text-[#71717A]">Just now</span>
                           </div>
                           <p className="text-xs text-[#1A1C1D] leading-relaxed">
-                            Hi {primaryAttendees[0]?.name.split(' ')[0] ?? 'Guest'}, your pass for{' '}
-                            {featuredEvent?.title ?? 'your event'} is confirmed. Show your QR token at check-in:{' '}
+                            Hi {SHOWCASE_PREVIEW_ATTENDEES[0].name.split(' ')[0]}, your pass for{' '}
+                            {SHOWCASE_PREVIEW_EVENT.title} is confirmed. Show your QR token at check-in:{' '}
                             <strong className="font-mono bg-[#F5F5F7] px-1.5 py-0.5 rounded">
-                              {primaryAttendees[0]?.ticketCode ?? '#PASS-CODE'}
+                              {SHOWCASE_PREVIEW_ATTENDEES[0].ticketCode}
                             </strong>
                             .
                           </p>
                           <div className="mt-3 p-2.5 bg-[#F5F5F7] rounded-xl flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
                             <span className="text-[#71717A]">Camera Link:</span>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                featuredEvent
-                                  ? onNavigateDemoEvent(featuredEvent.id)
-                                  : onNavigateStudio()
-                              }
-                              className="text-emerald-700 font-bold underline truncate"
-                            >
-                              /e/{featuredEvent?.slug ?? 'event'}/camera
-                            </button>
+                            <span className="text-emerald-700 font-bold truncate">
+                              /e/{SHOWCASE_PREVIEW_EVENT.slug}/camera
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -1166,14 +1192,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             <span className="text-[11px] text-[#71717A] block">Admitted</span>
                             <div className="text-right sm:text-left">
                               <span className="font-display text-xl sm:text-2xl lg:text-[26px] font-bold text-[#0B0B0B] sm:mt-0.5 block tabular-nums">
-                                {featuredEvent?.checkedIn ?? 0}/{featuredEvent?.registered ?? 0}
+                                {SHOWCASE_PREVIEW_EVENT.checkedIn}/{SHOWCASE_PREVIEW_EVENT.registered}
                               </span>
                               <span className="text-[11px] text-emerald-600 font-semibold tabular-nums">
-                                {featuredEvent && featuredEvent.registered > 0
-                                  ? Math.round(
-                                      (featuredEvent.checkedIn / featuredEvent.registered) * 100
-                                    )
-                                  : 0}
+                                {Math.round(
+                                  (SHOWCASE_PREVIEW_EVENT.checkedIn / SHOWCASE_PREVIEW_EVENT.registered) *
+                                    100
+                                )}
                                 % Turnout
                               </span>
                             </div>
@@ -1201,46 +1226,40 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         </div>
 
                         <div className="space-y-2">
-                          {primaryAttendees.length > 0 ? (
-                            primaryAttendees.map((att, idx) => (
-                              <div
-                                key={att.id}
-                                className="p-3 bg-[#F3F3F5] rounded-2xl flex items-center justify-between gap-2"
-                              >
-                                <div className="flex items-center gap-2.5 min-w-0">
-                                  <div
-                                    className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 ${
-                                      idx === 0
-                                        ? 'bg-[#0B0B0B] text-white'
-                                        : 'bg-[#E2E2E4] text-[#0B0B0B]'
-                                    }`}
-                                  >
-                                    {att.name
-                                      .split(' ')
-                                      .map((n) => n[0])
-                                      .join('')
-                                      .slice(0, 2)}
-                                  </div>
-                                  <div className="min-w-0">
-                                    <span className="text-xs font-semibold text-[#0B0B0B] block truncate">
-                                      {att.name} ({att.tier})
-                                    </span>
-                                    <span className="font-mono text-[11px] text-[#71717A] block truncate">
-                                      Pass: {att.ticketCode}
-                                    </span>
-                                  </div>
+                          {SHOWCASE_PREVIEW_ATTENDEES.map((att, idx) => (
+                            <div
+                              key={att.id}
+                              className="p-3 bg-[#F3F3F5] rounded-2xl flex items-center justify-between gap-2"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <div
+                                  className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 ${
+                                    idx === 0
+                                      ? 'bg-[#0B0B0B] text-white'
+                                      : 'bg-[#E2E2E4] text-[#0B0B0B]'
+                                  }`}
+                                >
+                                  {att.name
+                                    .split(' ')
+                                    .map((n) => n[0])
+                                    .join('')
+                                    .slice(0, 2)}
                                 </div>
-                                <span className="px-2.5 py-0.5 rounded-full bg-white text-emerald-600 text-[11px] font-semibold inline-flex items-center gap-1 shrink-0">
-                                  <CheckCircle2 className="w-3.5 h-3.5" />
-                                  Valid Entry
-                                </span>
+                                <div className="min-w-0">
+                                  <span className="text-xs font-semibold text-[#0B0B0B] block truncate">
+                                    {att.name} ({att.tier})
+                                  </span>
+                                  <span className="font-mono text-[11px] text-[#71717A] block truncate">
+                                    Pass: {att.ticketCode}
+                                  </span>
+                                </div>
                               </div>
-                            ))
-                          ) : (
-                            <div className="p-4 bg-[#F3F3F5] rounded-2xl text-xs text-[#71717A]">
-                              Checked-in guests appear here in real time as volunteers scan gate QR passes.
+                              <span className="px-2.5 py-0.5 rounded-full bg-white text-emerald-600 text-[11px] font-semibold inline-flex items-center gap-1 shrink-0">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                Valid Entry
+                              </span>
                             </div>
-                          )}
+                          ))}
                         </div>
                       </div>
 
@@ -1274,7 +1293,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                           <div className="w-32 h-32 bg-[#EEEEF0] flex items-center justify-center rounded-xl p-2 relative">
                             <DeterministicQrSvg
                               value={buildEventInvitationUrl(
-                                featuredEvent?.slug || featuredEvent?.id || 'eventsapp',
+                                SHOWCASE_PREVIEW_EVENT.slug,
                                 'checkin'
                               )}
                               size={112}
@@ -1285,7 +1304,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             </div>
                           </div>
                           <span className="mt-3 font-mono text-[13px] font-bold tracking-widest text-[#0B0B0B]">
-                            {primaryAttendees[0]?.ticketCode ?? '#PASS-CODE'}
+                            {SHOWCASE_PREVIEW_ATTENDEES[0].ticketCode}
                           </span>
                           <span className="text-[11px] text-emerald-700 font-semibold mt-0.5">
                             Instant Check-In &amp; Disposable Camera Unlock
@@ -1300,12 +1319,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         </span>
                         <button
                           type="button"
-                          onClick={() =>
-                            onOpenQrScanner ? onOpenQrScanner(featuredEvent?.id) : onNavigateStudio()
-                          }
+                          onClick={onNavigateStudio}
                           className="text-white font-semibold hover:underline"
                         >
-                          Launch Gate Scanner →
+                          Open Organiser Studio →
                         </button>
                       </div>
                     </div>
@@ -1707,7 +1724,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                 <div className="mt-10">
                   <button
                     type="button"
-                    onClick={() => (isSignedIn ? onNavigateStudio() : onNavigateSignUp())}
+                    onClick={goAuthOrStudio}
                     className="w-full inline-flex items-center justify-center bg-[#EEEEF0] text-[#0B0B0B] text-xs font-semibold py-3.5 rounded-full hover:bg-[#E2E2E4] transition-colors"
                   >
                     Get Started Free
@@ -1761,9 +1778,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      if (onUpgradePro) onUpgradePro();
-                      else if (isSignedIn) onNavigateStudio();
-                      else onNavigateSignUp();
+                      if (!isSignedIn) onNavigateSignIn();
+                      else if (onUpgradePro) onUpgradePro();
+                      else onNavigateStudio();
                     }}
                     className="w-full inline-flex items-center justify-center bg-white text-[#0B0B0B] text-xs font-semibold py-3.5 rounded-full hover:bg-neutral-200 transition-colors shadow-lg"
                   >
@@ -1788,10 +1805,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
             </div>
             <button
               type="button"
-              onClick={onNavigateStudio}
+              onClick={goAuthOrStudio}
               className="text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1 hover:underline shrink-0"
             >
-              <span>Open Creator Studio</span>
+              <span>{isSignedIn ? 'Open Organiser Studio' : 'Sign In for Studio'}</span>
               <ArrowUpRight className="w-4 h-4" />
             </button>
           </div>
@@ -1801,8 +1818,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               {publishedEvents.slice(0, 3).map((evt, idx) => (
                 <div
                   key={evt.id}
-                  onClick={() => onNavigateDemoEvent(evt.id, 'top')}
-                  className="bg-[#F3F3F5] rounded-2xl overflow-hidden flex flex-col shadow-sm group min-w-0 cursor-pointer hover:shadow-md transition-shadow"
+                  className="bg-[#F3F3F5] rounded-2xl overflow-hidden flex flex-col shadow-sm min-w-0"
                 >
                   <div className="relative w-full h-48 sm:h-52 overflow-hidden bg-[#0B0B0B]">
                     {!failedImages[idx] ? (
@@ -1811,7 +1827,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                         alt={evt.title}
                         referrerPolicy="no-referrer"
                         onError={() => setFailedImages((prev) => ({ ...prev, [idx]: true }))}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        className="w-full h-full object-cover"
                       />
                     ) : (
                       <div className="w-full h-full bg-gradient-to-br from-[#1C1B1B] to-[#0B0B0B] flex items-center justify-center p-6 text-center">
@@ -1852,9 +1868,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </p>
               <button
                 type="button"
-                onClick={() =>
-                  onCreateEvent ? onCreateEvent() : isSignedIn ? onNavigateStudio() : onNavigateSignUp()
-                }
+                onClick={goCreateOrLogin}
                 className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 transition-colors"
               >
                 Create Event Now
@@ -1967,7 +1981,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </button>
               <button
                 type="button"
-                onClick={onNavigateStudio}
+                onClick={goAuthOrStudio}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
                 Event Planner Portal
@@ -1980,9 +1994,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </span>
               <button
                 type="button"
-                onClick={() =>
-                  featuredEvent ? onNavigateDemoEvent(featuredEvent.id) : onNavigateStudio()
-                }
+                onClick={goAuthOrStudio}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
                 Weddings &amp; Memorials
@@ -2016,26 +2028,24 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => onNavigateSignUp()}
+                onClick={() => onNavigateSignIn()}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
-                Create Free Account
+                Organiser Login
               </button>
               <button
                 type="button"
-                onClick={() =>
-                  featuredEvent ? onNavigateDemoEvent(featuredEvent.id) : onNavigateStudio()
-                }
+                onClick={goAuthOrStudio}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
-                Live Event Pages
+                Organiser Sign In
               </button>
               <button
                 type="button"
-                onClick={onNavigateStudio}
+                onClick={goAuthOrStudio}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
-                Creator Studio
+                Organiser Studio
               </button>
             </div>
           </div>

@@ -99,21 +99,33 @@ export const EventFlyerCard: React.FC<EventFlyerCardProps> = ({
     }
   };
 
+  const isPosterClickable = Boolean(onOpenInvite || onManage);
+
   return (
     <article
-      className={`group rounded-3xl overflow-hidden border ${styles.frameClass} flex flex-col justify-between shadow-[0_14px_38px_-14px_rgba(11,11,11,0.22)] transition-transform duration-200 hover:-translate-y-0.5`}
+      className={`group rounded-3xl overflow-hidden border ${styles.frameClass} flex flex-col justify-between shadow-[0_14px_38px_-14px_rgba(11,11,11,0.22)] ${
+        isPosterClickable ? 'transition-transform duration-200 hover:-translate-y-0.5' : ''
+      }`}
     >
       {/* Editorial Graphic-Designer Poster Canvas */}
       <div
-        onClick={() => (onOpenInvite ? onOpenInvite(event) : onManage?.(event))}
-        className={`relative w-full ${compact ? 'aspect-[16/10]' : 'aspect-[16/10] sm:aspect-[16/9]'} overflow-hidden cursor-pointer select-none`}
+        onClick={
+          isPosterClickable
+            ? () => (onOpenInvite ? onOpenInvite(event) : onManage?.(event))
+            : undefined
+        }
+        className={`relative w-full ${compact ? 'aspect-[16/10]' : 'aspect-[16/10] sm:aspect-[16/9]'} overflow-hidden select-none ${
+          isPosterClickable ? 'cursor-pointer' : 'cursor-default'
+        }`}
       >
         {flyerSrc && !imgError ? (
           <img
             src={flyerSrc}
             alt={`${event.title} editorial flyer`}
             onError={() => setImgError(true)}
-            className="w-full h-full object-cover object-center group-hover:scale-[1.03] transition-transform duration-500"
+            className={`w-full h-full object-cover object-center ${
+              isPosterClickable ? 'group-hover:scale-[1.03] transition-transform duration-500' : ''
+            }`}
           />
         ) : (
           <MonochromePoster variant={event.artwork} className="w-full h-full" />
