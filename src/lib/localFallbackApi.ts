@@ -11,7 +11,7 @@ import {
   validateStrictPassword,
   validateStrictPhoneE164,
 } from '../data/initialData';
-import { calculateSmsCredits, resolveEventMessage } from './eventMessages';
+import { appendPoweredByLine, calculateSmsCredits, resolveEventMessage } from './eventMessages';
 import { resolveAuthoritativeSmsBundle, validateReceiptReference } from './smsBundles';
 import {
   DEFAULT_SHARED_SENDER_ID,
@@ -1976,10 +1976,11 @@ export async function localFallbackRequest<T>(
     }
     const prepared = recipients.map((att) => {
       const evt = db.events.find((e) => e.id === att.eventId)!;
-      const personalized = message
+      const personalizedRaw = message
         .replace(/\{name\}/gi, att.name)
         .replace(/\{event\}/gi, evt.title)
         .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode);
+      const personalized = appendPoweredByLine(personalizedRaw);
       const smsCost = sendSms && att.phone?.trim() ? calculateSmsCredits(personalized) : 0;
       return { att, evt, smsCost };
     });

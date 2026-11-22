@@ -49,6 +49,7 @@ import {
   DeterministicQrSvg,
   downloadQrSvg,
 } from '../lib/qr';
+import { appendPoweredByLine } from '../lib/eventMessages';
 import { getContrastTextColor, hexWithAlpha, normalizeHexColor } from '../lib/themeColors';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -398,7 +399,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       try {
         await navigator.share({
           title: `${selectedEvent.title} — Event Check-In`,
-          text: `Check in for ${selectedEvent.title} (${selectedEvent.date} · ${selectedEvent.venue})`,
+          text: appendPoweredByLine(
+            `Check in for ${selectedEvent.title} (${selectedEvent.date} · ${selectedEvent.venue})`
+          ),
           url: checkinKioskUrl,
         });
       } catch {

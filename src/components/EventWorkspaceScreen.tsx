@@ -45,9 +45,11 @@ import {
   normalizePhoneE164,
 } from '../data/initialData';
 import {
+  appendPoweredByLine,
   buildCameraLinkForOrigin,
   calculateSmsCredits,
   getDefaultMessageConfig,
+  POWERED_BY_LINE,
   resolveEventMessage,
 } from '../lib/eventMessages';
 import {
@@ -560,7 +562,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     }
   };
 
-  const smsSegments = Math.max(1, Math.ceil(confirmationTemplate.length / 160));
+  const smsSegments = calculateSmsCredits(appendPoweredByLine(confirmationTemplate));
 
   return (
     <div className="space-y-6">
@@ -1586,7 +1588,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   <span className="font-semibold text-[#71717A] block mb-1">
                     Live Gate Check-In Preview (5 Photos + Collage):
                   </span>
-                  <p className="font-mono break-words">
+                  <p className="font-mono break-words whitespace-pre-line">
                     {
                       resolveEventMessage({
                         type: 'checkin',
@@ -1601,6 +1603,10 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     }
                   </p>
                 </div>
+                <p className="text-[11px] text-[#71717A]">
+                  Constant line appended to every SMS &amp; email:{' '}
+                  <span className="font-mono text-[#0B0B0B]">{POWERED_BY_LINE}</span>
+                </p>
               </div>
 
               <div className="flex justify-end">
@@ -2094,7 +2100,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 const effectiveChannel = entitlements.allowSmsBroadcast ? thankYouChannel : 'email';
                 const phoneRecipients = eventAttendees.filter((a) => Boolean(a.phone?.trim()));
                 const emailRecipients = eventAttendees.filter((a) => Boolean(a.email?.trim()));
-                const thankYouSegments = calculateSmsCredits(thankYouTemplate);
+                const thankYouSegments = calculateSmsCredits(appendPoweredByLine(thankYouTemplate));
                 const thankYouCost =
                   effectiveChannel === 'email'
                     ? 0

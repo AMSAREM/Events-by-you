@@ -24,6 +24,7 @@ import {
 } from '../types/events';
 import { getCategoryPreset } from '../data/initialData';
 import { STUDIO_FLYER_PRESETS, compressFlyerImageFile } from '../lib/flyerUpload';
+import { appendPoweredByLine } from '../lib/eventMessages';
 import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
 import {
   getPlanEntitlements,
@@ -601,7 +602,9 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
       try {
         await navigator.share({
           title: event.title,
-          text: `${event.title} · ${event.date} at ${event.venue}. Register & get your QR pass:`,
+          text: appendPoweredByLine(
+            `${event.title} · ${event.date} at ${event.venue}. Register & get your QR pass:`
+          ),
           url: inviteUrl,
         });
         setShareFeedback('Link Copied & Shared!');

@@ -1,6 +1,24 @@
 import type { EventItem, EventMessageConfig } from '../types/events.ts';
 
 export const MAX_SHOTS_PER_USER = 5;
+export const POWERED_BY_LINE = 'powered by eventsbyyou.xyz';
+
+export function appendPoweredByLine(message?: string): string {
+  const clean = (message || '').trim();
+  if (!clean) return POWERED_BY_LINE;
+  if (/powered\s+by\s+eventsbyyou\.xyz/i.test(clean)) {
+    return clean;
+  }
+  return `${clean}\n${POWERED_BY_LINE}`;
+}
+
+export function stripTrailingPoweredByLine(message?: string): string {
+  const clean = (message || '').trim();
+  if (!clean) return '';
+  return clean
+    .replace(/\n*\s*powered\s+by\s+eventsbyyou\.xyz\s*$/i, '')
+    .trim();
+}
 
 export function calculateSmsCredits(message?: string): number {
   const clean = (message || '').trim();
@@ -96,5 +114,5 @@ export function resolveEventMessage(params: {
     rendered = `${rendered.trim()} Disposable Camera (5 shots & collage): ${cameraUrl}`;
   }
 
-  return { text: rendered.trim(), cameraUrl };
+  return { text: appendPoweredByLine(rendered), cameraUrl };
 }

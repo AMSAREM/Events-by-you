@@ -53,6 +53,7 @@ import type {
   OrganizerProfile,
   ScheduleBlock,
   SmsBundlePurchase,
+  SubscriptionPayment,
 } from './src/types/events.ts';
 import {
   dispatchOptionalArkeselSms,
@@ -75,11 +76,21 @@ import {
   sendCheckInWelcomeEmail,
   sendEventPassEmail,
 } from './server/resend.ts';
-import { calculateSmsCredits, MAX_SHOTS_PER_USER, resolveEventMessage } from './src/lib/eventMessages.ts';
+import {
+  appendPoweredByLine,
+  calculateSmsCredits,
+  MAX_SHOTS_PER_USER,
+  resolveEventMessage,
+} from './src/lib/eventMessages.ts';
 import {
   resolveAuthoritativeSmsBundle,
   validateReceiptReference,
 } from './src/lib/smsBundles.ts';
+import {
+  DEFAULT_SHARED_SENDER_ID,
+  computePlanExpiresAtIso,
+  resolveAuthoritativeSubscriptionQuote,
+} from './src/lib/subscriptionPlans.ts';
 import {
   initializePaystackTransaction,
   isPaystackConfigured,
@@ -165,6 +176,8 @@ function isMissingTableError(err: { code?: string; message?: string } | null | u
     msg.includes('creator_app') ||
     msg.includes('sms_bundle_purchases') ||
     msg.includes('credit_organizer_sms_bundle') ||
+    msg.includes('subscription_payments') ||
+    msg.includes('activate_organizer_subscription') ||
     msg.includes('does not exist') ||
     msg.includes('schema cache')
   );
@@ -480,6 +493,158 @@ async function atomicCreditSupabasePurchase(
     alreadyCredited: false,
     purchase: mapSmsPurchaseRow(claimed as Record<string, unknown>),
     smsCredits: nextCredits,
+  };
+}
+
+function mapSubscriptionPaymentRow(row: Record<string, unknown>): SubscriptionPayment {
+  return {
+    id: String(row.id),
+    organizerId: String(row.organizer_id),
+    organizerName: row.organizer_name ? String(row.organizer_name) : undefined,
+    organizerEmail: row.organizer_email ? String(row.organizer_email) : undefined,
+    planId: row.plan_id === 'enterprise' ? 'enterprise' : 'pro',
+    planName: row.plan_name === 'Enterprise' ? 'Enterprise' : 'Pro Organizer',
+    billingCycle: row.billing_cycle === 'annual' ? 'annual' : 'monthly',
+    amountUsd: Number(row.amount_usd ?? 0),
+    amountGhs: Number(row.amount_ghs ?? 0),
+    paymentChannel: String(row.payment_channel || 'Mobile Money / Bank Transfer'),
+    provider:
+      row.provider === 'paystack' || row.provider === 'sandbox' ? row.provider : 'manual',
+    reference: String(row.reference || ''),
+    status:
+      row.status === 'pending_payment' ||
+      row.status === 'pending_verification' ||
+      row.status === 'active' ||
+      row.status === 'rejected' ||
+      row.status === 'failed'
+        ? row.status
+        : 'pending_verification',
+    periodStart: row.period_start ? String(row.period_start) : undefined,
+    periodEnd: row.period_end ? String(row.period_end) : undefined,
+    createdAt: String(row.created_at || new Date().toISOString()),
+    verifiedAt: row.verified_at ? String(row.verified_at) : undefined,
+    rejectionReason: row.rejection_reason ? String(row.rejection_reason) : undefined,
+  };
+}
+
+async function atomicActivateSupabaseSubscription(
+  adminClient: SupabaseClient,
+  paymentId: string,
+  paymentChannel?: string
+): Promise<{ alreadyActivated: boolean; payment: SubscriptionPayment }> {
+  const fallbackItem = platformRuntime.fallbackSubscriptionPayments.get(paymentId);
+  if (fallbackItem) {
+    if (fallbackItem.status === 'active') {
+      return { alreadyActivated: true, payment: fallbackItem };
+    }
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const expiresIso = computePlanExpiresAtIso(fallbackItem.billingCycle, now);
+    let { error: updErr } = await adminClient
+      .from('profiles')
+      .update({
+        plan: fallbackItem.planName,
+        plan_billing_cycle: fallbackItem.billingCycle,
+        plan_expires_at: expiresIso,
+        updated_at: nowIso,
+      })
+      .eq('id', fallbackItem.organizerId);
+    if (updErr && (updErr.message?.includes('plan_billing_cycle') || updErr.message?.includes('schema cache'))) {
+      const retry = await adminClient
+        .from('profiles')
+        .update({ plan: fallbackItem.planName, updated_at: nowIso })
+        .eq('id', fallbackItem.organizerId);
+      updErr = retry.error;
+    }
+    if (updErr) throw new Error(updErr.message);
+
+    const activated: SubscriptionPayment = {
+      ...fallbackItem,
+      paymentChannel: paymentChannel || fallbackItem.paymentChannel,
+      status: 'active',
+      rejectionReason: undefined,
+      periodStart: nowIso,
+      periodEnd: expiresIso,
+      verifiedAt: nowIso,
+    };
+    platformRuntime.fallbackSubscriptionPayments.set(activated.id, activated);
+    return { alreadyActivated: false, payment: activated };
+  }
+
+  const rpcRes = await adminClient.rpc('activate_organizer_subscription', {
+    p_payment_id: paymentId,
+    p_payment_channel: paymentChannel || null,
+  });
+
+  if (!rpcRes.error && rpcRes.data && typeof rpcRes.data === 'object') {
+    const payload = rpcRes.data as {
+      alreadyActivated?: boolean;
+      payment?: Record<string, unknown>;
+    };
+    if (payload.payment) {
+      return {
+        alreadyActivated: Boolean(payload.alreadyActivated),
+        payment: mapSubscriptionPaymentRow(payload.payment),
+      };
+    }
+  }
+
+  const { data: row, error: fetchErr } = await adminClient
+    .from('subscription_payments')
+    .select('*')
+    .eq('id', paymentId)
+    .single();
+  if (fetchErr || !row) {
+    throw new Error(fetchErr?.message || 'Subscription payment record not found.');
+  }
+  const existing = mapSubscriptionPaymentRow(row as Record<string, unknown>);
+  if (existing.status === 'active') {
+    return { alreadyActivated: true, payment: existing };
+  }
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const expiresIso = computePlanExpiresAtIso(existing.billingCycle, now);
+  const { data: claimed, error: claimErr } = await adminClient
+    .from('subscription_payments')
+    .update({
+      status: 'active',
+      payment_channel: paymentChannel || existing.paymentChannel,
+      period_start: nowIso,
+      period_end: expiresIso,
+      verified_at: nowIso,
+    })
+    .eq('id', paymentId)
+    .neq('status', 'active')
+    .select('*')
+    .maybeSingle();
+
+  if (claimErr) throw new Error(claimErr.message);
+  if (!claimed) {
+    return { alreadyActivated: true, payment: { ...existing, status: 'active' } };
+  }
+
+  let { error: profUpdErr } = await adminClient
+    .from('profiles')
+    .update({
+      plan: existing.planName,
+      plan_billing_cycle: existing.billingCycle,
+      plan_expires_at: expiresIso,
+      updated_at: nowIso,
+    })
+    .eq('id', existing.organizerId);
+  if (profUpdErr && (profUpdErr.message?.includes('plan_billing_cycle') || profUpdErr.message?.includes('schema cache'))) {
+    const retry = await adminClient
+      .from('profiles')
+      .update({ plan: existing.planName, updated_at: nowIso })
+      .eq('id', existing.organizerId);
+    profUpdErr = retry.error;
+  }
+  if (profUpdErr) throw new Error(profUpdErr.message);
+
+  return {
+    alreadyActivated: false,
+    payment: mapSubscriptionPaymentRow(claimed as Record<string, unknown>),
   };
 }
 
@@ -3274,10 +3439,22 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         (typeof req.headers.origin === 'string' && /^https?:\/\//i.test(req.headers.origin)
           ? req.headers.origin
           : (process.env.APP_URL || '').trim().replace(/\/+$/, '')) || 'http://localhost:3000';
-      const safeCallback =
-        typeof callbackUrl === 'string' && /^https?:\/\//i.test(callbackUrl)
-          ? callbackUrl
-          : `${originHeader}/?paystack_ref=${encodeURIComponent(reference)}`;
+      let safeCallback = `${originHeader}/?paystack_ref=${encodeURIComponent(reference)}`;
+      if (typeof callbackUrl === 'string' && /^https?:\/\//i.test(callbackUrl)) {
+        try {
+          const parsedCb = new URL(callbackUrl);
+          const parsedOrigin = new URL(originHeader);
+          const reqHost = typeof req.headers.host === 'string' ? req.headers.host.toLowerCase() : '';
+          if (
+            parsedCb.origin === parsedOrigin.origin ||
+            (reqHost && parsedCb.host.toLowerCase() === reqHost)
+          ) {
+            safeCallback = parsedCb.toString();
+          }
+        } catch {
+          // Fall back to default same-origin callback URL
+        }
+      }
 
       const nowIso = new Date().toISOString();
       const pendingRecord: SmsBundlePurchase = {
@@ -3689,6 +3866,515 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       });
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : 'SMS bundle purchase failed.' });
+    }
+  });
+
+  app.get('/api/studio/subscription/payments', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    try {
+      const client = req.supabase!;
+      const adminClient = createServiceSupabaseClient() ?? client;
+      const { data: rows, error } = await adminClient
+        .from('subscription_payments')
+        .select('*')
+        .eq('organizer_id', req.user!.id)
+        .order('created_at', { ascending: false })
+        .limit(30);
+
+      let payments: SubscriptionPayment[] = [];
+      if (!error && Array.isArray(rows)) {
+        payments = rows.map((r) => mapSubscriptionPaymentRow(r as Record<string, unknown>));
+      } else if (error && !isMissingTableError(error)) {
+        return res.status(400).json({ error: error.message });
+      }
+
+      const runtimeFallback = Array.from(platformRuntime.fallbackSubscriptionPayments.values())
+        .filter((p) => p.organizerId === req.user!.id)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+      const merged = payments.length > 0 ? payments : runtimeFallback;
+      return res.json({
+        payments: merged,
+        paystackConfigured: isPaystackConfigured(),
+        mode: platformRuntime.flags.smsMode,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load subscription payments.' });
+    }
+  });
+
+  app.post('/api/studio/subscription/paystack/initialize', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    if (!isPaystackConfigured()) {
+      return res.status(503).json({
+        error: 'Paystack checkout is not configured on the server yet. Set PAYSTACK_SECRET_KEY or submit a verified payment receipt reference.',
+      });
+    }
+    const { planId, planName, billingCycle, amountGhs, callbackUrl } = req.body as {
+      planId?: string;
+      planName?: string;
+      billingCycle?: string;
+      amountGhs?: number;
+      callbackUrl?: string;
+    };
+
+    let quote;
+    try {
+      quote = resolveAuthoritativeSubscriptionQuote({
+        planId,
+        planName,
+        billingCycle,
+        expectedAmountGhs: amountGhs,
+      });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid subscription plan.' });
+    }
+
+    try {
+      const client = req.supabase!;
+      const adminClient = createServiceSupabaseClient() ?? client;
+      const { data: prof } = await adminClient
+        .from('profiles')
+        .select('name, email')
+        .eq('id', req.user!.id)
+        .maybeSingle();
+
+      const email = String(
+        (prof as Record<string, unknown> | null)?.email || req.user!.email || ''
+      ).trim();
+      if (!email || !email.includes('@')) {
+        return res.status(400).json({
+          error: 'Add a valid email address in Account Settings before starting Paystack card/MoMo checkout.',
+        });
+      }
+
+      const reference = `EBY-SUB-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+      const paymentId = `subp-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+      const originHeader =
+        (typeof req.headers.origin === 'string' && /^https?:\/\//i.test(req.headers.origin)
+          ? req.headers.origin
+          : (process.env.APP_URL || '').trim().replace(/\/+$/, '')) || 'http://localhost:3000';
+      let safeCallback = `${originHeader}/?sub_ref=${encodeURIComponent(reference)}`;
+      if (typeof callbackUrl === 'string' && /^https?:\/\//i.test(callbackUrl)) {
+        try {
+          const parsedCb = new URL(callbackUrl);
+          const parsedOrigin = new URL(originHeader);
+          const reqHost = typeof req.headers.host === 'string' ? req.headers.host.toLowerCase() : '';
+          if (
+            parsedCb.origin === parsedOrigin.origin ||
+            (reqHost && parsedCb.host.toLowerCase() === reqHost)
+          ) {
+            safeCallback = parsedCb.toString();
+          }
+        } catch {
+          // Fall back to default same-origin callback URL
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      const pendingRecord: SubscriptionPayment = {
+        id: paymentId,
+        organizerId: req.user!.id,
+        organizerName: String((prof as Record<string, unknown> | null)?.name || ''),
+        organizerEmail: email,
+        planId: quote.planId,
+        planName: quote.planName,
+        billingCycle: quote.billingCycle,
+        amountUsd: quote.amountUsd,
+        amountGhs: quote.amountGhs,
+        paymentChannel: 'Paystack Checkout',
+        provider: 'paystack',
+        reference,
+        status: 'pending_payment',
+        createdAt: nowIso,
+      };
+
+      let storedInDb = false;
+      const { error: insErr } = await adminClient.from('subscription_payments').insert({
+        id: pendingRecord.id,
+        organizer_id: pendingRecord.organizerId,
+        plan_id: pendingRecord.planId,
+        plan_name: pendingRecord.planName,
+        billing_cycle: pendingRecord.billingCycle,
+        amount_usd: pendingRecord.amountUsd,
+        amount_ghs: pendingRecord.amountGhs,
+        payment_channel: pendingRecord.paymentChannel,
+        provider: pendingRecord.provider,
+        reference: pendingRecord.reference,
+        status: pendingRecord.status,
+        created_at: pendingRecord.createdAt,
+      });
+      if (!insErr) {
+        storedInDb = true;
+      } else if (isMissingTableError(insErr)) {
+        platformRuntime.fallbackSubscriptionPayments.set(pendingRecord.id, pendingRecord);
+      } else {
+        return res.status(400).json({ error: insErr.message });
+      }
+
+      const initRes = await initializePaystackTransaction({
+        email,
+        amountGhs: quote.amountGhs,
+        reference,
+        callbackUrl: safeCallback,
+        metadata: {
+          type: 'subscription',
+          userId: req.user!.id,
+          paymentId,
+          planId: quote.planId,
+          planName: quote.planName,
+          billingCycle: quote.billingCycle,
+        },
+      });
+
+      if (!initRes.ok || !initRes.authorizationUrl) {
+        if (storedInDb) {
+          await adminClient
+            .from('subscription_payments')
+            .update({ status: 'failed', rejection_reason: initRes.error || 'Initialization failed' })
+            .eq('id', paymentId);
+        } else {
+          platformRuntime.fallbackSubscriptionPayments.set(paymentId, {
+            ...pendingRecord,
+            status: 'failed',
+            rejectionReason: initRes.error || 'Initialization failed',
+          });
+        }
+        return res.status(400).json({ error: initRes.error || 'Paystack initialization failed.' });
+      }
+
+      return res.json({
+        ok: true,
+        reference: initRes.reference,
+        authorizationUrl: initRes.authorizationUrl,
+        accessCode: initRes.accessCode,
+        payment: pendingRecord,
+        quote,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'Paystack subscription initialization failed.' });
+    }
+  });
+
+  app.get('/api/studio/subscription/paystack/verify/:reference', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    if (!isPaystackConfigured()) {
+      return res.status(503).json({ error: 'PAYSTACK_SECRET_KEY is not configured on the server.' });
+    }
+    const reference = (req.params.reference || '').trim();
+    if (!reference) {
+      return res.status(400).json({ error: 'Payment reference is required.' });
+    }
+
+    try {
+      const client = req.supabase!;
+      const adminClient = createServiceSupabaseClient() ?? client;
+
+      let existing: SubscriptionPayment | null = null;
+      let storedInDb = false;
+
+      const { data: row, error: rowErr } = await adminClient
+        .from('subscription_payments')
+        .select('*')
+        .eq('reference', reference)
+        .maybeSingle();
+
+      if (!rowErr && row) {
+        existing = mapSubscriptionPaymentRow(row as Record<string, unknown>);
+        storedInDb = true;
+      } else if (!rowErr || isMissingTableError(rowErr)) {
+        for (const item of platformRuntime.fallbackSubscriptionPayments.values()) {
+          if (item.reference.toLowerCase() === reference.toLowerCase()) {
+            existing = item;
+            break;
+          }
+        }
+      } else {
+        return res.status(400).json({ error: rowErr.message });
+      }
+
+      if (!existing) {
+        return res.status(404).json({ error: `Subscription payment record for "${reference}" not found.` });
+      }
+      if (existing.organizerId !== req.user!.id && req.appRole !== 'creator') {
+        return res.status(403).json({ error: 'Forbidden: payment reference belongs to another organizer.' });
+      }
+
+      if (existing.status === 'active') {
+        const { data: prof } = await adminClient
+          .from('profiles')
+          .select('*')
+          .eq('id', existing.organizerId)
+          .single();
+        const profEmail = String(
+          (prof as Record<string, unknown> | null)?.email ||
+            existing.organizerEmail ||
+            req.user!.email ||
+            ''
+        );
+        return res.json({
+          ok: true,
+          alreadyActivated: true,
+          profile: mapProfileRow(prof as Record<string, unknown>, profEmail),
+          payment: existing,
+          message: `Subscription ${reference} is already active on ${existing.planName}.`,
+        });
+      }
+
+      const verify = await verifyPaystackTransaction(reference);
+      if (!verify.ok) {
+        return res.status(400).json({ error: verify.error || 'Paystack verification failed.' });
+      }
+      if (!verify.paid) {
+        if (verify.gatewayStatus === 'failed' || verify.gatewayStatus === 'abandoned') {
+          if (storedInDb) {
+            await adminClient
+              .from('subscription_payments')
+              .update({ status: 'failed', rejection_reason: `Gateway status: ${verify.gatewayStatus}` })
+              .eq('id', existing.id);
+          } else {
+            platformRuntime.fallbackSubscriptionPayments.set(existing.id, {
+              ...existing,
+              status: 'failed',
+              rejectionReason: `Gateway status: ${verify.gatewayStatus}`,
+            });
+          }
+        }
+        return res.status(402).json({
+          error: `Payment ${reference} has status "${verify.gatewayStatus}" on Paystack and has not settled.`,
+        });
+      }
+
+      if (verify.currency !== 'GHS') {
+        return res.status(400).json({ error: `Expected GHS currency from Paystack, got ${verify.currency}.` });
+      }
+      const expectedPesewas = Math.round(existing.amountGhs * 100);
+      if (verify.amountPesewas < expectedPesewas) {
+        return res.status(400).json({
+          error: `Underpayment detected: paid GH₵ ${(verify.amountPesewas / 100).toFixed(2)}, expected GH₵ ${existing.amountGhs.toFixed(2)}.`,
+        });
+      }
+      const metaUserId = verify.metadata?.userId ? String(verify.metadata.userId) : undefined;
+      if (metaUserId && metaUserId !== existing.organizerId) {
+        return res.status(403).json({ error: 'Paystack transaction metadata does not match this organizer.' });
+      }
+
+      const completed = await atomicActivateSupabaseSubscription(
+        adminClient,
+        existing.id,
+        verify.channel ? `Paystack (${verify.channel})` : 'Paystack Checkout'
+      );
+
+      const { data: updatedProf } = await adminClient
+        .from('profiles')
+        .select('*')
+        .eq('id', existing.organizerId)
+        .single();
+      const updatedEmail = String(
+        (updatedProf as Record<string, unknown> | null)?.email ||
+          existing.organizerEmail ||
+          req.user!.email ||
+          ''
+      );
+      const mappedProfile = mapProfileRow(
+        updatedProf as Record<string, unknown>,
+        updatedEmail
+      );
+
+      return res.json({
+        ok: true,
+        alreadyActivated: completed.alreadyActivated,
+        profile: mappedProfile,
+        payment: completed.payment,
+        message: `Paystack verified (${reference}). ${completed.payment.planName} (${completed.payment.billingCycle}) is now active.`,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'Paystack verification failed.' });
+    }
+  });
+
+  app.post('/api/studio/subscription/purchase', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    const { planId, planName, billingCycle, amountGhs, paymentChannel, receiptReference } = req.body as {
+      planId?: string;
+      planName?: string;
+      billingCycle?: string;
+      amountGhs?: number;
+      paymentChannel?: string;
+      receiptReference?: string;
+    };
+
+    let quote;
+    try {
+      quote = resolveAuthoritativeSubscriptionQuote({
+        planId,
+        planName,
+        billingCycle,
+        expectedAmountGhs: amountGhs,
+      });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid subscription plan.' });
+    }
+
+    const refCheck = validateReceiptReference(receiptReference);
+    if (!refCheck.ok) {
+      return res.status(400).json({ error: refCheck.error });
+    }
+    const cleanRef = refCheck.normalized;
+
+    try {
+      const client = req.supabase!;
+      const adminClient = createServiceSupabaseClient() ?? client;
+      const { data: prof, error: profErr } = await adminClient
+        .from('profiles')
+        .select('*')
+        .eq('id', req.user!.id)
+        .single();
+      if (profErr || !prof) {
+        return res.status(404).json({ error: 'Organizer profile not found.' });
+      }
+
+      const { data: dupRow, error: dupErr } = await adminClient
+        .from('subscription_payments')
+        .select('id')
+        .ilike('reference', cleanRef)
+        .maybeSingle();
+
+      if (!dupErr && dupRow) {
+        return res.status(409).json({
+          error: `Payment reference "${cleanRef}" has already been submitted. Duplicate redemptions are blocked.`,
+        });
+      }
+      for (const fallbackItem of platformRuntime.fallbackSubscriptionPayments.values()) {
+        if (fallbackItem.reference.trim().toLowerCase() === cleanRef.toLowerCase()) {
+          return res.status(409).json({
+            error: `Payment reference "${cleanRef}" has already been submitted. Duplicate redemptions are blocked.`,
+          });
+        }
+      }
+
+      const isSandbox = platformRuntime.flags.smsMode === 'sandbox';
+      const nowIso = new Date().toISOString();
+      const channel = (paymentChannel || 'Mobile Money / Bank Transfer').trim().slice(0, 64);
+      const paymentId = `subp-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+      const profRec = prof as Record<string, unknown>;
+
+      let paymentRecord: SubscriptionPayment = {
+        id: paymentId,
+        organizerId: req.user!.id,
+        organizerName: String(profRec.name || ''),
+        organizerEmail: String(profRec.email || req.user!.email || ''),
+        planId: quote.planId,
+        planName: quote.planName,
+        billingCycle: quote.billingCycle,
+        amountUsd: quote.amountUsd,
+        amountGhs: quote.amountGhs,
+        paymentChannel: channel,
+        provider: isSandbox ? 'sandbox' : 'manual',
+        reference: cleanRef,
+        status: 'pending_verification',
+        createdAt: nowIso,
+      };
+
+      const { error: insErr } = await adminClient.from('subscription_payments').insert({
+        id: paymentRecord.id,
+        organizer_id: paymentRecord.organizerId,
+        plan_id: paymentRecord.planId,
+        plan_name: paymentRecord.planName,
+        billing_cycle: paymentRecord.billingCycle,
+        amount_usd: paymentRecord.amountUsd,
+        amount_ghs: paymentRecord.amountGhs,
+        payment_channel: paymentRecord.paymentChannel,
+        provider: paymentRecord.provider,
+        reference: paymentRecord.reference,
+        status: 'pending_verification',
+        created_at: paymentRecord.createdAt,
+      });
+
+      if (insErr) {
+        if (insErr.code === '23505') {
+          return res.status(409).json({
+            error: `Payment reference "${cleanRef}" has already been submitted. Duplicate redemptions are blocked.`,
+          });
+        }
+        if (isMissingTableError(insErr)) {
+          platformRuntime.fallbackSubscriptionPayments.set(paymentRecord.id, paymentRecord);
+        } else {
+          return res.status(400).json({ error: insErr.message });
+        }
+      }
+
+      if (isSandbox) {
+        const activatedRes = await atomicActivateSupabaseSubscription(adminClient, paymentRecord.id, channel);
+        paymentRecord = activatedRes.payment;
+      }
+
+      const { data: latestProf } = await adminClient
+        .from('profiles')
+        .select('*')
+        .eq('id', req.user!.id)
+        .single();
+      const mappedProfile = mapProfileRow(
+        (latestProf ?? prof) as Record<string, unknown>,
+        req.user!.email || ''
+      );
+      const pendingVerification = !isSandbox;
+
+      return res.status(pendingVerification ? 202 : 200).json({
+        ok: true,
+        profile: mappedProfile,
+        payment: paymentRecord,
+        activated: isSandbox,
+        pendingVerification,
+        message: pendingVerification
+          ? `Payment reference ${cleanRef} for ${quote.planName} (GH₵ ${quote.amountGhs.toFixed(2)}) is queued for administrator verification before activation.`
+          : `Sandbox Mode: ${quote.planName} (${quote.billingCycle}) activated immediately (Ref: ${cleanRef}).`,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'Subscription purchase failed.' });
+    }
+  });
+
+  app.post('/api/studio/subscription/downgrade', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    try {
+      const client = req.supabase!;
+      const adminClient = createServiceSupabaseClient() ?? client;
+      const nowIso = new Date().toISOString();
+      let { error } = await adminClient
+        .from('profiles')
+        .update({
+          plan: 'Starter',
+          plan_billing_cycle: 'monthly',
+          plan_expires_at: null,
+          sender_id: DEFAULT_SHARED_SENDER_ID,
+          updated_at: nowIso,
+        })
+        .eq('id', req.user!.id);
+
+      if (error && (error.message?.includes('plan_billing_cycle') || error.message?.includes('plan_expires_at') || error.message?.includes('schema cache'))) {
+        const retry = await adminClient
+          .from('profiles')
+          .update({
+            plan: 'Starter',
+            sender_id: DEFAULT_SHARED_SENDER_ID,
+            updated_at: nowIso,
+          })
+          .eq('id', req.user!.id);
+        error = retry.error;
+      }
+      if (error) {
+        return res.status(400).json({ error: error.message });
+      }
+
+      const { data: latestProf } = await adminClient
+        .from('profiles')
+        .select('*')
+        .eq('id', req.user!.id)
+        .single();
+      const mappedProfile = mapProfileRow(latestProf as Record<string, unknown>, req.user!.email || '');
+      return res.json({
+        ok: true,
+        profile: mappedProfile,
+        message: 'Workspace downgraded to Starter (Free). Existing events remain intact; Starter quotas now apply.',
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : 'Downgrade failed.' });
     }
   });
 
@@ -4674,10 +5360,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         const prepared = ownedAttendees.map((att) => {
           const rawEvt = eventById.get(att.eventId)!;
           const evtMapped = mapEventRow(rawEvt);
-          const personalizedText = cleanMessage
+          const personalizedRaw = cleanMessage
             .replace(/\{name\}/gi, att.name)
             .replace(/\{event\}/gi, evtMapped.title)
             .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode);
+          const personalizedText = appendPoweredByLine(personalizedRaw);
           const smsCost = att.phone ? calculateSmsCredits(personalizedText) : 0;
           const cameraUrl = `${resolveBaseUrl(req)}/e/${encodeURIComponent(evtMapped.slug || evtMapped.id)}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
           return { att, evtMapped, personalizedText, smsCost, cameraUrl };

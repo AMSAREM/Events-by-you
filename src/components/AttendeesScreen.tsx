@@ -8,7 +8,7 @@ import {
   SystemAlert,
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
-import { calculateSmsCredits } from '../lib/eventMessages';
+import { appendPoweredByLine, calculateSmsCredits, POWERED_BY_LINE } from '../lib/eventMessages';
 import { getPlanEntitlements } from '../lib/subscriptionPlans';
 import { CircularGauge } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
@@ -172,7 +172,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
     () => filtered.filter((a) => Boolean(a.email && a.email.trim())),
     [filtered]
   );
-  const smsPerRecipientCost = calculateSmsCredits(broadcastMsg);
+  const smsPerRecipientCost = calculateSmsCredits(appendPoweredByLine(broadcastMsg));
   const totalBroadcastSmsCost =
     effectiveBroadcastChannel === 'email' ? 0 : phoneRecipients.length * smsPerRecipientCost;
   const hasEnoughCreditsForBroadcast =
@@ -945,6 +945,10 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                 }}
                 className="w-full p-4 rounded-2xl bg-[#F5F5F7] text-sm text-[#0B0B0B] border border-transparent focus:bg-white focus:border-[#0B0B0B] focus:outline-none"
               />
+              <p className="text-[11px] text-[#71717A] -mt-2">
+                Every message automatically includes:{' '}
+                <span className="font-mono text-[#0B0B0B]">{POWERED_BY_LINE}</span>
+              </p>
 
               {(!hasEnoughCreditsForBroadcast && totalBroadcastSmsCost > 0) && (
                 <div className="p-3 rounded-2xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-center justify-between gap-2">

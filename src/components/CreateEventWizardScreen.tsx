@@ -29,7 +29,13 @@ import {
   ScheduleBlock,
 } from '../types/events';
 import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
-import { buildCameraLinkForOrigin, getDefaultMessageConfig } from '../lib/eventMessages';
+import {
+  appendPoweredByLine,
+  buildCameraLinkForOrigin,
+  calculateSmsCredits,
+  getDefaultMessageConfig,
+  POWERED_BY_LINE,
+} from '../lib/eventMessages';
 import {
   DEFAULT_SHARED_SENDER_ID,
   getPlanEntitlements,
@@ -407,7 +413,10 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     { id: 4 as const, title: 'Review & Publish', sub: 'Pre-flight Checks' },
   ];
 
-  const smsSegments = Math.max(1, Math.ceil(smsTemplate.length / 160));
+  const resolvedSmsPreview = appendPoweredByLine(
+    entitlements.allowCustomMessages ? smsTemplate : defaultMsgCfg.confirmationMessage
+  );
+  const smsSegments = calculateSmsCredits(resolvedSmsPreview);
 
   return (
     <div className="space-y-6">
@@ -1419,6 +1428,10 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 />
                 <p className="text-[11px] text-[#71717A] mt-1.5">
                   Preview Camera URL: <span className="font-mono text-[#0B0B0B]">{buildCameraLinkForOrigin(slug || 'event')}</span>
+                </p>
+                <p className="text-[11px] text-[#71717A] mt-1">
+                  Constant footer line appended to every message:{' '}
+                  <span className="font-mono text-[#0B0B0B]">{POWERED_BY_LINE}</span>
                 </p>
               </div>
             </section>

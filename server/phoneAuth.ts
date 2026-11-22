@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { AppRole } from '../src/types/events.ts';
+import { appendPoweredByLine } from '../src/lib/eventMessages.ts';
 import { isResendConfigured, sendAuthOtpEmail } from './resend.ts';
 import { platformRuntime } from './memoryStore.ts';
 import { createServiceSupabaseClient } from './supabase.ts';
@@ -615,10 +616,11 @@ export async function sendArkeselSmsOtp(params: {
           ? 'gateway diagnostics'
           : 'workspace sign-in';
 
-  const message =
+  const message = appendPoweredByLine(
     params.purpose === 'test'
       ? `Events By You gateway test (${sender}). Confirmation code: ${params.code}.`
-      : `Your Events By You ${purposeText} code is ${params.code}. Valid for 10 minutes.`;
+      : `Your Events By You ${purposeText} code is ${params.code}. Valid for 10 minutes.`
+  );
 
   const callbackUrl = resolveArkeselCallbackUrl();
   const payload: Record<string, unknown> = {

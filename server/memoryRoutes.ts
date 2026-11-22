@@ -34,7 +34,11 @@ import {
   sendCheckInWelcomeEmail,
   sendEventPassEmail,
 } from './resend.ts';
-import { calculateSmsCredits, resolveEventMessage } from '../src/lib/eventMessages.ts';
+import {
+  appendPoweredByLine,
+  calculateSmsCredits,
+  resolveEventMessage,
+} from '../src/lib/eventMessages.ts';
 import {
   resolveAuthoritativeSmsBundle,
   validateReceiptReference,
@@ -1812,10 +1816,11 @@ export function createMemoryRouter() {
       const requestOrigin = (process.env.APP_URL || '').trim().replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
       const prepared = ownedAttendees.map((att) => {
         const evtMapped = eventById.get(att.eventId)!;
-        const personalizedText = cleanMessage
+        const personalizedRaw = cleanMessage
           .replace(/\{name\}/gi, att.name)
           .replace(/\{event\}/gi, evtMapped.title)
           .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode);
+        const personalizedText = appendPoweredByLine(personalizedRaw);
         const smsCost = sendSms && att.phone ? calculateSmsCredits(personalizedText) : 0;
         const cameraUrl = `${requestOrigin}/e/${encodeURIComponent(evtMapped.slug || evtMapped.id)}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
         return { att, evtMapped, personalizedText, smsCost, cameraUrl };

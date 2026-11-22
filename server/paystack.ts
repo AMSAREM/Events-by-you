@@ -1,5 +1,12 @@
 export function getPaystackSecretKey(): string {
-  return (process.env.PAYSTACK_SECRET_KEY || '').trim();
+  const raw = (process.env.PAYSTACK_SECRET_KEY || '').trim();
+  if (
+    (raw.startsWith('"') && raw.endsWith('"')) ||
+    (raw.startsWith("'") && raw.endsWith("'"))
+  ) {
+    return raw.slice(1, -1).trim();
+  }
+  return raw;
 }
 
 export function isPaystackConfigured(): boolean {
@@ -36,6 +43,14 @@ export async function initializePaystackTransaction(params: {
       ok: false,
       reference: params.reference,
       error: 'Invalid Paystack transaction amount.',
+    };
+  }
+
+  if (!/^https?:\/\//i.test(params.callbackUrl)) {
+    return {
+      ok: false,
+      reference: params.reference,
+      error: 'Invalid Paystack callback URL.',
     };
   }
 

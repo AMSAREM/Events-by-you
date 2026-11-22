@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { platformRuntime } from './memoryStore.ts';
+import { POWERED_BY_LINE, stripTrailingPoweredByLine } from '../src/lib/eventMessages.ts';
 import type { EmailDeliverabilityDiagnostics } from '../src/types/events.ts';
 
 export const DEFAULT_APP_URL = (
@@ -570,6 +571,9 @@ export async function sendAuthOtpEmail(params: {
       <p style="margin:24px 0 0 0;padding-top:16px;border-top:1px solid #E5E5EA;font-size:12px;line-height:1.5;color:#71717A;">
         ${footerLine}
       </p>
+      <p style="margin:8px 0 0 0;font-size:11px;line-height:1.4;color:#A1A1AA;">
+        ${escapeHtml(POWERED_BY_LINE)}
+      </p>
     </div>
   </body>
 </html>`.trim();
@@ -583,6 +587,7 @@ export async function sendAuthOtpEmail(params: {
       params.actionLink && includeBrandUrl ? `\nDirect link: ${params.actionLink}` : '',
       `\nIf you did not request this code, please ignore this email.`,
       includeBrandUrl ? `Events By You · ${DEFAULT_APP_URL}` : 'Events By You',
+      POWERED_BY_LINE,
     ].filter(Boolean);
 
     return { html, text: textParts.join('\n') };
@@ -619,6 +624,7 @@ export async function sendEventPassEmail(params: {
   const subject = `Your pass for ${params.eventTitle} (${params.ticketCode})`;
   const preheaderText = `${params.tier} Pass ${params.ticketCode} for ${params.eventTitle} · ${params.eventDate}`;
 
+  const cleanCustomMessage = stripTrailingPoweredByLine(params.customMessage);
   const renderContent = (effectiveFrom: string) => {
     const includeBrandUrl = shouldIncludeAppUrlLink(effectiveFrom);
     const appHost = getHostnameFromUrl(DEFAULT_APP_URL) || 'eventsbyyou.xyz';
@@ -660,7 +666,7 @@ export async function sendEventPassEmail(params: {
         You&apos;re confirmed for ${escapeHtml(params.eventTitle)}
       </h1>
       <p style="margin:0 0 14px 0;font-size:14px;line-height:1.6;color:#444748;">
-        ${escapeHtml(params.customMessage?.trim() || `Hi ${params.attendeeName}, present the QR token code below at gate check-in.`)}
+        ${escapeHtml(cleanCustomMessage || `Hi ${params.attendeeName}, present the QR token code below at gate check-in.`)}
       </p>
       <div style="margin:20px 0;padding:22px;background:#0B0B0B;color:#FFFFFF;border-radius:18px;text-align:center;">
         <p style="margin:0 0 6px 0;font-size:11px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:#A1A1AA;">
@@ -679,13 +685,16 @@ export async function sendEventPassEmail(params: {
       <p style="margin:20px 0 0 0;padding-top:16px;border-top:1px solid #E5E5EA;font-size:12px;line-height:1.5;color:#71717A;">
         Need help? Reply directly to reach ${escapeHtml(params.organizerName)}${poweredByHtml}.
       </p>
+      <p style="margin:8px 0 0 0;font-size:11px;line-height:1.4;color:#A1A1AA;">
+        ${escapeHtml(POWERED_BY_LINE)}
+      </p>
     </div>
   </body>
 </html>`.trim();
 
     const text = [
       `You're confirmed for ${params.eventTitle}!`,
-      params.customMessage?.trim() ? `\n${params.customMessage.trim()}` : '',
+      cleanCustomMessage ? `\n${cleanCustomMessage}` : '',
       `Attendee: ${params.attendeeName}`,
       `Pass Tier: ${params.tier}`,
       `Gate Token Code: ${params.ticketCode}`,
@@ -695,6 +704,7 @@ export async function sendEventPassEmail(params: {
       params.cameraUrl ? `\nDisposable Camera (5 photos + collage): ${params.cameraUrl}` : '',
       ``,
       includeBrandUrl ? `Events By You · ${DEFAULT_APP_URL}` : 'Events By You',
+      POWERED_BY_LINE,
     ]
       .filter(Boolean)
       .join('\n');
@@ -732,6 +742,7 @@ export async function sendCheckInWelcomeEmail(params: {
   const subject = `Checked In: Welcome to ${params.eventTitle}`;
   const preheaderText = `You're checked in! Open the shared disposable camera (5 shots + collage) for ${params.eventTitle}.`;
 
+  const cleanWelcomeMessage = stripTrailingPoweredByLine(params.welcomeMessage);
   const renderContent = (effectiveFrom: string) => {
     const includeBrandUrl = shouldIncludeAppUrlLink(effectiveFrom);
     const appHost = getHostnameFromUrl(DEFAULT_APP_URL) || 'eventsbyyou.xyz';
@@ -758,7 +769,7 @@ export async function sendCheckInWelcomeEmail(params: {
         Welcome to ${escapeHtml(params.eventTitle)}, ${escapeHtml(params.attendeeName)}!
       </h1>
       <p style="margin:0 0 20px 0;font-size:14px;line-height:1.65;color:#1A1C1D;background:#F5F5F7;padding:16px 18px;border-radius:16px;">
-        ${escapeHtml(params.welcomeMessage)}
+        ${escapeHtml(cleanWelcomeMessage || params.welcomeMessage)}
       </p>
       <div style="margin:20px 0;padding:24px;background:#0B0B0B;color:#FFFFFF;border-radius:20px;text-align:center;">
         <p style="margin:0 0 6px 0;font-size:11px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:#A1A1AA;">
@@ -778,6 +789,9 @@ export async function sendCheckInWelcomeEmail(params: {
       <p style="margin:20px 0 0 0;padding-top:16px;border-top:1px solid #E5E5EA;font-size:12px;line-height:1.5;color:#71717A;">
         Hosted by ${escapeHtml(params.organizerName)}${poweredByHtml}.
       </p>
+      <p style="margin:8px 0 0 0;font-size:11px;line-height:1.4;color:#A1A1AA;">
+        ${escapeHtml(POWERED_BY_LINE)}
+      </p>
     </div>
   </body>
 </html>`.trim();
@@ -785,12 +799,13 @@ export async function sendCheckInWelcomeEmail(params: {
     const text = [
       `Welcome to ${params.eventTitle}, ${params.attendeeName}!`,
       ``,
-      params.welcomeMessage,
+      cleanWelcomeMessage || params.welcomeMessage,
       ``,
       `Open Disposable Camera (5 shots + collage): ${params.cameraUrl}`,
       `Pass Code: ${params.ticketCode}`,
       `Venue: ${params.eventVenue}, ${params.eventCity} · ${params.eventDate}`,
       includeBrandUrl ? `Events By You · ${DEFAULT_APP_URL}` : 'Events By You',
+      POWERED_BY_LINE,
     ].join('\n');
 
     return { html, text };
