@@ -297,56 +297,76 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                   <div className="mt-7 sm:mt-8 flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-3.5">
                     <button
                       type="button"
-                      onClick={() =>
-                        topMatchedEvent
-                          ? onNavigateDemoEvent(topMatchedEvent.id, 'checkin')
-                          : onCreateEvent
-                            ? onCreateEvent()
-                            : isSignedIn
-                              ? onNavigateStudio()
-                              : onNavigateSignUp()
-                      }
-                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white text-[#0B0B0B] text-xs font-bold px-5 sm:px-6 py-3.5 rounded-full shadow-lg hover:bg-neutral-200 transition-all hover:-translate-y-0.5 whitespace-nowrap shrink-0"
+                      disabled
+                      aria-disabled="true"
+                      className="w-full sm:w-[calc(50%-0.5rem)] inline-flex items-center gap-3 text-left bg-white/[0.12] border border-white/25 text-white px-4 py-3 rounded-2xl shadow-[0_12px_30px_-10px_rgba(0,0,0,0.65)] backdrop-blur-md cursor-default"
                     >
-                      <QrCode className="w-4 h-4" />
-                      <span>Check-In &amp; QR Screen</span>
+                      <span className="w-9 h-9 rounded-xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0 shadow-sm">
+                        <QrCode className="w-4 h-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-xs font-bold text-white leading-tight truncate">
+                          Check-In &amp; QR Screen
+                        </span>
+                        <span className="block text-[11px] font-medium text-zinc-300 leading-tight mt-0.5 truncate">
+                          Self check-in &amp; instant passes
+                        </span>
+                      </span>
                     </button>
                     <button
                       type="button"
-                      onClick={() =>
-                        topMatchedEvent
-                          ? onNavigateDemoEvent(topMatchedEvent.id, 'register')
-                          : onCreateEvent
-                            ? onCreateEvent()
-                            : isSignedIn
-                              ? onNavigateStudio()
-                              : onNavigateSignUp()
-                      }
-                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/15 text-white hover:bg-white/25 border-white/20 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border backdrop-blur-md transition-all whitespace-nowrap shrink-0 cursor-pointer"
+                      disabled
+                      aria-disabled="true"
+                      className="w-full sm:w-[calc(50%-0.5rem)] inline-flex items-center gap-3 text-left bg-white/[0.12] border border-white/25 text-white px-4 py-3 rounded-2xl shadow-[0_12px_30px_-10px_rgba(0,0,0,0.65)] backdrop-blur-md cursor-default"
                     >
-                      <UserPlus className="w-4 h-4" />
-                      <span>RSVP &amp; Guest Validation</span>
+                      <span className="w-9 h-9 rounded-xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0 shadow-sm">
+                        <UserPlus className="w-4 h-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-xs font-bold text-white leading-tight truncate">
+                          RSVP &amp; Guest Validation
+                        </span>
+                        <span className="block text-[11px] font-medium text-zinc-300 leading-tight mt-0.5 truncate">
+                          Circle rules &amp; smart approval
+                        </span>
+                      </span>
                     </button>
                     <button
                       type="button"
-                      onClick={() =>
-                        onOpenQrScanner
-                          ? onOpenQrScanner(topMatchedEvent?.id)
-                          : onNavigateStudio()
-                      }
-                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/10 text-white hover:bg-white/20 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border border-white/15 backdrop-blur-md transition-all whitespace-nowrap shrink-0"
+                      disabled
+                      aria-disabled="true"
+                      className="w-full sm:w-[calc(50%-0.5rem)] inline-flex items-center gap-3 text-left bg-white/[0.12] border border-white/25 text-white px-4 py-3 rounded-2xl shadow-[0_12px_30px_-10px_rgba(0,0,0,0.65)] backdrop-blur-md cursor-default"
                     >
-                      <Shield className="w-4 h-4" />
-                      <span>Gate Scanner</span>
+                      <span className="w-9 h-9 rounded-xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0 shadow-sm">
+                        <Shield className="w-4 h-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-xs font-bold text-white leading-tight truncate">
+                          Gate Scanner
+                        </span>
+                        <span className="block text-[11px] font-medium text-zinc-300 leading-tight mt-0.5 truncate">
+                          Offline-ready door verification
+                        </span>
+                      </span>
                     </button>
                     {onOpenDisposableCamera && (
                       <button
                         type="button"
-                        onClick={() => onOpenDisposableCamera(topMatchedEvent?.id)}
-                        className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-white/10 text-white hover:bg-white/20 text-xs font-semibold px-5 sm:px-6 py-3.5 rounded-full border border-white/15 backdrop-blur-md transition-all whitespace-nowrap shrink-0"
+                        disabled
+                        aria-disabled="true"
+                        className="w-full sm:w-[calc(50%-0.5rem)] inline-flex items-center gap-3 text-left bg-white/[0.12] border border-white/25 text-white px-4 py-3 rounded-2xl shadow-[0_12px_30px_-10px_rgba(0,0,0,0.65)] backdrop-blur-md cursor-default"
                       >
-                        <Camera className="w-4 h-4" />
-                        <span>Disposable Camera</span>
+                        <span className="w-9 h-9 rounded-xl bg-white text-[#0B0B0B] flex items-center justify-center shrink-0 shadow-sm">
+                          <Camera className="w-4 h-4" />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-xs font-bold text-white leading-tight truncate">
+                            Disposable Camera
+                          </span>
+                          <span className="block text-[11px] font-medium text-zinc-300 leading-tight mt-0.5 truncate">
+                            Shared 35mm live guest film roll
+                          </span>
+                        </span>
                       </button>
                     )}
                     <PWAInstallButton variant="hero" className="w-full sm:w-auto" />
