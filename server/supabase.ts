@@ -407,6 +407,11 @@ export async function ensureProfileRow(
     ? false
     : Boolean(user.phone_confirmed_at || user.user_metadata?.phone_verified);
 
+  const metaAvatar =
+    (typeof user.user_metadata?.avatar_url === 'string' && user.user_metadata.avatar_url.trim()) ||
+    (typeof user.user_metadata?.picture === 'string' && user.user_metadata.picture.trim()) ||
+    undefined;
+
   const { data: existing, error: selectErr } = await client
     .from('profiles')
     .select('*')
@@ -424,6 +429,17 @@ export async function ensureProfileRow(
     }
     if (resolvedPhoneVerified && !mapped.phoneVerified) {
       mapped.phoneVerified = true;
+    }
+    if (existingRec.avatar_url == null && metaAvatar) {
+      mapped.avatarUrl = metaAvatar;
+      void client
+        .from('profiles')
+        .update({ avatar_url: metaAvatar })
+        .eq('id', user.id)
+        .then(
+          () => undefined,
+          () => undefined
+        );
     }
     return mapped;
   }
@@ -451,11 +467,6 @@ export async function ensureProfileRow(
       : isPrimaryCreator
         ? 'creator'
         : 'organizer';
-
-  const metaAvatar =
-    (typeof user.user_metadata?.avatar_url === 'string' && user.user_metadata.avatar_url.trim()) ||
-    (typeof user.user_metadata?.picture === 'string' && user.user_metadata.picture.trim()) ||
-    undefined;
 
   const insertPayload: Record<string, unknown> = {
     id: user.id,

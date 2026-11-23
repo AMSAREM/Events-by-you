@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, Bell, Check, Search, X } from 'lucide-react';
 import { OrganizerProfile, SystemAlert } from '../types/events';
 
+const DEFAULT_ORGANISER_AVATAR_URL =
+  '/src/assets/images/flyer_corporate_gala_1795075792816.jpg';
+
 interface TopUtilityBarProps {
   searchQuery: string;
   onSearchChange: (q: string) => void;
@@ -24,8 +27,20 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
   onOpenSettings,
 }) => {
   const [alertsOpen, setAlertsOpen] = useState(false);
+  const [avatarError, setAvatarError] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
   const unresolvedAlerts = alerts.filter((a) => !a.resolved);
+
+  const rawAvatarUrl =
+    typeof profile.avatarUrl === 'string' ? profile.avatarUrl.trim() : undefined;
+  const resolvedAvatarUrl =
+    rawAvatarUrl === ''
+      ? null
+      : rawAvatarUrl || DEFAULT_ORGANISER_AVATAR_URL;
+
+  useEffect(() => {
+    setAvatarError(false);
+  }, [resolvedAvatarUrl]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -39,15 +54,17 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [alertsOpen]);
 
-  const initials = profile.name
-    .split(' ')
-    .map((p) => p[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
+  const initials =
+    profile.name
+      .split(' ')
+      .filter(Boolean)
+      .map((p) => p[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase() || 'OR';
 
   return (
-    <div className="flex items-center gap-3 w-full">
+    <div className="flex items-center justify-between gap-2.5 sm:gap-3 w-full">
       {/* Capsule Search Field */}
       <div className="relative flex-1 min-w-0">
         <Search className="w-4 h-4 text-[#71717A] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -168,9 +185,19 @@ export const TopUtilityBar: React.FC<TopUtilityBarProps> = ({
         onClick={onOpenSettings}
         aria-label={`Profile settings for ${profile.name}`}
         title={`${profile.name} · ${profile.role}`}
-        className="w-11 h-11 rounded-full bg-[#0B0B0B] text-white font-display font-semibold text-xs tracking-tight flex items-center justify-center shrink-0 hover:scale-105 transition-transform duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B0B0B] focus-visible:ring-offset-2"
+        className="relative w-11 h-11 rounded-full overflow-hidden bg-[#0B0B0B] text-white font-display font-semibold text-xs tracking-tight flex items-center justify-center shrink-0 ring-1 ring-[#E5E5EA] hover:scale-105 transition-transform duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B0B0B] focus-visible:ring-offset-2"
       >
-        {initials}
+        {resolvedAvatarUrl && !avatarError ? (
+          <img
+            src={resolvedAvatarUrl}
+            alt={`${profile.name} profile`}
+            referrerPolicy="no-referrer"
+            onError={() => setAvatarError(true)}
+            className="w-full h-full object-cover object-center"
+          />
+        ) : (
+          <span>{initials}</span>
+        )}
       </button>
     </div>
   );

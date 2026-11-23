@@ -184,6 +184,22 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
         }}
       />
 
+      {/* Top Utility Bar on Mobile & Tablet (< xl) */}
+      <div className="xl:hidden">
+        <TopUtilityBar
+          searchQuery={searchQuery}
+          onSearchChange={onSearchChange}
+          alerts={alerts}
+          onResolveAlert={onResolveAlert}
+          onInspectAlertEvent={(id) => {
+            const match = events.find((e) => e.id === id);
+            if (match) onManageEvent(match);
+          }}
+          profile={profile}
+          onOpenSettings={onNavigateSettings}
+        />
+      </div>
+
       {/* CENTER COLUMN: Greeting, Prominent QR & Check-In Bar, Upcoming Highlight, Event Catalog */}
       <div className="space-y-5 lg:space-y-6 min-w-0">
         {/* Personalized Greeting Banner with Upcoming Event Flyer Backdrop */}
@@ -698,7 +714,7 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
 
       {/* RIGHT RAIL: Utility Search/Profile, Rapid Stats, Spline Chart, Account Upgrade */}
       <aside className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-1 gap-5 xl:sticky xl:top-6">
-        <div className="md:col-span-2 xl:col-span-1">
+        <div className="hidden xl:block">
           <TopUtilityBar
             searchQuery={searchQuery}
             onSearchChange={onSearchChange}

@@ -35,18 +35,10 @@ import {
 import { NavigationRail } from './components/NavigationRail';
 import { LandingScreen } from './components/LandingScreen';
 import { LegalScreen } from './components/LegalScreen';
-const SignInScreen = lazy(() =>
-  import('./components/SignInScreen').then((m) => ({ default: m.SignInScreen }))
-);
-const SignUpScreen = lazy(() =>
-  import('./components/SignUpScreen').then((m) => ({ default: m.SignUpScreen }))
-);
-const ResetPasswordScreen = lazy(() =>
-  import('./components/ResetPasswordScreen').then((m) => ({ default: m.ResetPasswordScreen }))
-);
-const VerifyOtpScreen = lazy(() =>
-  import('./components/VerifyOtpScreen').then((m) => ({ default: m.VerifyOtpScreen }))
-);
+import { SignInScreen } from './components/SignInScreen';
+import { SignUpScreen } from './components/SignUpScreen';
+import { ResetPasswordScreen } from './components/ResetPasswordScreen';
+import { VerifyOtpScreen } from './components/VerifyOtpScreen';
 const PublicEventScreen = lazy(() =>
   import('./components/PublicEventScreen').then((m) => ({ default: m.PublicEventScreen }))
 );
