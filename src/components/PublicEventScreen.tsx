@@ -52,8 +52,6 @@ import {
 import { appendPoweredByLine } from '../lib/eventMessages';
 import { getContrastTextColor, hexWithAlpha, normalizeHexColor } from '../lib/themeColors';
 import { PWAInstallButton } from './PWAInstallButton';
-import { SeoHead } from './SeoHead';
-import { buildEventSeoPayload, CANONICAL_ORIGIN } from '../lib/seoConfig';
 
 interface PublicEventScreenProps {
   events: EventItem[];
@@ -737,12 +735,6 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     }
     return (
       <div className="min-h-screen bg-[#F5F5F7] text-[#1A1C1D] flex flex-col items-center justify-center px-4 text-center">
-        <SeoHead
-          path="/e"
-          title="Event Page Unavailable | Events By You"
-          description="This event invitation page has not been published yet or is unavailable. Contact the organiser for an updated link."
-          robots="noindex, nofollow"
-        />
         <div className="max-w-md w-full bg-white rounded-[28px] p-8 shadow-sm space-y-4">
           <div className="w-12 h-12 rounded-2xl bg-[#F5F5F7] flex items-center justify-center mx-auto">
             <CalendarDays className="w-6 h-6 text-[#0B0B0B]" />
@@ -1244,15 +1236,8 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     </section>
   );
 
-  const eventSeo = buildEventSeoPayload(
-    selectedEvent,
-    CANONICAL_ORIGIN,
-    standaloneGifts ? 'gifts' : standaloneCheckin ? 'checkin' : 'top'
-  );
-
   return (
     <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col overflow-x-clip selection:bg-[#0B0B0B] selection:text-white">
-      <SeoHead {...eventSeo} />
       {/* Fullscreen Kiosk Check-In & QR Pass Modal */}
       {showCheckinModal && (
         <div

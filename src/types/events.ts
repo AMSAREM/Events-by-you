@@ -1,12 +1,5 @@
 export type AppRoute =
   | 'home'
-  | 'features'
-  | 'pricing'
-  | 'how-it-works'
-  | 'faq'
-  | 'about'
-  | 'contact'
-  | 'blog'
   | 'terms'
   | 'privacy'
   | 'signin'

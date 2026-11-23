@@ -1,5 +1,4 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Clock, Compass, Database, Loader2, LogOut, ShieldCheck, X } from 'lucide-react';
 import { INITIAL_PROFILE } from './data/initialData';
 import type {
@@ -33,20 +32,9 @@ import {
   saveStoredSession,
   type StoredAuthSession,
 } from './lib/api';
-import { NOINDEX_ROUTE_SEO } from './lib/seoConfig';
 import { NavigationRail } from './components/NavigationRail';
-import { SeoHead } from './components/SeoHead';
 import { LandingScreen } from './components/LandingScreen';
 import { LegalScreen } from './components/LegalScreen';
-import {
-  AboutPage,
-  BlogPage,
-  ContactPage,
-  FaqPage,
-  FeaturesPage,
-  HowItWorksPage,
-  PricingPage,
-} from './components/MarketingPages';
 const SignInScreen = lazy(() =>
   import('./components/SignInScreen').then((m) => ({ default: m.SignInScreen }))
 );
@@ -193,14 +181,19 @@ function resolveRouteFromLocation(pathname: string, search: string): AppRoute {
   const invite = parseInvitationFromValues(pathname, search);
   if (invite.focus === 'camera') return 'camera';
   if (invite.slugOrId) return 'demo-event';
-  if (path === '/' || path === '/index.html') return 'home';
-  if (path === '/features') return 'features';
-  if (path === '/pricing') return 'pricing';
-  if (path === '/how-it-works') return 'how-it-works';
-  if (path === '/faq') return 'faq';
-  if (path === '/about') return 'about';
-  if (path === '/contact') return 'contact';
-  if (path === '/blog') return 'blog';
+  if (
+    path === '/' ||
+    path === '/index.html' ||
+    path === '/features' ||
+    path === '/pricing' ||
+    path === '/how-it-works' ||
+    path === '/faq' ||
+    path === '/about' ||
+    path === '/contact' ||
+    path === '/blog'
+  ) {
+    return 'home';
+  }
   if (path === '/terms') return 'terms';
   if (path === '/privacy') return 'privacy';
   if (path === '/signin') return 'signin';
@@ -233,12 +226,12 @@ const EMPTY_PROFILE: OrganizerProfile = {
 };
 
 export default function App() {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const initialInvite = parseInvitationFromValues(location.pathname, location.search);
+  const initialPathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+  const initialSearch = typeof window !== 'undefined' ? window.location.search : '';
+  const initialInvite = parseInvitationFromValues(initialPathname, initialSearch);
 
   const [route, setRoute] = useState<AppRoute>(() =>
-    resolveRouteFromLocation(location.pathname, location.search)
+    resolveRouteFromLocation(initialPathname, initialSearch)
   );
   const [isSignedIn, setIsSignedIn] = useState<boolean>(false);
   const [authBootstrapping, setAuthBootstrapping] = useState<boolean>(false);
@@ -328,7 +321,7 @@ export default function App() {
   const [selectedCheckoutBundleId, setSelectedCheckoutBundleId] = useState<string | null>(null);
   const [pendingPaystackRef, setPendingPaystackRef] = useState<string | null>(() => {
     try {
-      const params = new URLSearchParams(location.search);
+      const params = new URLSearchParams(initialSearch);
       if (params.get('sub_ref')) return null;
       const ref =
         params.get('paystack_ref') || params.get('reference') || params.get('trxref') || null;
@@ -339,7 +332,7 @@ export default function App() {
   });
   const [pendingSubscriptionRef, setPendingSubscriptionRef] = useState<string | null>(() => {
     try {
-      const params = new URLSearchParams(location.search);
+      const params = new URLSearchParams(initialSearch);
       const subRef = params.get('sub_ref');
       if (subRef) return subRef;
       const ref = params.get('reference') || params.get('trxref') || null;
@@ -481,10 +474,14 @@ export default function App() {
           if (pendingPaystackRef || pendingSubscriptionRef) {
             setActiveScreen('billing');
             setRoute('studio');
-            navigate('/studio', { replace: true });
+            if (typeof window !== 'undefined' && window.location.pathname !== '/studio') {
+              window.history.replaceState(null, '', '/studio');
+            }
           } else if (oauthSession) {
             setRoute('studio');
-            navigate('/studio', { replace: true });
+            if (typeof window !== 'undefined' && window.location.pathname !== '/studio') {
+              window.history.replaceState(null, '', '/studio');
+            }
           }
         }
       }
@@ -502,7 +499,9 @@ export default function App() {
         const ok = await hydrateStudioWorkspace();
         if (ok && !cancelled) {
           setRoute('studio');
-          navigate('/studio', { replace: true });
+          if (typeof window !== 'undefined' && window.location.pathname !== '/studio') {
+            window.history.replaceState(null, '', '/studio');
+          }
         }
       }
     };
@@ -534,15 +533,17 @@ export default function App() {
     ? safeEvents.find((e) => e.id === workspaceEventId) ?? null
     : null;
 
-  const syncBrowserPath = useCallback(
-    (nextPath: string) => {
-      const currentFull = `${location.pathname}${location.search}`;
-      if (currentFull !== nextPath) {
-        navigate(nextPath);
+  const syncBrowserPath = useCallback((nextPath: string, replace = false) => {
+    if (typeof window === 'undefined') return;
+    const currentFull = `${window.location.pathname}${window.location.search}`;
+    if (currentFull !== nextPath) {
+      if (replace) {
+        window.history.replaceState(null, '', nextPath);
+      } else {
+        window.history.pushState(null, '', nextPath);
       }
-    },
-    [location.pathname, location.search, navigate]
-  );
+    }
+  }, []);
 
   const applyModuleTarget = (target: PendingModuleTarget) => {
     setWorkspaceEventId(null);
@@ -637,29 +638,36 @@ export default function App() {
   );
 
   useEffect(() => {
-    const nextRoute = resolveRouteFromLocation(location.pathname, location.search);
-    const invite = parseInvitationFromValues(location.pathname, location.search);
-    if (invite.focus === 'camera') {
-      setCameraEventId(invite.slugOrId);
-      setCameraGuestName(invite.guest);
-      setCameraPassCode(invite.pass);
-      setVerifiedCameraPass(null);
-      setRoute('camera');
-      return;
-    }
-    if (invite.slugOrId) {
-      setPublicPreviewEventId(invite.slugOrId);
-      setPublicPreviewFocus(
-        invite.focus === 'register' || invite.focus === 'checkin' || invite.focus === 'gifts'
-          ? invite.focus
-          : 'top'
-      );
-      setPublicPreviewDeskToken(invite.desk);
-      setRoute('demo-event');
-      return;
-    }
-    setRoute(nextRoute);
-  }, [location.pathname, location.search]);
+    if (typeof window === 'undefined') return;
+    const handlePopState = () => {
+      const pathname = window.location.pathname;
+      const search = window.location.search;
+      const nextRoute = resolveRouteFromLocation(pathname, search);
+      const invite = parseInvitationFromValues(pathname, search);
+      if (invite.focus === 'camera') {
+        setCameraEventId(invite.slugOrId);
+        setCameraGuestName(invite.guest);
+        setCameraPassCode(invite.pass);
+        setVerifiedCameraPass(null);
+        setRoute('camera');
+        return;
+      }
+      if (invite.slugOrId) {
+        setPublicPreviewEventId(invite.slugOrId);
+        setPublicPreviewFocus(
+          invite.focus === 'register' || invite.focus === 'checkin' || invite.focus === 'gifts'
+            ? invite.focus
+            : 'top'
+        );
+        setPublicPreviewDeskToken(invite.desk);
+        setRoute('demo-event');
+        return;
+      }
+      setRoute(nextRoute);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const handleAuthenticated = async (
     session: StoredAuthSession,
@@ -1765,53 +1773,9 @@ export default function App() {
     );
   }
 
-  if (
-    route === 'features' ||
-    route === 'pricing' ||
-    route === 'how-it-works' ||
-    route === 'faq' ||
-    route === 'about' ||
-    route === 'contact' ||
-    route === 'blog'
-  ) {
-    const sharedMarketingProps = {
-      isSignedIn,
-      onNavigateSignIn: () => {
-        setSessionTimeoutNotice(null);
-        setRoute('signin');
-        syncBrowserPath('/signin');
-        if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
-      },
-      onNavigateStudio: () =>
-        requireSignedIn({
-          route: 'studio',
-          screen: 'overview',
-          label: 'Creator Studio',
-        }),
-    };
-    return (
-      <>
-        {route === 'features' && <FeaturesPage {...sharedMarketingProps} />}
-        {route === 'pricing' && <PricingPage {...sharedMarketingProps} />}
-        {route === 'how-it-works' && <HowItWorksPage {...sharedMarketingProps} />}
-        {route === 'faq' && <FaqPage {...sharedMarketingProps} />}
-        {route === 'about' && <AboutPage {...sharedMarketingProps} />}
-        {route === 'contact' && <ContactPage {...sharedMarketingProps} />}
-        {route === 'blog' && <BlogPage {...sharedMarketingProps} />}
-        {sessionTimeoutModal}
-      </>
-    );
-  }
-
   if (route === 'not-found') {
     return (
       <div className="min-h-dvh w-full bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center px-4 py-10">
-        <SeoHead
-          path={location.pathname || '/404'}
-          title="Page Not Found | Events By You"
-          description="The requested Events By You page could not be found. Return to the homepage to explore features, pricing, or event tools."
-          robots="noindex, nofollow"
-        />
         <main className="max-w-md w-full bg-white rounded-[28px] border border-[#E5E5EA] p-6 sm:p-8 shadow-sm text-center space-y-4">
           <p className="text-xs font-mono font-bold uppercase tracking-wider text-[#71717A]">
             404 · Page Not Found
@@ -1820,21 +1784,16 @@ export default function App() {
             This page does not exist
           </h1>
           <p className="text-xs sm:text-sm text-[#71717A] leading-relaxed">
-            The link may be outdated or removed. Explore Events By You features, pricing, or return home.
+            The link may be outdated or removed. Return to the homepage to explore features, pricing, or event tools.
           </p>
           <div className="flex flex-wrap justify-center gap-2 pt-2">
-            <Link
-              to="/"
+            <button
+              type="button"
+              onClick={navigateHome}
               className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 transition-colors"
             >
               Back to Home
-            </Link>
-            <Link
-              to="/features"
-              className="px-5 py-2.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] border border-[#E5E5EA] text-xs font-semibold hover:border-[#0B0B0B] transition-colors"
-            >
-              View Features
-            </Link>
+            </button>
           </div>
         </main>
       </div>
@@ -2192,7 +2151,6 @@ export default function App() {
   if ((route === 'studio' && !hasCheckedStoredSession) || authBootstrapping) {
     return (
       <div className="min-h-dvh w-full bg-[#F5F5F7] text-[#0B0B0B] flex flex-col items-center justify-center gap-3 px-4">
-        <SeoHead {...NOINDEX_ROUTE_SEO['/studio']} />
         <Loader2 className="w-6 h-6 animate-spin text-[#0B0B0B]" />
         <p className="text-xs font-medium text-[#71717A]">
           Syncing your workspace...
@@ -2302,7 +2260,6 @@ export default function App() {
 
   return (
     <div className="min-h-dvh w-full max-w-full bg-white text-[#0B0B0B] overflow-x-clip">
-      <SeoHead {...NOINDEX_ROUTE_SEO['/studio']} />
       <div className="w-full max-w-[1600px] mx-auto pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:pl-[max(1.25rem,env(safe-area-inset-left))] sm:pr-[max(1.25rem,env(safe-area-inset-right))] md:px-6 lg:px-8 xl:px-10 pt-[max(0.75rem,env(safe-area-inset-top))] sm:pt-5 lg:pt-6 pb-[calc(6.25rem+env(safe-area-inset-bottom))] md:pb-8 flex flex-col md:flex-row gap-3.5 sm:gap-4 md:gap-5 lg:gap-7 xl:gap-8 md:items-start min-w-0 overflow-x-clip">
         {/* Left Floating Dark Pill Capsule Navigation */}
         <NavigationRail

@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   ArrowRight,
   ArrowUpRight,
@@ -31,11 +30,9 @@ import {
 import { Attendee, EventItem } from '../types/events';
 import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
 import { DeterministicQrSvg, buildEventInvitationUrl } from '../lib/qr';
-import { MARKETING_SEO } from '../lib/seoConfig';
 import { BrandLogo, BrandOfficialBadge } from './BrandLogo';
 import { EventFlyerCard } from './EventFlyerCard';
 import { PWAInstallButton } from './PWAInstallButton';
-import { SeoHead } from './SeoHead';
 
 interface LandingScreenProps {
   featuredEvent?: EventItem | null;
@@ -210,7 +207,6 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
 
   return (
     <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col overflow-x-clip">
-      <SeoHead {...MARKETING_SEO['/']} />
       {/* FIXED TOP HEADER */}
       <header className="fixed top-0 inset-x-0 w-full z-50 bg-[#F5F5F7]/88 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] pt-[env(safe-area-inset-top)]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5 md:py-0 md:h-20 flex flex-wrap md:flex-nowrap xl:grid xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center justify-between gap-x-3 lg:gap-x-5 gap-y-2">
@@ -231,42 +227,41 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
             aria-label="Primary navigation"
             className="order-3 md:order-2 xl:justify-self-center w-full md:w-auto min-w-0 flex items-center md:justify-center gap-1 sm:gap-1.5 md:gap-0.5 lg:gap-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden border-t border-black/[0.06] md:border md:border-black/[0.06] md:bg-white/75 md:rounded-full md:p-1 md:shadow-[0_1px_3px_rgba(0,0,0,0.04)] pt-2 md:pt-1 pb-0.5 md:pb-1 text-xs lg:text-[13px]"
           >
-            <Link
-              to="/"
+            <button
+              type="button"
+              onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
               className="text-[#0B0B0B] font-semibold bg-black/[0.05] md:bg-[#F5F5F7] rounded-full px-3 py-1.5 whitespace-nowrap shrink-0 transition-colors"
             >
               Product
-            </Link>
-            <Link
-              to="/how-it-works"
+            </button>
+            <button
+              type="button"
+              onClick={() => scrollToSection('live-preview')}
+              className="text-[#444748] hover:text-[#0B0B0B] hover:bg-black/[0.04] rounded-full px-2.5 lg:px-3 py-1.5 font-medium transition-colors whitespace-nowrap shrink-0"
+            >
+              Live Preview
+            </button>
+            <button
+              type="button"
+              onClick={() => scrollToSection('how-it-works')}
               className="text-[#444748] hover:text-[#0B0B0B] hover:bg-black/[0.04] rounded-full px-2.5 lg:px-3 py-1.5 font-medium transition-colors whitespace-nowrap shrink-0"
             >
               How It Works
-            </Link>
-            <Link
-              to="/features"
+            </button>
+            <button
+              type="button"
+              onClick={() => scrollToSection('features')}
               className="text-[#444748] hover:text-[#0B0B0B] hover:bg-black/[0.04] rounded-full px-2.5 lg:px-3 py-1.5 font-medium transition-colors whitespace-nowrap shrink-0"
             >
               Features
-            </Link>
-            <Link
-              to="/pricing"
+            </button>
+            <button
+              type="button"
+              onClick={() => scrollToSection('pricing')}
               className="text-[#444748] hover:text-[#0B0B0B] hover:bg-black/[0.04] rounded-full px-2.5 lg:px-3 py-1.5 font-medium transition-colors whitespace-nowrap shrink-0"
             >
               Pricing
-            </Link>
-            <Link
-              to="/faq"
-              className="text-[#444748] hover:text-[#0B0B0B] hover:bg-black/[0.04] rounded-full px-2.5 lg:px-3 py-1.5 font-medium transition-colors whitespace-nowrap shrink-0"
-            >
-              FAQ
-            </Link>
-            <Link
-              to="/blog"
-              className="text-[#444748] hover:text-[#0B0B0B] hover:bg-black/[0.04] rounded-full px-2.5 lg:px-3 py-1.5 font-medium transition-colors whitespace-nowrap shrink-0"
-            >
-              Blog
-            </Link>
+            </button>
           </nav>
 
           <div className="order-2 md:order-3 xl:justify-self-end flex items-center gap-1.5 sm:gap-2 shrink-0">
@@ -1963,54 +1958,65 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               <span className="text-xs font-semibold text-[#1A1C1D] uppercase tracking-wider">
                 Platform
               </span>
-              <Link
-                to="/features"
+              <button
+                type="button"
+                onClick={() => scrollToSection('features')}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
                 Features
-              </Link>
-              <Link
-                to="/how-it-works"
+              </button>
+              <button
+                type="button"
+                onClick={() => scrollToSection('how-it-works')}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
                 How It Works
-              </Link>
-              <Link
-                to="/pricing"
+              </button>
+              <button
+                type="button"
+                onClick={() => scrollToSection('pricing')}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
                 Pricing
-              </Link>
-              <Link
-                to="/faq"
+              </button>
+              <button
+                type="button"
+                onClick={() => scrollToSection('live-preview')}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
-                FAQ
-              </Link>
+                Live Preview
+              </button>
             </div>
 
             <div className="flex flex-col gap-2">
               <span className="text-xs font-semibold text-[#1A1C1D] uppercase tracking-wider">
-                Company
+                Showcase
               </span>
-              <Link
-                to="/about"
+              <button
+                type="button"
+                onClick={() => scrollToSection('community-showcase')}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
-                About Us
-              </Link>
-              <Link
-                to="/blog"
+                Community Events
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigateDemoEvent(featuredEvent?.id, 'top')}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
-                Blog &amp; Guides
-              </Link>
-              <Link
-                to="/contact"
+                Event Registration
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  onOpenDisposableCamera
+                    ? onOpenDisposableCamera(featuredEvent?.id)
+                    : onNavigateDemoEvent(featuredEvent?.id, 'top')
+                }
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
-                Contact Support
-              </Link>
+                Disposable Camera
+              </button>
             </div>
 
             <div className="flex flex-col gap-2">
@@ -2026,10 +2032,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => onNavigateSignIn()}
+                onClick={() => onNavigateSignUp()}
                 className="text-left text-sm text-[#444748] hover:text-[#0B0B0B]"
               >
-                Organiser Login
+                Create Account
               </button>
               <button
                 type="button"
@@ -2044,30 +2050,20 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
           <div className="pt-4 border-t border-[#E5E5EA] flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-[#71717A]">
             <p>© 2026 Events By You Inc. Built for weddings, funerals, church, musical, corporate &amp; tech gatherings.</p>
             <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6">
-              <Link
-                to="/terms"
-                onClick={(e) => {
-                  if (onOpenLegal) {
-                    e.preventDefault();
-                    onOpenLegal('terms');
-                  }
-                }}
+              <button
+                type="button"
+                onClick={() => onOpenLegal?.('terms')}
                 className="hover:text-[#0B0B0B] transition-colors"
               >
                 Terms &amp; Conditions
-              </Link>
-              <Link
-                to="/privacy"
-                onClick={(e) => {
-                  if (onOpenLegal) {
-                    e.preventDefault();
-                    onOpenLegal('privacy');
-                  }
-                }}
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenLegal?.('privacy')}
                 className="hover:text-[#0B0B0B] transition-colors"
               >
                 Privacy Policy
-              </Link>
+              </button>
               <a href="/sitemap.xml" className="hover:text-[#0B0B0B] transition-colors">
                 Sitemap
               </a>

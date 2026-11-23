@@ -37,8 +37,6 @@ import {
 import { MAX_SHOTS_PER_USER } from '../lib/eventMessages';
 import { createZipBlob, type ZipFileEntry } from '../lib/zip';
 import { TopUtilityBar } from './TopUtilityBar';
-import { SeoHead } from './SeoHead';
-import { NOINDEX_ROUTE_SEO } from '../lib/seoConfig';
 
 interface DisposableCameraScreenProps {
   mode: 'studio' | 'public';
@@ -1106,7 +1104,6 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
           : 'space-y-4 lg:space-y-6 overflow-x-hidden'
       }
     >
-      <SeoHead {...NOINDEX_ROUTE_SEO['/camera']} />
       {/* Compact Public Top Bar — Mobile WhatsApp Dark Header / Desktop Frosted Bar */}
       {mode === 'public' && (
         <header className="sticky top-0 z-40 w-full bg-[#0B0B0B]/95 lg:bg-[#F5F5F7]/90 backdrop-blur-xl border-b border-white/10 lg:border-[#E5E5EA]">
