@@ -4,7 +4,7 @@ import { POWERED_BY_LINE, stripTrailingPoweredByLine } from '../src/lib/eventMes
 import type { EmailDeliverabilityDiagnostics } from '../src/types/events.ts';
 
 export const DEFAULT_APP_URL = (
-  process.env.APP_URL || 'https://www.eventsbyyou.xyz'
+  process.env.APP_URL || 'https://eventsbyyou.xyz'
 ).replace(/\/+$/, '');
 export const DEFAULT_DOMAIN_FROM = 'Events By You <hello@eventsbyyou.xyz>';
 export const DEFAULT_RESEND_FROM = 'Events By You <onboarding@resend.dev>';

@@ -59,20 +59,65 @@ function getStateSigningSecret(): string {
   );
 }
 
+function isTrustedOAuthOrigin(origin: string): boolean {
+  try {
+    const u = new URL(origin);
+    const host = u.hostname.toLowerCase();
+    if (u.protocol === 'https:') {
+      if (host === 'eventsbyyou.xyz' || host === 'www.eventsbyyou.xyz') return true;
+      if (host.endsWith('.run.app')) return true;
+      const envUrl = cleanEnv(process.env.APP_URL);
+      if (envUrl) {
+        try {
+          if (new URL(envUrl).origin === u.origin) return true;
+        } catch {
+          // Ignore malformed APP_URL
+        }
+      }
+    }
+    if (u.protocol === 'http:' && (host === 'localhost' || host === '127.0.0.1')) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveAppBaseUrl(req: Request): string {
-  const envUrl = cleanEnv(process.env.APP_URL).replace(/\/+$/, '');
-  if (envUrl) return envUrl;
   const forwardedProto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0]?.trim();
   const proto = forwardedProto || req.protocol || 'https';
   const forwardedHost = (req.headers['x-forwarded-host'] as string)?.split(',')[0]?.trim();
-  const host = forwardedHost || req.get('host') || 'www.eventsbyyou.xyz';
-  if (host.includes('localhost') || host.includes('127.0.0.1')) {
-    return `${req.protocol || 'http'}://${host}`.replace(/\/+$/, '');
+  const host = forwardedHost || req.get('host') || '';
+  const hostname = host.split(':')[0].toLowerCase();
+
+  // Always prefer live custom domain host when serving on eventsbyyou.xyz / www.eventsbyyou.xyz
+  if (hostname === 'eventsbyyou.xyz' || hostname === 'www.eventsbyyou.xyz') {
+    return `https://${host}`.replace(/\/+$/, '');
+  }
+
+  const envUrl = cleanEnv(process.env.APP_URL).replace(/\/+$/, '');
+  if (envUrl) return envUrl;
+
+  if (!host || host.includes('localhost') || host.includes('127.0.0.1')) {
+    return host ? `${req.protocol || 'http'}://${host}`.replace(/\/+$/, '') : 'https://eventsbyyou.xyz';
   }
   return `${proto}://${host}`.replace(/\/+$/, '');
 }
 
 export function getGoogleOAuthCallbackUrl(req: Request): string {
+  const requestedRedirect =
+    typeof req.query.redirectTo === 'string' ? req.query.redirectTo.trim() : '';
+  if (requestedRedirect) {
+    try {
+      const parsed = new URL(requestedRedirect);
+      if (isTrustedOAuthOrigin(parsed.origin)) {
+        return `${parsed.origin}/auth/callback`;
+      }
+    } catch {
+      // Fall back to resolved server base URL
+    }
+  }
   return `${resolveAppBaseUrl(req)}/auth/callback`;
 }
 

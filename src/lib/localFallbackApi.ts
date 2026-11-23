@@ -879,7 +879,7 @@ export async function localFallbackRequest<T>(
     const origin =
       typeof window !== 'undefined' && window.location?.origin
         ? window.location.origin
-        : 'https://www.eventsbyyou.xyz';
+        : 'https://eventsbyyou.xyz';
     const resolvedMsg = resolveEventMessage({
       type: 'confirmation',
       event: evt,
@@ -1688,7 +1688,7 @@ export async function localFallbackRequest<T>(
       originOverride:
         typeof window !== 'undefined' && window.location?.origin
           ? window.location.origin
-          : 'https://www.eventsbyyou.xyz',
+          : 'https://eventsbyyou.xyz',
       includeGuestInCameraUrl: true,
     });
 
@@ -1911,7 +1911,7 @@ export async function localFallbackRequest<T>(
     const origin =
       typeof window !== 'undefined' && window.location?.origin
         ? window.location.origin
-        : 'https://www.eventsbyyou.xyz';
+        : 'https://eventsbyyou.xyz';
     let cameraUrl: string | undefined;
     let dispatchedMessage: string | undefined;
     let checkInSmsSent = false;

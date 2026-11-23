@@ -55,7 +55,7 @@ export function buildCameraLinkForOrigin(
     originOverride?.replace(/\/+$/, '') ||
     (typeof window !== 'undefined' && window.location?.origin
       ? window.location.origin
-      : 'https://www.eventsbyyou.xyz');
+      : 'https://eventsbyyou.xyz');
   const base = `${origin}/e/${clean}/camera`;
   const search = new URLSearchParams();
   const trimmedCode = ticketCode?.trim();

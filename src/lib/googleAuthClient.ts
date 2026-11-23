@@ -38,12 +38,19 @@ export type GoogleOAuthPopupResult =
 function isTrustedCallbackOrigin(origin: string): boolean {
   if (!origin) return false;
   if (origin === window.location.origin) return true;
-  return (
-    origin.endsWith('.run.app') ||
-    origin.includes('localhost') ||
-    origin.includes('127.0.0.1') ||
-    origin.endsWith('eventsbyyou.xyz')
-  );
+  try {
+    const parsed = new URL(origin);
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === 'eventsbyyou.xyz' ||
+      host === 'www.eventsbyyou.xyz' ||
+      host.endsWith('.run.app') ||
+      host === 'localhost' ||
+      host === '127.0.0.1'
+    );
+  } catch {
+    return false;
+  }
 }
 
 export async function startGoogleOAuthPopup(options: {

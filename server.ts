@@ -1004,11 +1004,16 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
   });
 
   const resolveBaseUrl = (req: Request) => {
+    const forwardedHost = (req.headers['x-forwarded-host'] as string)?.split(',')[0]?.trim();
+    const host = forwardedHost || req.get('host') || 'eventsbyyou.xyz';
+    const hostname = host.split(':')[0].toLowerCase();
+    if (hostname === 'eventsbyyou.xyz' || hostname === 'www.eventsbyyou.xyz') {
+      return `https://${host}`.replace(/\/+$/, '');
+    }
     if (process.env.APP_URL) return process.env.APP_URL.replace(/\/+$/, '');
     const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
-    const host = (req.headers['x-forwarded-host'] as string) || req.get('host') || 'www.eventsbyyou.xyz';
     if (host.includes('localhost') || host.includes('127.0.0.1')) {
-      return 'https://www.eventsbyyou.xyz';
+      return 'https://eventsbyyou.xyz';
     }
     return `${proto}://${host}`.replace(/\/+$/, '');
   };
@@ -2109,7 +2114,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
             type: 'recovery',
             email: contacts.email,
             options: {
-              redirectTo: redirectTo || process.env.APP_URL || 'https://www.eventsbyyou.xyz',
+              redirectTo: redirectTo || process.env.APP_URL || 'https://eventsbyyou.xyz',
             },
           });
           if (!genRes.error) {
@@ -2158,7 +2163,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           type: 'recovery',
           email: cleanEmail,
           options: {
-            redirectTo: redirectTo || process.env.APP_URL || 'https://www.eventsbyyou.xyz',
+            redirectTo: redirectTo || process.env.APP_URL || 'https://eventsbyyou.xyz',
           },
         });
         if (!genRes.error) {
@@ -2186,7 +2191,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
 
       const supabase = createPublicSupabaseClient();
       const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-        redirectTo: redirectTo || process.env.APP_URL || 'https://www.eventsbyyou.xyz',
+        redirectTo: redirectTo || process.env.APP_URL || 'https://eventsbyyou.xyz',
       });
       if (error) {
         const formatted = formatSupabaseEmailError(error.message, Boolean(svc));

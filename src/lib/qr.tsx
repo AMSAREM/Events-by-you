@@ -131,7 +131,7 @@ export function buildEventInvitationUrl(slugOrId: string, tab?: 'checkin' | 'reg
   const origin =
     typeof window !== 'undefined' && window.location.origin
       ? window.location.origin
-      : 'https://www.eventsbyyou.xyz';
+      : 'https://eventsbyyou.xyz';
   const base = `${origin}/e/${clean}`;
   if (tab === 'checkin') return `${base}/checkin`;
   if (tab === 'gifts') return `${base}/gifts`;
@@ -154,7 +154,7 @@ export function buildEventCameraUrl(
     originOverride?.replace(/\/+$/, '') ||
     (typeof window !== 'undefined' && window.location.origin
       ? window.location.origin
-      : 'https://www.eventsbyyou.xyz');
+      : 'https://eventsbyyou.xyz');
   const base = `${origin}/e/${clean}/camera`;
   const trimmedGuest = guestName?.trim();
   return trimmedGuest ? `${base}?guest=${encodeURIComponent(trimmedGuest)}` : base;
@@ -165,7 +165,7 @@ export function buildEventOgImageUrl(slugOrId: string): string {
   const origin =
     typeof window !== 'undefined' && window.location.origin
       ? window.location.origin
-      : 'https://www.eventsbyyou.xyz';
+      : 'https://eventsbyyou.xyz';
   return `${origin}/api/og/event/${clean}`;
 }
 
