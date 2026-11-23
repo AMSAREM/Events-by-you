@@ -124,6 +124,31 @@ export interface GiftTableEntry {
   createdAt: string;
 }
 
+export type EventPollStatus = 'active' | 'draft' | 'closed';
+
+export interface EventPollOption {
+  id: string;
+  label: string;
+  votes: number;
+}
+
+export interface EventPoll {
+  id: string;
+  eventId: string;
+  question: string;
+  description?: string;
+  sessionLabel?: string;
+  status: EventPollStatus;
+  allowMultiple?: boolean;
+  showResultsToPublic?: boolean;
+  requireVerifiedPass?: boolean;
+  options: EventPollOption[];
+  totalVotes: number;
+  voterKeys?: string[];
+  createdAt: string;
+  closedAt?: string;
+}
+
 export interface EventExtraDataConfig {
   enableGiftTable: boolean;
   giftTitle?: string;
@@ -132,6 +157,9 @@ export interface EventExtraDataConfig {
   giftRegistryItems?: string[];
   giftLedger?: GiftTableEntry[];
   attendantLinks?: GiftTableAttendantLink[];
+  enablePolls?: boolean;
+  pollsTitle?: string;
+  polls?: EventPoll[];
   brandColor?: string;
   customFields: CustomFormField[];
 }

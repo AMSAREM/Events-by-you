@@ -16,6 +16,8 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  EventPoll,
+  EventPollStatus,
   GiftTableAttendantLink,
   GiftTableEntry,
   OrganizerProfile,
@@ -30,6 +32,11 @@ const SESSION_KEY = 'eventsapp_supabase_session_v1';
 const CREATOR_TOKEN_KEY = 'eventsapp_creator_token_v1';
 
 let useLocalFallback = false;
+let checkInSessionExempt = false;
+
+export function setCheckInSessionExempt(exempt: boolean): void {
+  checkInSessionExempt = exempt;
+}
 
 export function isLocalFallbackMode(): boolean {
   return useLocalFallback;
@@ -333,7 +340,17 @@ async function request<T>(
   }
 
   if (useLocalFallback) {
-    return executeLocalFallback<T>(url, options, authenticated, retried, session?.accessToken);
+    const fallbackHeaders: Record<string, string> = {
+      ...((options.headers as Record<string, string>) || {}),
+      ...(checkInSessionExempt ? { 'X-CheckIn-Active': '1' } : {}),
+    };
+    return executeLocalFallback<T>(
+      url,
+      { ...options, headers: fallbackHeaders },
+      authenticated,
+      retried,
+      session?.accessToken
+    );
   }
 
   const targetUrl = resolveApiUrl(url);
@@ -344,6 +361,9 @@ async function request<T>(
 
   if (authenticated && session?.accessToken) {
     headers.Authorization = `Bearer ${session.accessToken}`;
+    if (checkInSessionExempt) {
+      headers['X-CheckIn-Active'] = '1';
+    }
     const creatorToken = getStoredCreatorToken();
     if (creatorToken) {
       headers['X-Creator-Token'] = creatorToken;
@@ -717,6 +737,21 @@ export const api = {
         `/api/public/events/${encodeURIComponent(slugOrId)}/gift-desk/${encodeURIComponent(token)}`,
         { method: 'POST', body: JSON.stringify(payload) }
       ),
+
+    getEventPolls: (slugOrId: string) =>
+      request<{ event: EventItem; polls: EventPoll[] }>(
+        `/api/public/events/${encodeURIComponent(slugOrId)}/polls`
+      ),
+
+    votePoll: (
+      slugOrId: string,
+      pollId: string,
+      payload: { optionIds: string[]; voterKey?: string; passCode?: string }
+    ) =>
+      request<{ poll: EventPoll; event: EventItem }>(
+        `/api/public/events/${encodeURIComponent(slugOrId)}/polls/${encodeURIComponent(pollId)}/vote`,
+        { method: 'POST', body: JSON.stringify(payload) }
+      ),
   },
 
   studio: {
@@ -934,6 +969,51 @@ export const api = {
     deleteGiftAttendantLink: (eventId: string, linkId: string) =>
       request<{ ok: boolean; event: EventItem }>(
         `/api/studio/events/${encodeURIComponent(eventId)}/gift-links/${encodeURIComponent(linkId)}`,
+        { method: 'DELETE' },
+        true
+      ),
+
+    createPoll: (
+      eventId: string,
+      payload: {
+        question: string;
+        description?: string;
+        sessionLabel?: string;
+        options: string[];
+        status?: EventPollStatus;
+        allowMultiple?: boolean;
+        showResultsToPublic?: boolean;
+        requireVerifiedPass?: boolean;
+      }
+    ) =>
+      request<{ poll: EventPoll; event: EventItem }>(
+        `/api/studio/events/${encodeURIComponent(eventId)}/polls`,
+        { method: 'POST', body: JSON.stringify(payload) },
+        true
+      ),
+
+    updatePoll: (
+      eventId: string,
+      pollId: string,
+      patch: {
+        question?: string;
+        description?: string;
+        sessionLabel?: string;
+        status?: EventPollStatus;
+        allowMultiple?: boolean;
+        showResultsToPublic?: boolean;
+        requireVerifiedPass?: boolean;
+      }
+    ) =>
+      request<{ poll: EventPoll; event: EventItem }>(
+        `/api/studio/events/${encodeURIComponent(eventId)}/polls/${encodeURIComponent(pollId)}`,
+        { method: 'PATCH', body: JSON.stringify(patch) },
+        true
+      ),
+
+    deletePoll: (eventId: string, pollId: string) =>
+      request<{ ok: boolean; event: EventItem }>(
+        `/api/studio/events/${encodeURIComponent(eventId)}/polls/${encodeURIComponent(pollId)}`,
         { method: 'DELETE' },
         true
       ),

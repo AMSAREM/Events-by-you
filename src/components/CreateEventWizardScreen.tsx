@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
+  BarChart3,
   Calendar,
   Check,
   CheckCircle2,
@@ -115,6 +116,12 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const [enableGiftTable, setEnableGiftTable] = useState(false);
   const [giftTitle, setGiftTitle] = useState('Event Gift Table & Registry');
   const [momoNumber, setMomoNumber] = useState('');
+  const [enablePolls, setEnablePolls] = useState<boolean>(
+    Boolean(initialPreset.extraDataConfig.enablePolls)
+  );
+  const [pollsTitle, setPollsTitle] = useState<string>(
+    initialPreset.extraDataConfig.pollsTitle || 'Live Corporate & Delegate Polls'
+  );
   const [customFields, setCustomFields] = useState<CustomFormField[]>(
     initialPreset.extraDataConfig.customFields
   );
@@ -239,6 +246,8 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     setInviteCode('');
     setEnableGiftTable(Boolean(catPreset.extraDataConfig.enableGiftTable));
     if (catPreset.extraDataConfig.giftTitle) setGiftTitle(catPreset.extraDataConfig.giftTitle);
+    setEnablePolls(Boolean(catPreset.extraDataConfig.enablePolls) || nextCat === 'Corporate');
+    setPollsTitle(catPreset.extraDataConfig.pollsTitle || 'Live Corporate & Delegate Polls');
     setCustomFields(catPreset.extraDataConfig.customFields);
 
     const artworkByCategory: Record<string, ArtworkVariant> = {
@@ -320,6 +329,9 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
           momoNumber: momoNumber.trim() || undefined,
           momoName: profile.studio || profile.name,
           giftRegistryItems: preset.extraDataConfig.giftRegistryItems,
+          enablePolls,
+          pollsTitle: pollsTitle.trim() || 'Live Corporate & Delegate Polls',
+          polls: preset.extraDataConfig.polls ?? [],
           brandColor,
           customFields,
         },
@@ -1018,6 +1030,43 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                         onChange={(e) => setMomoNumber(e.target.value)}
                         placeholder="MoMo receiving number (e.g. +233 24...)"
                         className="h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B]"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Live Corporate Polls & Audience Voting */}
+                <div className="p-4 rounded-2xl bg-white space-y-3 border border-[#E5E5EA]">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <BarChart3 className="w-4 h-4 text-[#0B0B0B] shrink-0" />
+                      <div>
+                        <p className="text-xs font-bold text-[#0B0B0B]">
+                          Live Corporate Polls &amp; Audience Voting
+                        </p>
+                        <p className="text-[11px] text-[#71717A]">
+                          Launch real-time polls, AGM motions &amp; session votes at /e/:slug/polls — ideal for corporate summits, panels &amp; townhalls.
+                        </p>
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={enablePolls}
+                      onChange={(e) => setEnablePolls(e.target.checked)}
+                      className="w-4 h-4 accent-[#0B0B0B] shrink-0"
+                    />
+                  </div>
+                  {enablePolls && (
+                    <div className="pt-1">
+                      <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                        Public Polls Section Title
+                      </label>
+                      <input
+                        type="text"
+                        value={pollsTitle}
+                        onChange={(e) => setPollsTitle(e.target.value)}
+                        placeholder="Live Corporate & Delegate Polls"
+                        className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
                       />
                     </div>
                   )}

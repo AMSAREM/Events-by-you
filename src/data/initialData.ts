@@ -210,6 +210,9 @@ export const CATEGORY_DESIGN_PRESETS: Record<string, CategoryDesignPreset> = {
     },
     extraDataConfig: {
       enableGiftTable: false,
+      enablePolls: true,
+      pollsTitle: 'Live Corporate & Delegate Polls',
+      polls: [],
       customFields: [
         {
           id: 'job_title',

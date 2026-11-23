@@ -126,7 +126,10 @@ export function downloadQrSvg(value: string, filename = 'event-gate-pass-qr.svg'
   URL.revokeObjectURL(url);
 }
 
-export function buildEventInvitationUrl(slugOrId: string, tab?: 'checkin' | 'register' | 'gifts'): string {
+export function buildEventInvitationUrl(
+  slugOrId: string,
+  tab?: 'checkin' | 'register' | 'gifts' | 'polls'
+): string {
   const clean = encodeURIComponent(slugOrId.trim());
   const origin =
     typeof window !== 'undefined' && window.location.origin
@@ -135,6 +138,7 @@ export function buildEventInvitationUrl(slugOrId: string, tab?: 'checkin' | 'reg
   const base = `${origin}/e/${clean}`;
   if (tab === 'checkin') return `${base}/checkin`;
   if (tab === 'gifts') return `${base}/gifts`;
+  if (tab === 'polls') return `${base}/polls`;
   return tab ? `${base}?tab=${tab}` : base;
 }
 

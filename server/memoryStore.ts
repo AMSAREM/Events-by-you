@@ -11,6 +11,12 @@ import {
 } from '../src/data/initialData.ts';
 import { normalizeHexColor } from '../src/lib/themeColors.ts';
 import {
+  buildValidatedPollOptions,
+  normalizePollStatus,
+  sanitizePollForPublic,
+  sanitizePublicExtraDataConfig,
+} from '../src/lib/polls.ts';
+import {
   PLAN_MRR_USD,
   DEFAULT_SHARED_SENDER_ID,
   STARTER_MAX_ACTIVE_EVENTS,
@@ -44,6 +50,8 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  EventPoll,
+  EventPollStatus,
   GiftTableAttendantLink,
   GiftTableEntry,
   OrganizerProfile,
@@ -698,11 +706,16 @@ export const memoryStore = {
     }
   },
 
-  getUserByAccessToken(accessToken: string): MemoryUser | null {
+  getUserByAccessToken(
+    accessToken: string,
+    options?: { exemptIdleTimeout?: boolean }
+  ): MemoryUser | null {
     const session = db.sessionsByAccessToken.get(accessToken);
     if (!session) return null;
     const nowMs = Date.now();
-    if (session.expiresAt * 1000 < nowMs || nowMs - session.lastActivityAt > SESSION_IDLE_TIMEOUT_MS) {
+    const idleTimedOut =
+      !options?.exemptIdleTimeout && nowMs - session.lastActivityAt > SESSION_IDLE_TIMEOUT_MS;
+    if (session.expiresAt * 1000 < nowMs || idleTimedOut) {
       db.sessionsByAccessToken.delete(accessToken);
       db.sessionsByRefreshToken.delete(session.refreshToken);
       return null;
@@ -724,13 +737,12 @@ export const memoryStore = {
       .filter((e) => e.status === 'live' || e.status === 'upcoming')
       .map(({ organizerId, ...rest }) => {
         const ownerEnt = getPlanEntitlements(db.users.get(organizerId)?.profile);
-        const withBrand: EventItem = {
+        return {
           ...rest,
+          checkedIn: 0,
           whiteLabel: ownerEnt.whiteLabelPublicEvent,
+          extraDataConfig: sanitizePublicExtraDataConfig(rest.extraDataConfig),
         };
-        if (!withBrand.extraDataConfig?.attendantLinks) return withBrand;
-        const { attendantLinks: _att, ...extraRest } = withBrand.extraDataConfig;
-        return { ...withBrand, extraDataConfig: extraRest };
       })
       .sort((a, b) => {
         const aCustom = a.flyerUrl?.startsWith('data:') ? 1 : 0;
@@ -748,13 +760,12 @@ export const memoryStore = {
       ) {
         const { organizerId, ...rest } = evt;
         const ownerEnt = getPlanEntitlements(db.users.get(organizerId)?.profile);
-        const withBrand: EventItem = {
+        return {
           ...rest,
+          checkedIn: 0,
           whiteLabel: ownerEnt.whiteLabelPublicEvent,
+          extraDataConfig: sanitizePublicExtraDataConfig(rest.extraDataConfig),
         };
-        if (!withBrand.extraDataConfig?.attendantLinks) return withBrand;
-        const { attendantLinks: _att, ...extraRest } = withBrand.extraDataConfig;
-        return { ...withBrand, extraDataConfig: extraRest };
       }
     }
     return null;
@@ -1882,12 +1893,31 @@ export const memoryStore = {
       ent.maxAttendeesPerEvent != null
         ? Math.min(Math.max(1, Number(updated.capacity ?? existing.capacity) || 50), ent.maxAttendeesPerEvent)
         : Math.max(1, Number(updated.capacity ?? existing.capacity) || 100);
+    const existingExtra = existing.extraDataConfig;
+    const incomingExtra = updated.extraDataConfig;
+    const mergedExtra =
+      incomingExtra === undefined
+        ? existingExtra
+        : {
+            ...incomingExtra,
+            ...(incomingExtra.giftLedger === undefined && existingExtra?.giftLedger !== undefined
+              ? { giftLedger: existingExtra.giftLedger }
+              : {}),
+            ...(incomingExtra.attendantLinks === undefined && existingExtra?.attendantLinks !== undefined
+              ? { attendantLinks: existingExtra.attendantLinks }
+              : {}),
+            ...(incomingExtra.polls === undefined && existingExtra?.polls !== undefined
+              ? { polls: existingExtra.polls }
+              : {}),
+          };
+
     const next = {
       ...existing,
       ...updated,
       id: eventId,
       organizerId: userId,
       capacity: nextCapacity,
+      extraDataConfig: mergedExtra,
       senderId: ent.allowCustomSenderId
         ? updated.senderId !== undefined
           ? updated.senderId
@@ -2011,6 +2041,287 @@ export const memoryStore = {
     existing.extraDataConfig = {
       ...prevExtra,
       attendantLinks: prevLinks.filter((l) => l.id !== linkId),
+    };
+    db.events.set(eventId, existing);
+    const { organizerId: _org, ...clean } = existing;
+    return clean;
+  },
+
+  getPublicEventPolls(slugOrId: string): { event: EventItem; polls: EventPoll[] } {
+    const cleanEvt = this.getPublicEventBySlugOrId(slugOrId);
+    if (!cleanEvt) {
+      throw Object.assign(new Error('Event polls not found.'), { status: 404 });
+    }
+    return {
+      event: cleanEvt,
+      polls: cleanEvt.extraDataConfig?.polls ?? [],
+    };
+  },
+
+  votePublicEventPoll(
+    slugOrId: string,
+    pollId: string,
+    payload: { optionIds?: string[]; voterKey?: string; passCode?: string }
+  ): { poll: EventPoll; event: EventItem } {
+    const target = slugOrId.trim().toLowerCase();
+    let stored: (EventItem & { organizerId: string }) | undefined;
+    for (const evt of db.events.values()) {
+      if (
+        (evt.status === 'live' || evt.status === 'upcoming') &&
+        (evt.id.toLowerCase() === target || evt.slug.toLowerCase() === target)
+      ) {
+        stored = evt;
+        break;
+      }
+    }
+    if (!stored) {
+      throw Object.assign(new Error('Event not found.'), { status: 404 });
+    }
+    const polls = Array.isArray(stored.extraDataConfig?.polls)
+      ? stored.extraDataConfig!.polls!
+      : [];
+    const pollIdx = polls.findIndex((p) => p.id === pollId);
+    if (pollIdx === -1) {
+      throw Object.assign(new Error('Poll not found.'), { status: 404 });
+    }
+    const poll = polls[pollIdx];
+    if (poll.status !== 'active') {
+      throw Object.assign(new Error('This poll is currently closed for voting.'), { status: 403 });
+    }
+
+    const rawIds = Array.isArray(payload.optionIds)
+      ? payload.optionIds.map((id) => String(id).trim()).filter(Boolean)
+      : [];
+    const uniqueIds = Array.from(new Set(rawIds));
+    const validOptionSet = new Set(poll.options.map((o) => o.id));
+    const chosenIds = uniqueIds.filter((id) => validOptionSet.has(id));
+    if (chosenIds.length === 0) {
+      throw Object.assign(new Error('Select at least one valid option to cast your vote.'), {
+        status: 400,
+      });
+    }
+    if (!poll.allowMultiple && chosenIds.length > 1) {
+      throw Object.assign(new Error('This poll allows only one choice.'), { status: 400 });
+    }
+
+    let dedupeKey = '';
+    if (poll.requireVerifiedPass) {
+      const rawPass = (payload.passCode || '').trim();
+      if (!rawPass) {
+        throw Object.assign(
+          new Error(
+            'This accredited poll requires your Event Pass Code, registered email, or phone number.'
+          ),
+          { status: 403 }
+        );
+      }
+      const cleanLower = rawPass.toLowerCase();
+      const cleanCode = rawPass.toUpperCase().replace(/^#/, '');
+      const digitsOnly = rawPass.replace(/\D/g, '');
+      const normalizedPassPhone = digitsOnly.length >= 9 ? normalizePhoneE164(rawPass) : '';
+      const matchedAtt = Array.from(db.attendees.values()).find((att) => {
+        if (att.eventId !== stored!.id) return false;
+        const attCode = att.ticketCode.toUpperCase().replace(/^#/, '');
+        const attPhone = normalizePhoneE164(att.phone);
+        const attDigits = att.phone.replace(/\D/g, '');
+        return (
+          attCode === cleanCode ||
+          att.email.toLowerCase() === cleanLower ||
+          (normalizedPassPhone && attPhone === normalizedPassPhone) ||
+          (digitsOnly.length >= 9 && attDigits.endsWith(digitsOnly.slice(-9)))
+        );
+      });
+      if (!matchedAtt) {
+        throw Object.assign(
+          new Error('No registered delegate pass matched that code, email, or phone number.'),
+          { status: 403 }
+        );
+      }
+      dedupeKey = `att:${matchedAtt.id}`;
+    } else {
+      const rawKey = (payload.voterKey || '').trim().slice(0, 80);
+      dedupeKey = rawKey
+        ? `anon:${rawKey}`
+        : `anon:${crypto.randomBytes(8).toString('hex')}`;
+    }
+
+    const existingVoters = Array.isArray(poll.voterKeys) ? poll.voterKeys : [];
+    if (existingVoters.includes(dedupeKey)) {
+      throw Object.assign(new Error('Your vote has already been recorded for this poll.'), {
+        status: 409,
+      });
+    }
+
+    const chosenSet = new Set(chosenIds);
+    const updatedPoll: EventPoll = {
+      ...poll,
+      options: poll.options.map((opt) =>
+        chosenSet.has(opt.id) ? { ...opt, votes: (opt.votes || 0) + 1 } : opt
+      ),
+      totalVotes: (poll.totalVotes || 0) + 1,
+      voterKeys: [...existingVoters, dedupeKey],
+    };
+
+    const existingExtra = stored.extraDataConfig ?? { enableGiftTable: false, customFields: [] };
+    stored.extraDataConfig = {
+      ...existingExtra,
+      enablePolls: true,
+      polls: polls.map((p, idx) => (idx === pollIdx ? updatedPoll : p)),
+    };
+    db.events.set(stored.id, stored);
+
+    const { organizerId, ...rest } = stored;
+    const ownerEnt = getPlanEntitlements(db.users.get(organizerId)?.profile);
+    return {
+      poll: sanitizePollForPublic(updatedPoll),
+      event: {
+        ...rest,
+        checkedIn: 0,
+        whiteLabel: ownerEnt.whiteLabelPublicEvent,
+        extraDataConfig: sanitizePublicExtraDataConfig(rest.extraDataConfig),
+      },
+    };
+  },
+
+  createStudioPoll(
+    userId: string,
+    eventId: string,
+    payload: {
+      question?: string;
+      description?: string;
+      sessionLabel?: string;
+      options?: unknown[];
+      status?: EventPollStatus;
+      allowMultiple?: boolean;
+      showResultsToPublic?: boolean;
+      requireVerifiedPass?: boolean;
+    }
+  ): { poll: EventPoll; event: EventItem } {
+    const existing = db.events.get(eventId);
+    if (!existing) throw Object.assign(new Error('Event not found.'), { status: 404 });
+    if (existing.organizerId !== userId) {
+      throw Object.assign(new Error('Only the event creator can manage event polls.'), {
+        status: 403,
+      });
+    }
+    const question = (payload.question || '').trim();
+    if (!question) {
+      throw Object.assign(new Error('Poll question is required.'), { status: 400 });
+    }
+    const options = buildValidatedPollOptions(Array.isArray(payload.options) ? payload.options : []);
+    if (options.length < 2) {
+      throw Object.assign(new Error('Provide at least two distinct answer choices.'), {
+        status: 400,
+      });
+    }
+    const status = normalizePollStatus(payload.status, 'active');
+    const newPoll: EventPoll = {
+      id: `poll-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+      eventId,
+      question: question.slice(0, 220),
+      description: payload.description?.trim().slice(0, 320) || undefined,
+      sessionLabel: payload.sessionLabel?.trim().slice(0, 80) || undefined,
+      options,
+      status,
+      allowMultiple: Boolean(payload.allowMultiple),
+      showResultsToPublic: payload.showResultsToPublic !== false,
+      requireVerifiedPass: Boolean(payload.requireVerifiedPass),
+      totalVotes: 0,
+      voterKeys: [],
+      createdAt: new Date().toISOString(),
+      closedAt: status === 'closed' ? new Date().toISOString() : undefined,
+    };
+    const prevExtra = existing.extraDataConfig ?? { enableGiftTable: false, customFields: [] };
+    existing.extraDataConfig = {
+      ...prevExtra,
+      enablePolls: true,
+      polls: [newPoll, ...(prevExtra.polls ?? [])],
+    };
+    db.events.set(eventId, existing);
+    const { organizerId: _org, ...clean } = existing;
+    return { poll: newPoll, event: clean };
+  },
+
+  updateStudioPoll(
+    userId: string,
+    eventId: string,
+    pollId: string,
+    patch: {
+      question?: string;
+      description?: string;
+      sessionLabel?: string;
+      status?: EventPollStatus;
+      allowMultiple?: boolean;
+      showResultsToPublic?: boolean;
+      requireVerifiedPass?: boolean;
+    }
+  ): { poll: EventPoll; event: EventItem } {
+    const existing = db.events.get(eventId);
+    if (!existing) throw Object.assign(new Error('Event not found.'), { status: 404 });
+    if (existing.organizerId !== userId) {
+      throw Object.assign(new Error('Only the event creator can manage event polls.'), {
+        status: 403,
+      });
+    }
+    const prevExtra = existing.extraDataConfig ?? { enableGiftTable: false, customFields: [] };
+    const polls = Array.isArray(prevExtra.polls) ? prevExtra.polls : [];
+    const target = polls.find((p) => p.id === pollId);
+    if (!target) {
+      throw Object.assign(new Error('Poll not found.'), { status: 404 });
+    }
+    const nextStatus = patch.status !== undefined ? normalizePollStatus(patch.status, target.status) : target.status;
+    const updatedPoll: EventPoll = {
+      ...target,
+      question: patch.question?.trim() ? patch.question.trim().slice(0, 220) : target.question,
+      description:
+        patch.description !== undefined
+          ? patch.description.trim().slice(0, 320) || undefined
+          : target.description,
+      sessionLabel:
+        patch.sessionLabel !== undefined
+          ? patch.sessionLabel.trim().slice(0, 80) || undefined
+          : target.sessionLabel,
+      status: nextStatus,
+      allowMultiple:
+        patch.allowMultiple !== undefined ? Boolean(patch.allowMultiple) : target.allowMultiple,
+      showResultsToPublic:
+        patch.showResultsToPublic !== undefined
+          ? Boolean(patch.showResultsToPublic)
+          : target.showResultsToPublic,
+      requireVerifiedPass:
+        patch.requireVerifiedPass !== undefined
+          ? Boolean(patch.requireVerifiedPass)
+          : target.requireVerifiedPass,
+      closedAt:
+        nextStatus === 'closed'
+          ? target.closedAt || new Date().toISOString()
+          : nextStatus === 'active'
+            ? undefined
+            : target.closedAt,
+    };
+    existing.extraDataConfig = {
+      ...prevExtra,
+      enablePolls: true,
+      polls: polls.map((p) => (p.id === pollId ? updatedPoll : p)),
+    };
+    db.events.set(eventId, existing);
+    const { organizerId: _org, ...clean } = existing;
+    return { poll: updatedPoll, event: clean };
+  },
+
+  deleteStudioPoll(userId: string, eventId: string, pollId: string): EventItem {
+    const existing = db.events.get(eventId);
+    if (!existing) throw Object.assign(new Error('Event not found.'), { status: 404 });
+    if (existing.organizerId !== userId) {
+      throw Object.assign(new Error('Only the event creator can manage event polls.'), {
+        status: 403,
+      });
+    }
+    const prevExtra = existing.extraDataConfig ?? { enableGiftTable: false, customFields: [] };
+    const polls = Array.isArray(prevExtra.polls) ? prevExtra.polls : [];
+    existing.extraDataConfig = {
+      ...prevExtra,
+      polls: polls.filter((p) => p.id !== pollId),
     };
     db.events.set(eventId, existing);
     const { organizerId: _org, ...clean } = existing;

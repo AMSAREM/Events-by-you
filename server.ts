@@ -55,6 +55,8 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  EventPoll,
+  EventPollStatus,
   GiftTableAttendantLink,
   GiftTableEntry,
   OrganizerProfile,
@@ -89,6 +91,12 @@ import {
   MAX_SHOTS_PER_USER,
   resolveEventMessage,
 } from './src/lib/eventMessages.ts';
+import {
+  buildValidatedPollOptions,
+  normalizePollStatus,
+  sanitizePollForPublic,
+  sanitizePublicExtraDataConfig,
+} from './src/lib/polls.ts';
 import {
   resolveAuthoritativeSmsBundle,
   validateReceiptReference,
@@ -247,6 +255,9 @@ function withEmbeddedMessageConfig(
     }
     if ((extraDataConfig as EventItem['extraDataConfig'])?.attendantLinks === undefined && existingObj.attendantLinks !== undefined) {
       base.attendantLinks = existingObj.attendantLinks;
+    }
+    if ((extraDataConfig as EventItem['extraDataConfig'])?.polls === undefined && existingObj.polls !== undefined) {
+      base.polls = existingObj.polls;
     }
   }
   if (messageConfig && typeof messageConfig === 'object') {
@@ -991,7 +1002,10 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Creator-Token');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization, X-Creator-Token, X-CheckIn-Active'
+      );
       res.setHeader('Access-Control-Max-Age', '86400');
     }
     if (req.method === 'OPTIONS') {
@@ -2336,14 +2350,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
   // PUBLIC ROUTES (Single Source of Truth in Supabase)
   // =========================================================================
 
-  const sanitizePublicEvent = (evt: EventItem): EventItem => {
-    if (!evt.extraDataConfig?.attendantLinks) return evt;
-    const { attendantLinks: _attLinks, ...restExtra } = evt.extraDataConfig;
-    return {
-      ...evt,
-      extraDataConfig: restExtra,
-    };
-  };
+  const sanitizePublicEvent = (evt: EventItem): EventItem => ({
+    ...evt,
+    checkedIn: 0,
+    extraDataConfig: sanitizePublicExtraDataConfig(evt.extraDataConfig),
+  });
 
   app.get('/api/public/events', async (_req, res) => {
     if (!isSupabaseConfigured()) {
@@ -3174,6 +3185,166 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to log desk gift entry.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  // Public Corporate Polls & Audience Voting
+  app.get(
+    '/api/public/events/:slugOrId/polls',
+    requireSupabaseConfiguredMiddleware,
+    async (req, res) => {
+      try {
+        const evt = await resolveEventForPublicOrOg(req.params.slugOrId);
+        if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
+          return res.status(404).json({ error: 'Event polls not found.' });
+        }
+        const cleanEvent = sanitizePublicEvent(evt);
+        return res.json({
+          event: cleanEvent,
+          polls: cleanEvent.extraDataConfig?.polls ?? [],
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to load event polls.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  app.post(
+    '/api/public/events/:slugOrId/polls/:pollId/vote',
+    requireSupabaseConfiguredMiddleware,
+    async (req, res) => {
+      try {
+        const evt = await resolveEventForPublicOrOg(req.params.slugOrId);
+        if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
+          return res.status(404).json({ error: 'Event not found or no longer active.' });
+        }
+        const adminClient = createServiceSupabaseClient() ?? createPublicSupabaseClient();
+        const { data: rawRow, error: fetchErr } = await adminClient
+          .from('events')
+          .select('*')
+          .eq('id', evt.id)
+          .maybeSingle();
+        if (fetchErr || !rawRow) {
+          return res.status(404).json({ error: 'Event not found.' });
+        }
+        const rowRec = rawRow as Record<string, unknown>;
+        const rawExtra =
+          rowRec.extra_data_config && typeof rowRec.extra_data_config === 'object'
+            ? (rowRec.extra_data_config as Record<string, unknown>)
+            : ({ ...(evt.extraDataConfig ?? { enableGiftTable: false, customFields: [] }) } as Record<string, unknown>);
+        const polls = Array.isArray(rawExtra.polls) ? (rawExtra.polls as EventPoll[]) : [];
+        const pollIdx = polls.findIndex((p) => p.id === req.params.pollId);
+        if (pollIdx === -1) {
+          return res.status(404).json({ error: 'Poll not found.' });
+        }
+        const poll = polls[pollIdx];
+        if (poll.status !== 'active') {
+          return res.status(403).json({ error: 'This poll is currently closed for voting.' });
+        }
+
+        const body = (req.body || {}) as {
+          optionIds?: unknown;
+          voterKey?: unknown;
+          passCode?: unknown;
+        };
+        const rawIds = Array.isArray(body.optionIds)
+          ? body.optionIds.map((id) => String(id).trim()).filter(Boolean)
+          : [];
+        const uniqueIds = Array.from(new Set(rawIds));
+        const validOptionSet = new Set((poll.options || []).map((o) => o.id));
+        const chosenIds = uniqueIds.filter((id) => validOptionSet.has(id));
+        if (chosenIds.length === 0) {
+          return res.status(400).json({ error: 'Select at least one valid option to cast your vote.' });
+        }
+        if (!poll.allowMultiple && chosenIds.length > 1) {
+          return res.status(400).json({ error: 'This poll allows only one choice.' });
+        }
+
+        let dedupeKey = '';
+        if (poll.requireVerifiedPass) {
+          const rawPass = typeof body.passCode === 'string' ? body.passCode.trim() : '';
+          if (!rawPass) {
+            return res.status(403).json({
+              error: 'This accredited poll requires your Event Pass Code, registered email, or phone number.',
+            });
+          }
+          const { data: attRows, error: attErr } = await adminClient
+            .from('attendees')
+            .select('id, ticket_code, email, phone')
+            .eq('event_id', evt.id);
+          if (attErr) {
+            return res.status(400).json({ error: attErr.message });
+          }
+          const cleanLower = rawPass.toLowerCase();
+          const cleanCode = rawPass.toUpperCase().replace(/^#/, '');
+          const digitsOnly = rawPass.replace(/\D/g, '');
+          const normalizedPassPhone = digitsOnly.length >= 9 ? normalizePhoneE164(rawPass) : '';
+          const matchedAtt = (attRows ?? []).find((row) => {
+            const rec = row as Record<string, unknown>;
+            const attCode = String(rec.ticket_code ?? '').toUpperCase().replace(/^#/, '');
+            const attEmail = String(rec.email ?? '').toLowerCase();
+            const attPhoneRaw = String(rec.phone ?? '');
+            const attPhone = normalizePhoneE164(attPhoneRaw);
+            const attDigits = attPhoneRaw.replace(/\D/g, '');
+            return (
+              attCode === cleanCode ||
+              attEmail === cleanLower ||
+              (normalizedPassPhone && attPhone === normalizedPassPhone) ||
+              (digitsOnly.length >= 9 && attDigits.endsWith(digitsOnly.slice(-9)))
+            );
+          });
+          if (!matchedAtt) {
+            return res.status(403).json({
+              error: 'No registered delegate pass matched that code, email, or phone number.',
+            });
+          }
+          dedupeKey = `att:${String((matchedAtt as Record<string, unknown>).id)}`;
+        } else {
+          const rawKey = typeof body.voterKey === 'string' ? body.voterKey.trim().slice(0, 80) : '';
+          dedupeKey = rawKey
+            ? `anon:${rawKey}`
+            : `anon:${crypto.randomBytes(8).toString('hex')}`;
+        }
+
+        const existingVoters = Array.isArray(poll.voterKeys) ? poll.voterKeys : [];
+        if (existingVoters.includes(dedupeKey)) {
+          return res.status(409).json({ error: 'Your vote has already been recorded for this poll.' });
+        }
+
+        const chosenSet = new Set(chosenIds);
+        const updatedPoll: EventPoll = {
+          ...poll,
+          options: (poll.options || []).map((opt) =>
+            chosenSet.has(opt.id) ? { ...opt, votes: (opt.votes || 0) + 1 } : opt
+          ),
+          totalVotes: (poll.totalVotes || 0) + 1,
+          voterKeys: [...existingVoters, dedupeKey],
+        };
+
+        const nextExtra = {
+          ...rawExtra,
+          enablePolls: true,
+          polls: polls.map((p, idx) => (idx === pollIdx ? updatedPoll : p)),
+        };
+
+        const { data: updatedRow, error: updErr } = await adminClient
+          .from('events')
+          .update({ extra_data_config: nextExtra })
+          .eq('id', evt.id)
+          .select('*')
+          .single();
+        if (updErr) {
+          return res.status(400).json({ error: updErr.message });
+        }
+        return res.json({
+          poll: sanitizePollForPublic(updatedPoll),
+          event: sanitizePublicEvent(mapEventRow(updatedRow as Record<string, unknown>)),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to submit poll vote.';
         return res.status(500).json({ error: message });
       }
     }
@@ -4987,6 +5158,232 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to delete attendant link.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  // Studio Corporate Event Polls CRUD
+  app.post(
+    '/api/studio/events/:eventId/polls',
+    requireSupabaseAuth,
+    requireRole('creator', 'organizer'),
+    async (req: AuthedRequest, res) => {
+      try {
+        const client = req.supabase!;
+        const { data: evtRow, error: evtErr } = await client
+          .from('events')
+          .select('*')
+          .eq('id', req.params.eventId)
+          .eq('organizer_id', req.user!.id)
+          .maybeSingle();
+        if (evtErr || !evtRow) {
+          return res.status(404).json({ error: 'Event not found in studio.' });
+        }
+        const body = (req.body || {}) as {
+          question?: string;
+          description?: string;
+          sessionLabel?: string;
+          options?: unknown[];
+          status?: EventPollStatus;
+          allowMultiple?: boolean;
+          showResultsToPublic?: boolean;
+          requireVerifiedPass?: boolean;
+        };
+        const question = (body.question || '').trim();
+        if (!question) {
+          return res.status(400).json({ error: 'Poll question is required.' });
+        }
+        const options = buildValidatedPollOptions(Array.isArray(body.options) ? body.options : []);
+        if (options.length < 2) {
+          return res.status(400).json({ error: 'Provide at least two distinct answer choices.' });
+        }
+        const status = normalizePollStatus(body.status, 'active');
+        const evtMapped = mapEventRow(evtRow as Record<string, unknown>);
+        const newPoll: EventPoll = {
+          id: `poll-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
+          eventId: evtMapped.id,
+          question: question.slice(0, 220),
+          description: body.description?.trim().slice(0, 320) || undefined,
+          sessionLabel: body.sessionLabel?.trim().slice(0, 80) || undefined,
+          options,
+          status,
+          allowMultiple: Boolean(body.allowMultiple),
+          showResultsToPublic: body.showResultsToPublic !== false,
+          requireVerifiedPass: Boolean(body.requireVerifiedPass),
+          totalVotes: 0,
+          voterKeys: [],
+          createdAt: new Date().toISOString(),
+          closedAt: status === 'closed' ? new Date().toISOString() : undefined,
+        };
+        const rawExtra =
+          (evtRow as Record<string, unknown>).extra_data_config &&
+          typeof (evtRow as Record<string, unknown>).extra_data_config === 'object'
+            ? ((evtRow as Record<string, unknown>).extra_data_config as Record<string, unknown>)
+            : ({ ...(evtMapped.extraDataConfig ?? { enableGiftTable: false, customFields: [] }) } as Record<string, unknown>);
+        const currentPolls = Array.isArray(rawExtra.polls) ? (rawExtra.polls as EventPoll[]) : [];
+        const nextExtra = {
+          ...rawExtra,
+          enablePolls: true,
+          polls: [newPoll, ...currentPolls],
+        };
+        const { data: updatedRow, error: updErr } = await client
+          .from('events')
+          .update({ extra_data_config: nextExtra })
+          .eq('id', evtMapped.id)
+          .eq('organizer_id', req.user!.id)
+          .select('*')
+          .single();
+        if (updErr) {
+          return res.status(400).json({ error: updErr.message });
+        }
+        return res.status(201).json({
+          poll: newPoll,
+          event: mapEventRow(updatedRow as Record<string, unknown>),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to create event poll.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  app.patch(
+    '/api/studio/events/:eventId/polls/:pollId',
+    requireSupabaseAuth,
+    requireRole('creator', 'organizer'),
+    async (req: AuthedRequest, res) => {
+      try {
+        const client = req.supabase!;
+        const { data: evtRow, error: evtErr } = await client
+          .from('events')
+          .select('*')
+          .eq('id', req.params.eventId)
+          .eq('organizer_id', req.user!.id)
+          .maybeSingle();
+        if (evtErr || !evtRow) {
+          return res.status(404).json({ error: 'Event not found in studio.' });
+        }
+        const evtMapped = mapEventRow(evtRow as Record<string, unknown>);
+        const rawExtra =
+          (evtRow as Record<string, unknown>).extra_data_config &&
+          typeof (evtRow as Record<string, unknown>).extra_data_config === 'object'
+            ? ((evtRow as Record<string, unknown>).extra_data_config as Record<string, unknown>)
+            : ({ ...(evtMapped.extraDataConfig ?? { enableGiftTable: false, customFields: [] }) } as Record<string, unknown>);
+        const currentPolls = Array.isArray(rawExtra.polls) ? (rawExtra.polls as EventPoll[]) : [];
+        const target = currentPolls.find((p) => p.id === req.params.pollId);
+        if (!target) {
+          return res.status(404).json({ error: 'Poll not found.' });
+        }
+        const patch = (req.body || {}) as {
+          question?: string;
+          description?: string;
+          sessionLabel?: string;
+          status?: EventPollStatus;
+          allowMultiple?: boolean;
+          showResultsToPublic?: boolean;
+          requireVerifiedPass?: boolean;
+        };
+        const nextStatus =
+          patch.status !== undefined ? normalizePollStatus(patch.status, target.status) : target.status;
+        const updatedPoll: EventPoll = {
+          ...target,
+          question: patch.question?.trim() ? patch.question.trim().slice(0, 220) : target.question,
+          description:
+            patch.description !== undefined
+              ? patch.description.trim().slice(0, 320) || undefined
+              : target.description,
+          sessionLabel:
+            patch.sessionLabel !== undefined
+              ? patch.sessionLabel.trim().slice(0, 80) || undefined
+              : target.sessionLabel,
+          status: nextStatus,
+          allowMultiple:
+            patch.allowMultiple !== undefined ? Boolean(patch.allowMultiple) : target.allowMultiple,
+          showResultsToPublic:
+            patch.showResultsToPublic !== undefined
+              ? Boolean(patch.showResultsToPublic)
+              : target.showResultsToPublic,
+          requireVerifiedPass:
+            patch.requireVerifiedPass !== undefined
+              ? Boolean(patch.requireVerifiedPass)
+              : target.requireVerifiedPass,
+          closedAt:
+            nextStatus === 'closed'
+              ? target.closedAt || new Date().toISOString()
+              : nextStatus === 'active'
+                ? undefined
+                : target.closedAt,
+        };
+        const nextExtra = {
+          ...rawExtra,
+          enablePolls: true,
+          polls: currentPolls.map((p) => (p.id === target.id ? updatedPoll : p)),
+        };
+        const { data: updatedRow, error: updErr } = await client
+          .from('events')
+          .update({ extra_data_config: nextExtra })
+          .eq('id', evtMapped.id)
+          .eq('organizer_id', req.user!.id)
+          .select('*')
+          .single();
+        if (updErr) {
+          return res.status(400).json({ error: updErr.message });
+        }
+        return res.json({
+          poll: updatedPoll,
+          event: mapEventRow(updatedRow as Record<string, unknown>),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to update event poll.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  app.delete(
+    '/api/studio/events/:eventId/polls/:pollId',
+    requireSupabaseAuth,
+    requireRole('creator', 'organizer'),
+    async (req: AuthedRequest, res) => {
+      try {
+        const client = req.supabase!;
+        const { data: evtRow, error: evtErr } = await client
+          .from('events')
+          .select('*')
+          .eq('id', req.params.eventId)
+          .eq('organizer_id', req.user!.id)
+          .maybeSingle();
+        if (evtErr || !evtRow) {
+          return res.status(404).json({ error: 'Event not found in studio.' });
+        }
+        const evtMapped = mapEventRow(evtRow as Record<string, unknown>);
+        const rawExtra =
+          (evtRow as Record<string, unknown>).extra_data_config &&
+          typeof (evtRow as Record<string, unknown>).extra_data_config === 'object'
+            ? ((evtRow as Record<string, unknown>).extra_data_config as Record<string, unknown>)
+            : ({ ...(evtMapped.extraDataConfig ?? { enableGiftTable: false, customFields: [] }) } as Record<string, unknown>);
+        const currentPolls = Array.isArray(rawExtra.polls) ? (rawExtra.polls as EventPoll[]) : [];
+        const nextExtra = {
+          ...rawExtra,
+          polls: currentPolls.filter((p) => p.id !== req.params.pollId),
+        };
+        const { data: updatedRow, error: updErr } = await client
+          .from('events')
+          .update({ extra_data_config: nextExtra })
+          .eq('id', evtMapped.id)
+          .eq('organizer_id', req.user!.id)
+          .select('*')
+          .single();
+        if (updErr) {
+          return res.status(400).json({ error: updErr.message });
+        }
+        return res.json({
+          ok: true,
+          event: mapEventRow(updatedRow as Record<string, unknown>),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to delete event poll.';
         return res.status(500).json({ error: message });
       }
     }

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowUpRight,
+  BarChart3,
   Check,
   Copy,
   Gift,
@@ -25,6 +26,7 @@ import {
 import { getCategoryPreset } from '../data/initialData';
 import { STUDIO_FLYER_PRESETS, compressFlyerImageFile } from '../lib/flyerUpload';
 import { appendPoweredByLine } from '../lib/eventMessages';
+import { isPollsEnabledForEvent } from '../lib/polls';
 import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
 import {
   getPlanEntitlements,
@@ -523,6 +525,9 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   const [momoDraft, setMomoDraft] = useState(
     event.extraDataConfig?.momoNumber ?? preset.extraDataConfig.momoNumber ?? ''
   );
+  const [pollsEnabledDraft, setPollsEnabledDraft] = useState<boolean>(() =>
+    isPollsEnabledForEvent(event)
+  );
   const [designDraft, setDesignDraft] = useState<DesignTheme>(
     event.designTheme ?? preset.designTheme
   );
@@ -538,7 +543,8 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     setDesignDraft(event.designTheme ?? preset.designTheme);
     setBrandColorDraft(event.brandColor ?? event.extraDataConfig?.brandColor);
     setCapacityDraft(event.capacity);
-  }, [event.id, event.capacity, event.flyerUrl, event.designTheme, event.brandColor, event.extraDataConfig?.brandColor, preset.flyerUrl, preset.designTheme]);
+    setPollsEnabledDraft(isPollsEnabledForEvent(event));
+  }, [event, preset.flyerUrl, preset.designTheme]);
 
   const pct = Math.round((event.registered / Math.max(1, event.capacity)) * 100);
   const isAtCeiling = pct >= capacityThreshold;
@@ -674,6 +680,7 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
           },
           extraDataConfig: {
             ...(event.extraDataConfig ?? preset.extraDataConfig),
+            enablePolls: pollsEnabledDraft,
             momoNumber: momoDraft.trim() || undefined,
             brandColor: brandColorDraft,
           },
@@ -1061,6 +1068,25 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
               />
             </div>
           )}
+          <label className="flex items-center justify-between gap-3 p-3 rounded-xl bg-white border border-[#E5E5EA] cursor-pointer">
+            <div className="flex items-center gap-2 min-w-0">
+              <BarChart3 className="w-3.5 h-3.5 text-[#0B0B0B] shrink-0" />
+              <div className="min-w-0">
+                <span className="text-xs font-semibold text-[#0B0B0B] block">
+                  Live Polls &amp; Audience Voting (/e/{event.slug}/polls)
+                </span>
+                <span className="text-[11px] text-[#71717A] block">
+                  Enable interactive delegate voting and stage results screen for this event.
+                </span>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={pollsEnabledDraft}
+              onChange={(e) => setPollsEnabledDraft(e.target.checked)}
+              className="w-4 h-4 accent-[#0B0B0B] shrink-0"
+            />
+          </label>
         </div>
 
         {/* Run of Show Preview */}

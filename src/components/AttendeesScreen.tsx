@@ -10,6 +10,7 @@ import {
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
 import { appendPoweredByLine, calculateSmsCredits, POWERED_BY_LINE } from '../lib/eventMessages';
 import { getPlanEntitlements } from '../lib/subscriptionPlans';
+import { CheckInFlyerSidePanel } from './CheckInFlyerSidePanel';
 import { CircularGauge } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
 
@@ -50,6 +51,7 @@ interface AttendeesScreenProps {
   onNavigateSettings: () => void;
   onResolveAlert: (id: string) => void;
   onOpenCsvExport?: (eventId?: string) => void;
+  onCheckInActivityChange?: (active: boolean) => void;
 }
 
 export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
@@ -68,6 +70,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
   onNavigateSettings,
   onResolveAlert,
   onOpenCsvExport,
+  onCheckInActivityChange,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [quickScanInput, setQuickScanInput] = useState('');
@@ -93,6 +96,17 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
 
   // Walk-in registration modal state
   const [walkInOpen, setWalkInOpen] = useState(false);
+
+  useEffect(() => {
+    onCheckInActivityChange?.(walkInOpen);
+  }, [walkInOpen, onCheckInActivityChange]);
+
+  useEffect(() => {
+    return () => {
+      onCheckInActivityChange?.(false);
+    };
+  }, [onCheckInActivityChange]);
+
   const [walkInName, setWalkInName] = useState('');
   const [walkInPhone, setWalkInPhone] = useState('');
   const [walkInEmail, setWalkInEmail] = useState('');
@@ -654,12 +668,25 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
       {/* Add Walk-In Modal (Creator Only) */}
       {walkInOpen && isEventCreator && (
         <div
-          className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="walkin-modal-title"
         >
-          <div className="bg-white w-full max-w-md rounded-3xl border border-[#E5E5EA] p-6 soft-popover-shadow">
+          <div className="bg-white w-full max-w-3xl rounded-3xl border border-[#E5E5EA] soft-popover-shadow grid grid-cols-1 md:grid-cols-12 overflow-hidden max-h-[92dvh] overflow-y-auto relative">
+            {selectedWalkInEvent && (
+              <div className="md:col-span-5 flex flex-col bg-white">
+                <CheckInFlyerSidePanel
+                  event={selectedWalkInEvent}
+                  variant="full"
+                  featherEdge="white"
+                  featherBreakpoint="md"
+                  showFooter={false}
+                  className="rounded-none border-0 shadow-none flex-1"
+                />
+              </div>
+            )}
+            <div className={`${selectedWalkInEvent ? 'md:col-span-7' : 'md:col-span-12'} p-6 bg-white relative z-10`}>
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 id="walkin-modal-title" className="text-lg font-bold text-[#0B0B0B]">
@@ -816,6 +843,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                 </button>
               </div>
             </form>
+            </div>
           </div>
         </div>
       )}

@@ -59,6 +59,109 @@
   box-shadow: 0 12px 32px -8px rgba(11, 11, 11, 0.08);
 }
 
+@keyframes flyerKenBurns {
+  0% {
+    transform: scale(1) translate3d(0, 0, 0);
+  }
+  50% {
+    transform: scale(1.07) translate3d(-1.5%, -1%, 0);
+  }
+  100% {
+    transform: scale(1.1) translate3d(1.2%, -1.5%, 0);
+  }
+}
+
+.animate-flyer-kenburns {
+  animation: flyerKenBurns 18s ease-in-out infinite alternate;
+  transform-origin: center center;
+}
+
+.qr-stage-box {
+  container-type: size;
+}
+
+.qr-stage-square {
+  width: min(100%, 44dvh, 460px);
+  aspect-ratio: 1 / 1;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+@supports (width: 100cqh) {
+  .qr-stage-square {
+    width: min(100cqw, 100cqh, 520px);
+    height: min(100cqw, 100cqh, 520px);
+  }
+}
+
+.flyer-feather-mask-white,
+.flyer-feather-mask-white-md {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 62%,
+    rgba(0, 0, 0, 0.86) 74%,
+    rgba(0, 0, 0, 0.48) 85%,
+    rgba(0, 0, 0, 0.14) 94%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 62%,
+    rgba(0, 0, 0, 0.86) 74%,
+    rgba(0, 0, 0, 0.48) 85%,
+    rgba(0, 0, 0, 0.14) 94%,
+    transparent 100%
+  );
+}
+
+@media (min-width: 768px) {
+  .flyer-feather-mask-white-md {
+    -webkit-mask-image: linear-gradient(
+      to right,
+      #000 0%,
+      #000 60%,
+      rgba(0, 0, 0, 0.86) 73%,
+      rgba(0, 0, 0, 0.48) 85%,
+      rgba(0, 0, 0, 0.14) 94%,
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to right,
+      #000 0%,
+      #000 60%,
+      rgba(0, 0, 0, 0.86) 73%,
+      rgba(0, 0, 0, 0.48) 85%,
+      rgba(0, 0, 0, 0.14) 94%,
+      transparent 100%
+    );
+  }
+}
+
+@media (min-width: 1024px) {
+  .flyer-feather-mask-white {
+    -webkit-mask-image: linear-gradient(
+      to right,
+      #000 0%,
+      #000 60%,
+      rgba(0, 0, 0, 0.86) 73%,
+      rgba(0, 0, 0, 0.48) 85%,
+      rgba(0, 0, 0, 0.14) 94%,
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to right,
+      #000 0%,
+      #000 60%,
+      rgba(0, 0, 0, 0.86) 73%,
+      rgba(0, 0, 0, 0.48) 85%,
+      rgba(0, 0, 0, 0.14) 94%,
+      transparent 100%
+    );
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

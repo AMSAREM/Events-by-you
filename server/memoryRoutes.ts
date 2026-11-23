@@ -14,6 +14,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  EventPollStatus,
   GiftTableEntry,
   OrganizerProfile,
   ScheduleBlock,
@@ -78,7 +79,9 @@ function requireMemoryAuth(req: AuthedRequest, res: Response, next: NextFunction
   if (!token) {
     return res.status(401).json({ error: 'Authentication required. Please sign in.' });
   }
-  const user = memoryStore.getUserByAccessToken(token);
+  const exemptIdleTimeout =
+    req.header('x-checkin-active') === '1' || /\/checkin$/i.test(req.path);
+  const user = memoryStore.getUserByAccessToken(token, { exemptIdleTimeout });
   if (!user) {
     return res.status(401).json({ error: 'Session expired. Please sign in again.' });
   }
@@ -840,6 +843,35 @@ export function createMemoryRouter() {
     }
   });
 
+  // Public Corporate Polls & Audience Voting
+  router.get('/public/events/:slugOrId/polls', (req, res) => {
+    try {
+      const result = memoryStore.getPublicEventPolls(req.params.slugOrId);
+      return res.json(result);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 404;
+      return res.status(status).json({
+        error: err instanceof Error ? err.message : 'Failed to fetch event polls.',
+      });
+    }
+  });
+
+  router.post('/public/events/:slugOrId/polls/:pollId/vote', (req, res) => {
+    try {
+      const result = memoryStore.votePublicEventPoll(
+        req.params.slugOrId,
+        req.params.pollId,
+        (req.body || {}) as { optionIds?: string[]; voterKey?: string; passCode?: string }
+      );
+      return res.json(result);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({
+        error: err instanceof Error ? err.message : 'Failed to record poll vote.',
+      });
+    }
+  });
+
   // Public Disposable Camera Routes (for guests clicking SMS/email camera link)
   router.get('/public/camera/:slugOrId', (req, res) => {
     const passQuery = typeof req.query.pass === 'string' ? req.query.pass.trim() : undefined;
@@ -1581,6 +1613,72 @@ export function createMemoryRouter() {
       const status = (err as Error & { status?: number }).status || 400;
       return res.status(status).json({
         error: err instanceof Error ? err.message : 'Failed to delete attendant link.',
+      });
+    }
+  });
+
+  router.post('/studio/events/:eventId/polls', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    try {
+      const result = memoryStore.createStudioPoll(
+        req.user!.id,
+        req.params.eventId,
+        (req.body || {}) as {
+          question?: string;
+          description?: string;
+          sessionLabel?: string;
+          options?: unknown[];
+          status?: EventPollStatus;
+          allowMultiple?: boolean;
+          showResultsToPublic?: boolean;
+          requireVerifiedPass?: boolean;
+        }
+      );
+      return res.status(201).json(result);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({
+        error: err instanceof Error ? err.message : 'Failed to create event poll.',
+      });
+    }
+  });
+
+  router.patch('/studio/events/:eventId/polls/:pollId', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    try {
+      const result = memoryStore.updateStudioPoll(
+        req.user!.id,
+        req.params.eventId,
+        req.params.pollId,
+        (req.body || {}) as {
+          question?: string;
+          description?: string;
+          sessionLabel?: string;
+          status?: EventPollStatus;
+          allowMultiple?: boolean;
+          showResultsToPublic?: boolean;
+          requireVerifiedPass?: boolean;
+        }
+      );
+      return res.json(result);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({
+        error: err instanceof Error ? err.message : 'Failed to update event poll.',
+      });
+    }
+  });
+
+  router.delete('/studio/events/:eventId/polls/:pollId', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    try {
+      const event = memoryStore.deleteStudioPoll(
+        req.user!.id,
+        req.params.eventId,
+        req.params.pollId
+      );
+      return res.json({ ok: true, event });
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({
+        error: err instanceof Error ? err.message : 'Failed to delete event poll.',
       });
     }
   });

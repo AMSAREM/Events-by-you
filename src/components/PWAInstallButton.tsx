@@ -122,11 +122,12 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
           type="button"
           onClick={() => void handleInstallClick()}
           disabled={isInstalling}
+          aria-label={label}
           title={isInstallable ? 'Install Events By You instantly' : 'Install Events By You'}
-          className={`inline-flex items-center justify-center gap-1.5 h-9 px-3 sm:px-3.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-xs font-semibold transition-colors whitespace-nowrap shrink-0 disabled:opacity-60 ${className}`}
+          className={`inline-flex items-center justify-center gap-1.5 h-9 w-9 xl:w-auto xl:px-3.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-xs font-semibold transition-colors whitespace-nowrap shrink-0 disabled:opacity-60 ${className}`}
         >
-          <Download className="w-3.5 h-3.5" />
-          <span className="hidden xs:inline sm:inline">{isInstalling ? 'Installing...' : label}</span>
+          <Download className="w-3.5 h-3.5 shrink-0" />
+          <span className="hidden xl:inline">{isInstalling ? 'Installing...' : label}</span>
         </button>
       );
     }

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { Clock, Compass, Database, Loader2, LogOut, ShieldCheck, X } from 'lucide-react';
 import { INITIAL_PROFILE } from './data/initialData';
 import type {
@@ -14,6 +14,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  EventPollStatus,
   GiftTableEntry,
   NavScreen,
   OrganizerProfile,
@@ -30,8 +31,10 @@ import {
   getStoredSession,
   saveStoredCreatorToken,
   saveStoredSession,
+  setCheckInSessionExempt,
   type StoredAuthSession,
 } from './lib/api';
+import { sanitizePublicExtraDataConfig } from './lib/polls';
 import { NavigationRail } from './components/NavigationRail';
 import { LandingScreen } from './components/LandingScreen';
 import { LegalScreen } from './components/LegalScreen';
@@ -39,55 +42,74 @@ import { SignInScreen } from './components/SignInScreen';
 import { SignUpScreen } from './components/SignUpScreen';
 import { ResetPasswordScreen } from './components/ResetPasswordScreen';
 import { VerifyOtpScreen } from './components/VerifyOtpScreen';
-const PublicEventScreen = lazy(() =>
+function lazyWithRetry<T extends ComponentType<any>>(
+  importer: () => Promise<{ default: T }>
+) {
+  return lazy(async () => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await importer();
+      } catch (err) {
+        lastError = err;
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+        }
+      }
+    }
+    throw lastError;
+  });
+}
+
+const PublicEventScreen = lazyWithRetry(() =>
   import('./components/PublicEventScreen').then((m) => ({ default: m.PublicEventScreen }))
 );
-const OverviewScreen = lazy(() =>
+const OverviewScreen = lazyWithRetry(() =>
   import('./components/OverviewScreen').then((m) => ({ default: m.OverviewScreen }))
 );
-const EventsScreen = lazy(() =>
+const EventsScreen = lazyWithRetry(() =>
   import('./components/EventsScreen').then((m) => ({ default: m.EventsScreen }))
 );
-const EventWorkspaceScreen = lazy(() =>
+const EventWorkspaceScreen = lazyWithRetry(() =>
   import('./components/EventWorkspaceScreen').then((m) => ({ default: m.EventWorkspaceScreen }))
 );
-const ScheduleScreen = lazy(() =>
+const ScheduleScreen = lazyWithRetry(() =>
   import('./components/ScheduleScreen').then((m) => ({ default: m.ScheduleScreen }))
 );
-const AttendeesScreen = lazy(() =>
+const AttendeesScreen = lazyWithRetry(() =>
   import('./components/AttendeesScreen').then((m) => ({ default: m.AttendeesScreen }))
 );
-const AnalyticsScreen = lazy(() =>
+const AnalyticsScreen = lazyWithRetry(() =>
   import('./components/AnalyticsScreen').then((m) => ({ default: m.AnalyticsScreen }))
 );
-const BillingScreen = lazy(() =>
+const BillingScreen = lazyWithRetry(() =>
   import('./components/BillingScreen').then((m) => ({ default: m.BillingScreen }))
 );
-const CsvExportScreen = lazy(() =>
+const CsvExportScreen = lazyWithRetry(() =>
   import('./components/CsvExportScreen').then((m) => ({ default: m.CsvExportScreen }))
 );
-const CreateEventWizardScreen = lazy(() =>
+const CreateEventWizardScreen = lazyWithRetry(() =>
   import('./components/CreateEventWizardScreen').then((m) => ({ default: m.CreateEventWizardScreen }))
 );
-const SettingsScreen = lazy(() =>
+const SettingsScreen = lazyWithRetry(() =>
   import('./components/SettingsScreen').then((m) => ({ default: m.SettingsScreen }))
 );
-const QrGateScannerScreen = lazy(() =>
+const QrGateScannerScreen = lazyWithRetry(() =>
   import('./components/QrGateScannerScreen').then((m) => ({ default: m.QrGateScannerScreen }))
 );
-const DisposableCameraScreen = lazy(() =>
+const DisposableCameraScreen = lazyWithRetry(() =>
   import('./components/DisposableCameraScreen').then((m) => ({ default: m.DisposableCameraScreen }))
 );
-const GiftTableScreen = lazy(() =>
+const GiftTableScreen = lazyWithRetry(() =>
   import('./components/GiftTableScreen').then((m) => ({ default: m.GiftTableScreen }))
 );
-const AppsCreatorConsoleScreen = lazy(() =>
+const AppsCreatorConsoleScreen = lazyWithRetry(() =>
   import('./components/AppsCreatorConsoleScreen').then((m) => ({ default: m.AppsCreatorConsoleScreen }))
 );
-const EventDetailModal = lazy(() =>
+const EventDetailModal = lazyWithRetry(() =>
   import('./components/EventModals').then((m) => ({ default: m.EventDetailModal }))
 );
-const OnboardingWalkthroughModal = lazy(() =>
+const OnboardingWalkthroughModal = lazyWithRetry(() =>
   import('./components/OnboardingWalkthroughModal').then((m) => ({ default: m.OnboardingWalkthroughModal }))
 );
 
@@ -106,7 +128,7 @@ function getWalkthroughStorageKey(profile?: Pick<OrganizerProfile, 'email' | 'ph
 
 function parseInvitationFromValues(pathname: string, search: string): {
   slugOrId?: string;
-  focus?: 'top' | 'register' | 'checkin' | 'camera' | 'gifts';
+  focus?: 'top' | 'register' | 'checkin' | 'camera' | 'gifts' | 'polls';
   guest?: string;
   pass?: string;
   desk?: string;
@@ -134,22 +156,29 @@ function parseInvitationFromValues(pathname: string, search: string): {
     return { slugOrId: decodeURIComponent(giftsMatch[1]), focus: 'gifts', guest, pass, desk };
   }
 
+  const pollsMatch = pathname.match(/^\/e\/([^/]+)\/polls?\/?$/i);
+  if (pollsMatch && pollsMatch[1]) {
+    return { slugOrId: decodeURIComponent(pollsMatch[1]), focus: 'polls', guest, pass };
+  }
+
   const checkinMatch = pathname.match(/^\/e\/([^/]+)\/checkin\/?$/i);
   if (checkinMatch && checkinMatch[1]) {
     return { slugOrId: decodeURIComponent(checkinMatch[1]), focus: 'checkin' };
   }
   const match = pathname.match(/^\/e\/([^/]+)\/?$/i);
   const tab = (params.get('tab') || '').toLowerCase();
-  const focus: 'top' | 'register' | 'checkin' | 'camera' | 'gifts' =
+  const focus: 'top' | 'register' | 'checkin' | 'camera' | 'gifts' | 'polls' =
     tab === 'camera'
       ? 'camera'
       : tab === 'gifts' || tab === 'gift' || Boolean(desk)
         ? 'gifts'
-        : tab === 'checkin' || tab === 'qr'
-          ? 'checkin'
-          : tab === 'register'
-            ? 'register'
-            : 'top';
+        : tab === 'polls' || tab === 'poll'
+          ? 'polls'
+          : tab === 'checkin' || tab === 'qr'
+            ? 'checkin'
+            : tab === 'register'
+              ? 'register'
+              : 'top';
   if (match && match[1]) {
     return { slugOrId: decodeURIComponent(match[1]), focus, guest, pass, desk };
   }
@@ -238,6 +267,9 @@ export default function App() {
   const [apiBannerError, setApiBannerError] = useState<string | null>(null);
   const [sessionTimeoutNotice, setSessionTimeoutNotice] = useState<string | null>(null);
   const [sessionWarningSecondsLeft, setSessionWarningSecondsLeft] = useState<number | null>(null);
+  const [publicCheckinModalOpen, setPublicCheckinModalOpen] = useState(false);
+  const [workspaceCheckInActive, setWorkspaceCheckInActive] = useState(false);
+  const [attendeesWalkInActive, setAttendeesWalkInActive] = useState(false);
   const lastActivityRef = useRef<number>(0);
 
   const [prefillEmail, setPrefillEmail] = useState<string>('');
@@ -299,11 +331,12 @@ export default function App() {
     initialInvite.focus === 'camera' ? undefined : initialInvite.slugOrId
   );
   const [publicPreviewFocus, setPublicPreviewFocus] = useState<
-    'top' | 'register' | 'checkin' | 'gifts'
+    'top' | 'register' | 'checkin' | 'gifts' | 'polls'
   >(() =>
     initialInvite.focus === 'register' ||
     initialInvite.focus === 'checkin' ||
-    initialInvite.focus === 'gifts'
+    initialInvite.focus === 'gifts' ||
+    initialInvite.focus === 'polls'
       ? initialInvite.focus
       : 'top'
   );
@@ -401,6 +434,9 @@ export default function App() {
         lower.includes('only an organiser') ||
         lower.includes('organiser');
       if (isAuthFailure) {
+        if (isCheckInScreenActiveRef.current) {
+          return false;
+        }
         saveStoredSession(null);
         saveStoredCreatorToken(null);
         setCreatorUnlocked(false);
@@ -532,7 +568,19 @@ export default function App() {
 
   const isCheckInScreenActive =
     (route === 'studio' && activeScreen === 'checkin' && !workspaceEventId && !studioSubScreen) ||
-    (route === 'demo-event' && publicPreviewFocus === 'checkin');
+    (route === 'studio' && Boolean(workspaceEventId) && workspaceCheckInActive) ||
+    (route === 'studio' &&
+      activeScreen === 'attendees' &&
+      !workspaceEventId &&
+      !studioSubScreen &&
+      attendeesWalkInActive) ||
+    (route === 'demo-event' && (publicPreviewFocus === 'checkin' || publicCheckinModalOpen));
+
+  const isCheckInScreenActiveRef = useRef(isCheckInScreenActive);
+  useEffect(() => {
+    isCheckInScreenActiveRef.current = isCheckInScreenActive;
+    setCheckInSessionExempt(isCheckInScreenActive);
+  }, [isCheckInScreenActive]);
 
   useEffect(() => {
     if (route !== 'demo-event' || !publicPreviewEventId) return;
@@ -639,7 +687,7 @@ export default function App() {
   const openEventInvitation = useCallback(
     (
       evtOrSlug?: EventItem | string,
-      focus: 'top' | 'register' | 'checkin' | 'gifts' = 'top',
+      focus: 'top' | 'register' | 'checkin' | 'gifts' | 'polls' = 'top',
       deskToken?: string
     ) => {
       const slugOrId =
@@ -659,12 +707,17 @@ export default function App() {
               ? deskToken
                 ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(deskToken)}`
                 : `/e/${cleanSlug}/gifts`
-              : focus === 'register'
-                ? `/e/${cleanSlug}?tab=register`
-                : `/e/${cleanSlug}`;
+              : focus === 'polls'
+                ? `/e/${cleanSlug}/polls`
+                : focus === 'register'
+                  ? `/e/${cleanSlug}?tab=register`
+                  : `/e/${cleanSlug}`;
         syncBrowserPath(nextPath);
       }
-      if ((focus === 'top' || focus === 'checkin' || focus === 'gifts') && typeof window !== 'undefined') {
+      if (
+        (focus === 'top' || focus === 'checkin' || focus === 'gifts' || focus === 'polls') &&
+        typeof window !== 'undefined'
+      ) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     },
@@ -689,7 +742,10 @@ export default function App() {
       if (invite.slugOrId) {
         setPublicPreviewEventId(invite.slugOrId);
         setPublicPreviewFocus(
-          invite.focus === 'register' || invite.focus === 'checkin' || invite.focus === 'gifts'
+          invite.focus === 'register' ||
+            invite.focus === 'checkin' ||
+            invite.focus === 'gifts' ||
+            invite.focus === 'polls'
             ? invite.focus
             : 'top'
         );
@@ -883,14 +939,25 @@ export default function App() {
           // Ignore storage errors
         }
       };
+      const pingCheckInSession = () => {
+        stampActivity();
+        void api.auth.getSession().catch(() => {});
+      };
+      const handleVisibilityOrFocus = () => {
+        if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+          pingCheckInSession();
+        }
+      };
       stampActivity();
       const keepAliveTimer = window.setInterval(stampActivity, 60 * 1000);
-      const tokenRefreshTimer = window.setInterval(() => {
-        void api.auth.getSession().catch(() => {});
-      }, 15 * 60 * 1000);
+      const tokenRefreshTimer = window.setInterval(pingCheckInSession, 10 * 60 * 1000);
+      window.addEventListener('focus', handleVisibilityOrFocus);
+      document.addEventListener('visibilitychange', handleVisibilityOrFocus);
       return () => {
         window.clearInterval(keepAliveTimer);
         window.clearInterval(tokenRefreshTimer);
+        window.removeEventListener('focus', handleVisibilityOrFocus);
+        document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       };
     }
 
@@ -1340,6 +1407,56 @@ export default function App() {
   const handleDeleteGiftAttendantLink = async (eventId: string, linkId: string) => {
     const res = await api.studio.deleteGiftAttendantLink(eventId, linkId);
     setEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
+  };
+
+  const syncUpdatedEventWithPublicSanitize = useCallback((studioEvent: EventItem) => {
+    setEvents((prev) => prev.map((e) => (e.id === studioEvent.id ? studioEvent : e)));
+    const publicSafeEvent: EventItem = {
+      ...studioEvent,
+      extraDataConfig: sanitizePublicExtraDataConfig(studioEvent.extraDataConfig),
+    };
+    setPublicEvents((prev) => prev.map((e) => (e.id === studioEvent.id ? publicSafeEvent : e)));
+  }, []);
+
+  const handleStudioCreatePoll = async (
+    eventId: string,
+    payload: {
+      question: string;
+      description?: string;
+      sessionLabel?: string;
+      options: string[];
+      status?: EventPollStatus;
+      allowMultiple?: boolean;
+      showResultsToPublic?: boolean;
+      requireVerifiedPass?: boolean;
+    }
+  ) => {
+    const res = await api.studio.createPoll(eventId, payload);
+    syncUpdatedEventWithPublicSanitize(res.event);
+    return res.poll;
+  };
+
+  const handleStudioUpdatePoll = async (
+    eventId: string,
+    pollId: string,
+    patch: {
+      question?: string;
+      description?: string;
+      sessionLabel?: string;
+      status?: EventPollStatus;
+      allowMultiple?: boolean;
+      showResultsToPublic?: boolean;
+      requireVerifiedPass?: boolean;
+    }
+  ) => {
+    const res = await api.studio.updatePoll(eventId, pollId, patch);
+    syncUpdatedEventWithPublicSanitize(res.event);
+    return res.poll;
+  };
+
+  const handleStudioDeletePoll = async (eventId: string, pollId: string) => {
+    const res = await api.studio.deletePoll(eventId, pollId);
+    syncUpdatedEventWithPublicSanitize(res.event);
   };
 
   const handleStudioRegisterAttendee = async (eventId: string, attendee: Attendee) => {
@@ -2087,7 +2204,9 @@ export default function App() {
                   ? publicPreviewDeskToken
                     ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(publicPreviewDeskToken)}`
                     : `/e/${cleanSlug}/gifts`
-                  : `/e/${cleanSlug}`
+                  : publicPreviewFocus === 'polls'
+                    ? `/e/${cleanSlug}/polls`
+                    : `/e/${cleanSlug}`
             );
           }}
           onFocusModeChange={(mode, evt) => {
@@ -2103,7 +2222,9 @@ export default function App() {
                   ? publicPreviewDeskToken && mode === 'gifts'
                     ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(publicPreviewDeskToken)}`
                     : `/e/${cleanSlug}/gifts`
-                  : `/e/${cleanSlug}`
+                  : mode === 'polls'
+                    ? `/e/${cleanSlug}/polls`
+                    : `/e/${cleanSlug}`
             );
           }}
           onGiftEventSync={(updatedEvt) => {
@@ -2124,6 +2245,41 @@ export default function App() {
                       }
                     : e
                 )
+              );
+            }
+          }}
+          onPollEventSync={(updatedEvt) => {
+            setPublicEvents((prev) => prev.map((e) => (e.id === updatedEvt.id ? updatedEvt : e)));
+            if (isSignedIn) {
+              setEvents((prev) =>
+                prev.map((e) => {
+                  if (e.id !== updatedEvt.id) return e;
+                  const incomingPolls = updatedEvt.extraDataConfig?.polls ?? [];
+                  const existingPolls = e.extraDataConfig?.polls ?? [];
+                  const byId = new Map(incomingPolls.map((p) => [p.id, p]));
+                  const mergedPolls =
+                    existingPolls.length > 0
+                      ? existingPolls.map((ep) => {
+                          const inc = byId.get(ep.id);
+                          if (!inc) return ep;
+                          return {
+                            ...inc,
+                            voterKeys: ep.voterKeys,
+                          };
+                        })
+                      : incomingPolls;
+                  return {
+                    ...updatedEvt,
+                    extraDataConfig: e.extraDataConfig
+                      ? {
+                          ...e.extraDataConfig,
+                          ...(updatedEvt.extraDataConfig ?? {}),
+                          attendantLinks: e.extraDataConfig.attendantLinks,
+                          polls: mergedPolls,
+                        }
+                      : updatedEvt.extraDataConfig,
+                  };
+                })
               );
             }
           }}
@@ -2152,6 +2308,7 @@ export default function App() {
           onOpenDisposableCamera={(eventId, guestName, passCode) =>
             openPublicCamera(eventId, guestName, 'demo-event', passCode)
           }
+          onCheckinModalChange={setPublicCheckinModalOpen}
           onOpenLegal={openLegalRoute}
         />
         </Suspense>
@@ -2314,35 +2471,46 @@ export default function App() {
     );
   }
 
+  const isStudioFullscreenCheckIn =
+    activeScreen === 'checkin' && !workspaceEvent && !studioSubScreen;
+
   return (
     <div className="min-h-dvh w-full max-w-full bg-white text-[#0B0B0B] overflow-x-clip">
-      <div className="w-full max-w-[1600px] mx-auto pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:pl-[max(1.25rem,env(safe-area-inset-left))] sm:pr-[max(1.25rem,env(safe-area-inset-right))] md:px-6 lg:px-8 xl:px-10 pt-[max(0.75rem,env(safe-area-inset-top))] sm:pt-5 lg:pt-6 pb-[calc(6.25rem+env(safe-area-inset-bottom))] md:pb-8 flex flex-col md:flex-row gap-3.5 sm:gap-4 md:gap-5 lg:gap-7 xl:gap-8 md:items-start min-w-0 overflow-x-clip">
-        {/* Left Floating Dark Pill Capsule Navigation */}
-        <NavigationRail
-          activeScreen={activeScreen}
-          userRole={effectiveRole}
-          onCreateEvent={openCreateWizard}
-          onNavigate={(screen) => {
-            if (screen === 'console' && effectiveRole !== 'creator') {
-              setApiBannerError('Access denied: Apps Creator Console requires the creator role.');
-              return;
-            }
-            setWorkspaceEventId(null);
-            setStudioSubScreen(null);
-            if (screen === 'attendees') {
-              setAttendeeEventFilter('all');
-            }
-            setActiveScreen(screen);
-          }}
-          onBackToPublicHome={() => {
-            setRoute('home');
-            syncBrowserPath('/');
-            void loadPublicEvents();
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
-          onSignOut={handleSignOut}
-          unresolvedAlertCount={unresolvedCount}
-        />
+      <div
+        className={
+          isStudioFullscreenCheckIn
+            ? 'w-full max-w-none mx-auto pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:px-5 lg:px-8 pt-[max(0.75rem,env(safe-area-inset-top))] sm:pt-4 pb-6 flex flex-col min-h-dvh min-w-0 overflow-x-clip'
+            : 'w-full max-w-[1600px] mx-auto pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:pl-[max(1.25rem,env(safe-area-inset-left))] sm:pr-[max(1.25rem,env(safe-area-inset-right))] md:px-6 lg:px-8 xl:px-10 pt-[max(0.75rem,env(safe-area-inset-top))] sm:pt-5 lg:pt-6 pb-[calc(6.25rem+env(safe-area-inset-bottom))] md:pb-8 flex flex-col md:flex-row gap-3.5 sm:gap-4 md:gap-5 lg:gap-7 xl:gap-8 md:items-start min-w-0 overflow-x-clip'
+        }
+      >
+        {/* Left Floating Dark Pill Capsule Navigation (hidden in full-screen check-in mode) */}
+        {!isStudioFullscreenCheckIn && (
+          <NavigationRail
+            activeScreen={activeScreen}
+            userRole={effectiveRole}
+            onCreateEvent={openCreateWizard}
+            onNavigate={(screen) => {
+              if (screen === 'console' && effectiveRole !== 'creator') {
+                setApiBannerError('Access denied: Apps Creator Console requires the creator role.');
+                return;
+              }
+              setWorkspaceEventId(null);
+              setStudioSubScreen(null);
+              if (screen === 'attendees') {
+                setAttendeeEventFilter('all');
+              }
+              setActiveScreen(screen);
+            }}
+            onBackToPublicHome={() => {
+              setRoute('home');
+              syncBrowserPath('/');
+              void loadPublicEvents();
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            onSignOut={handleSignOut}
+            unresolvedAlertCount={unresolvedCount}
+          />
+        )}
 
         {/* Main Viewport */}
         <main className="flex-1 w-full min-w-0 space-y-3.5 sm:space-y-4 overflow-x-clip">
@@ -2445,7 +2613,7 @@ export default function App() {
               onOpenEditModal={(evt) => setSelectedEventId(evt.id)}
               onUpdateEvent={handleUpdateEvent}
               onOpenPlans={openBillingScreen}
-              onPreviewPublicEvent={(focus?: 'top' | 'checkin' | 'gifts') => {
+              onPreviewPublicEvent={(focus?: 'top' | 'checkin' | 'gifts' | 'polls') => {
                 openEventInvitation(workspaceEvent, focus ?? 'top');
               }}
               onToggleCheckIn={handleToggleCheckIn}
@@ -2458,6 +2626,9 @@ export default function App() {
               onPreviewDeskLink={(slugOrId, token) =>
                 openEventInvitation(slugOrId, 'gifts', token)
               }
+              onCreatePoll={handleStudioCreatePoll}
+              onUpdatePoll={handleStudioUpdatePoll}
+              onDeletePoll={handleStudioDeletePoll}
               onToggleScheduleBlock={handleToggleScheduleBlock}
               onAddScheduleBlock={handleAddScheduleBlock}
               onDeleteScheduleBlock={handleDeleteScheduleBlock}
@@ -2471,6 +2642,7 @@ export default function App() {
               onOpenCsvExport={(evtId) => openCsvExportScreen(evtId)}
               onOpenQrScanner={(evtId) => openQrScanner(evtId)}
               onOpenDisposableCamera={(evtId) => openStudioCamera(evtId)}
+              onCheckInActivityChange={setWorkspaceCheckInActive}
             />
           ) : (
             <>
@@ -2514,6 +2686,7 @@ export default function App() {
                   onRegisterAttendee={handleStudioRegisterAttendee}
                   onToggleQrPassPublished={handleToggleQrPassPublished}
                   onManageEvent={handleOpenWorkspace}
+                  onBackToStudio={() => setActiveScreen('overview')}
                   onNavigateSettings={() => setActiveScreen('settings')}
                   onResolveAlert={handleResolveAlert}
                 />
@@ -2609,6 +2782,7 @@ export default function App() {
                   onNavigateSettings={() => setActiveScreen('settings')}
                   onResolveAlert={handleResolveAlert}
                   onOpenCsvExport={(evtId) => openCsvExportScreen(evtId)}
+                  onCheckInActivityChange={setAttendeesWalkInActive}
                 />
               )}
 

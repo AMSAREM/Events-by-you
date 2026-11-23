@@ -24,6 +24,12 @@ import {
   isActiveEventStatus,
   resolveAuthoritativeSubscriptionQuote,
 } from './subscriptionPlans';
+import {
+  buildValidatedPollOptions,
+  normalizePollStatus,
+  sanitizePollForPublic,
+  sanitizePublicExtraDataConfig,
+} from './polls';
 import type {
   AppRole,
   Attendee,
@@ -45,6 +51,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  EventPoll,
   GiftTableAttendantLink,
   GiftTableEntry,
   OrganizerProfile,
@@ -291,7 +298,11 @@ function getSessionResponse(session: LocalSession) {
   };
 }
 
-function getAuthenticatedUser(db: LocalDatabase, accessToken?: string | null): LocalUser {
+function getAuthenticatedUser(
+  db: LocalDatabase,
+  accessToken?: string | null,
+  exemptIdleTimeout = false
+): LocalUser {
   if (!accessToken) {
     throw new LocalApiError('Authentication required. Please sign in.', 401);
   }
@@ -300,7 +311,8 @@ function getAuthenticatedUser(db: LocalDatabase, accessToken?: string | null): L
     throw new LocalApiError('Session expired. Please sign in again.', 401);
   }
   const now = Date.now();
-  if (sess.expiresAt * 1000 < now || now - sess.lastActivityAt > SESSION_IDLE_TIMEOUT_MS) {
+  const idleTimedOut = !exemptIdleTimeout && now - sess.lastActivityAt > SESSION_IDLE_TIMEOUT_MS;
+  if (sess.expiresAt * 1000 < now || idleTimedOut) {
     delete db.sessions[accessToken];
     saveDb(db);
     throw new LocalApiError('Session timed out after 30 minutes of inactivity. Sign in again.', 401);
@@ -453,6 +465,11 @@ export async function localFallbackRequest<T>(
   const parsedUrl = new URL(url, 'http://localhost');
   const path = parsedUrl.pathname.replace(/^\/api/, '');
   const method = (options.method || 'GET').toUpperCase();
+  const headerBag = (options.headers || {}) as Record<string, string>;
+  const exemptCheckInTimeout =
+    headerBag['X-CheckIn-Active'] === '1' ||
+    headerBag['x-checkin-active'] === '1' ||
+    /\/checkin$/i.test(path);
 
   let body: Record<string, unknown> = {};
   if (typeof options.body === 'string' && options.body.trim()) {
@@ -771,7 +788,7 @@ export async function localFallbackRequest<T>(
 
   // Auth: Get session
   if (method === 'GET' && path === '/auth/session') {
-    const user = getAuthenticatedUser(db, accessToken);
+    const user = getAuthenticatedUser(db, accessToken, exemptCheckInTimeout);
     return { profile: user.profile } as T;
   }
 
@@ -791,9 +808,13 @@ export async function localFallbackRequest<T>(
     const owner = raw.organizerId ? db.users[raw.organizerId] : undefined;
     const whiteLabel = getPlanEntitlements(owner?.profile).whiteLabelPublicEvent;
     const { organizerId: _org, ...rest } = raw;
-    if (!rest.extraDataConfig?.attendantLinks) return { ...rest, whiteLabel };
-    const { attendantLinks: _att, ...pubExtra } = rest.extraDataConfig;
-    return { ...rest, whiteLabel, extraDataConfig: pubExtra };
+    if (!rest.extraDataConfig) return { ...rest, checkedIn: 0, whiteLabel };
+    return {
+      ...rest,
+      checkedIn: 0,
+      whiteLabel,
+      extraDataConfig: sanitizePublicExtraDataConfig(rest.extraDataConfig),
+    };
   };
 
   if (method === 'GET' && path === '/public/events') {
@@ -1082,6 +1103,119 @@ export async function localFallbackRequest<T>(
     }
   }
 
+  // Public Corporate Event Polls routes
+  const publicPollsMatch = path.match(/^\/public\/events\/([^/]+)\/polls$/);
+  if (method === 'GET' && publicPollsMatch) {
+    const target = decodeURIComponent(publicPollsMatch[1]).trim().toLowerCase();
+    const evt = db.events.find(
+      (e) =>
+        (e.status === 'live' || e.status === 'upcoming') &&
+        (e.id.toLowerCase() === target || e.slug.toLowerCase() === target)
+    );
+    if (!evt) throw new LocalApiError('Event polls not found.', 404);
+    const cleanEvent = sanitizePublicEventItem(evt);
+    return {
+      event: cleanEvent,
+      polls: cleanEvent.extraDataConfig?.polls ?? [],
+    } as T;
+  }
+
+  const publicPollVoteMatch = path.match(/^\/public\/events\/([^/]+)\/polls\/([^/]+)\/vote$/);
+  if (method === 'POST' && publicPollVoteMatch) {
+    const target = decodeURIComponent(publicPollVoteMatch[1]).trim().toLowerCase();
+    const pollId = decodeURIComponent(publicPollVoteMatch[2]).trim();
+    const evt = db.events.find(
+      (e) =>
+        (e.status === 'live' || e.status === 'upcoming') &&
+        (e.id.toLowerCase() === target || e.slug.toLowerCase() === target)
+    );
+    if (!evt) throw new LocalApiError('Event not found.', 404);
+    const polls = Array.isArray(evt.extraDataConfig?.polls) ? evt.extraDataConfig!.polls! : [];
+    const pollIdx = polls.findIndex((p) => p.id === pollId);
+    if (pollIdx === -1) throw new LocalApiError('Poll not found.', 404);
+    const poll = polls[pollIdx];
+    if (poll.status !== 'active') {
+      throw new LocalApiError('This poll is currently closed for voting.', 403);
+    }
+
+    const rawIds = Array.isArray(body.optionIds)
+      ? body.optionIds.map((id) => String(id).trim()).filter(Boolean)
+      : [];
+    const uniqueIds = Array.from(new Set(rawIds));
+    const validOptionSet = new Set(poll.options.map((o) => o.id));
+    const chosenIds = uniqueIds.filter((id) => validOptionSet.has(id));
+    if (chosenIds.length === 0) {
+      throw new LocalApiError('Select at least one valid option to cast your vote.', 400);
+    }
+    if (!poll.allowMultiple && chosenIds.length > 1) {
+      throw new LocalApiError('This poll allows only one choice.', 400);
+    }
+
+    let dedupeKey = '';
+    if (poll.requireVerifiedPass) {
+      const rawPass = String(body.passCode || '').trim();
+      if (!rawPass) {
+        throw new LocalApiError(
+          'This accredited poll requires your Event Pass Code, registered email, or phone number.',
+          403
+        );
+      }
+      const cleanLower = rawPass.toLowerCase();
+      const cleanCode = rawPass.toUpperCase().replace(/^#/, '');
+      const normalizedPassPhone = normalizePhoneE164(rawPass);
+      const digitsOnly = rawPass.replace(/\D/g, '');
+      const matchedAtt = db.attendees.find((att) => {
+        if (att.eventId !== evt.id) return false;
+        const attCode = att.ticketCode.toUpperCase().replace(/^#/, '');
+        const attPhone = normalizePhoneE164(att.phone);
+        const attDigits = att.phone.replace(/\D/g, '');
+        return (
+          attCode === cleanCode ||
+          att.email.toLowerCase() === cleanLower ||
+          (normalizedPassPhone && attPhone === normalizedPassPhone) ||
+          (digitsOnly.length >= 9 && attDigits.endsWith(digitsOnly.slice(-9)))
+        );
+      });
+      if (!matchedAtt) {
+        throw new LocalApiError(
+          'No registered delegate pass matched that code, email, or phone number.',
+          403
+        );
+      }
+      dedupeKey = `att:${matchedAtt.id}`;
+    } else {
+      const rawKey = String(body.voterKey || '').trim().slice(0, 80);
+      dedupeKey = rawKey ? `anon:${rawKey}` : `anon:${randomHex(8)}`;
+    }
+
+    const existingVoters = Array.isArray(poll.voterKeys) ? poll.voterKeys : [];
+    if (existingVoters.includes(dedupeKey)) {
+      throw new LocalApiError('Your vote has already been recorded for this poll.', 409);
+    }
+
+    const chosenSet = new Set(chosenIds);
+    const updatedPoll: EventPoll = {
+      ...poll,
+      options: poll.options.map((opt) =>
+        chosenSet.has(opt.id) ? { ...opt, votes: (opt.votes || 0) + 1 } : opt
+      ),
+      totalVotes: (poll.totalVotes || 0) + 1,
+      voterKeys: [...existingVoters, dedupeKey],
+    };
+
+    const existingExtra = evt.extraDataConfig ?? { enableGiftTable: false, customFields: [] };
+    evt.extraDataConfig = {
+      ...existingExtra,
+      enablePolls: true,
+      polls: polls.map((p, idx) => (idx === pollIdx ? updatedPoll : p)),
+    };
+    saveDb(db);
+    return {
+      poll: sanitizePollForPublic(updatedPoll),
+      event: sanitizePublicEventItem(evt),
+    } as T;
+  }
+
   // Public Disposable Camera routes
   const publicCamMatch = path.match(/^\/public\/camera\/([^/]+)$/);
   if (method === 'GET' && publicCamMatch) {
@@ -1194,7 +1328,7 @@ export async function localFallbackRequest<T>(
   }
 
   // Authenticated Studio & Builder routes
-  const user = getAuthenticatedUser(db, accessToken);
+  const user = getAuthenticatedUser(db, accessToken, exemptCheckInTimeout);
 
   if (method === 'GET' && path === '/studio/bootstrap') {
     requireRoles(user, ['creator', 'organizer']);
@@ -1838,6 +1972,111 @@ export async function localFallbackRequest<T>(
     }
   }
 
+  const studioPollsCreateMatch = path.match(/^\/studio\/events\/([^/]+)\/polls$/);
+  if (method === 'POST' && studioPollsCreateMatch) {
+    requireRoles(user, ['creator', 'organizer']);
+    const eventId = decodeURIComponent(studioPollsCreateMatch[1]);
+    const evt = db.events.find((e) => e.id === eventId && e.organizerId === user.id);
+    if (!evt) throw new LocalApiError('Event not found.', 404);
+    const question = String(body.question || '').trim();
+    if (question.length < 3) {
+      throw new LocalApiError('Enter a poll question (at least 3 characters).', 400);
+    }
+    const options = buildValidatedPollOptions(Array.isArray(body.options) ? body.options : []);
+    if (options.length < 2) {
+      throw new LocalApiError('Add at least 2 distinct answer options.', 400);
+    }
+    const poll: EventPoll = {
+      id: `poll-${Date.now()}-${randomHex(2)}`,
+      eventId: evt.id,
+      question: question.slice(0, 240),
+      description: body.description ? String(body.description).trim().slice(0, 320) : undefined,
+      sessionLabel: body.sessionLabel ? String(body.sessionLabel).trim().slice(0, 80) : undefined,
+      status: normalizePollStatus(body.status, 'active'),
+      allowMultiple: Boolean(body.allowMultiple),
+      showResultsToPublic: body.showResultsToPublic !== false,
+      requireVerifiedPass: Boolean(body.requireVerifiedPass),
+      options,
+      totalVotes: 0,
+      voterKeys: [],
+      createdAt: new Date().toISOString(),
+    };
+    const existingExtra = evt.extraDataConfig ?? { enableGiftTable: false, customFields: [] };
+    evt.extraDataConfig = {
+      ...existingExtra,
+      enablePolls: true,
+      polls: [poll, ...(existingExtra.polls ?? [])],
+    };
+    saveDb(db);
+    const { organizerId: _org, ...cleanEvent } = evt;
+    return { poll, event: cleanEvent } as T;
+  }
+
+  const studioPollItemMatch = path.match(/^\/studio\/events\/([^/]+)\/polls\/([^/]+)$/);
+  if (studioPollItemMatch) {
+    requireRoles(user, ['creator', 'organizer']);
+    const eventId = decodeURIComponent(studioPollItemMatch[1]);
+    const pollId = decodeURIComponent(studioPollItemMatch[2]);
+    const evt = db.events.find((e) => e.id === eventId && e.organizerId === user.id);
+    if (!evt) throw new LocalApiError('Event not found.', 404);
+    const existingExtra = evt.extraDataConfig ?? { enableGiftTable: false, customFields: [] };
+    const prevPolls = Array.isArray(existingExtra.polls) ? existingExtra.polls : [];
+    const target = prevPolls.find((p) => p.id === pollId);
+    if (!target) throw new LocalApiError('Poll not found.', 404);
+    if (method === 'PATCH') {
+      const nextStatus =
+        body.status !== undefined ? normalizePollStatus(body.status, target.status) : target.status;
+      const updatedPoll: EventPoll = {
+        ...target,
+        question:
+          typeof body.question === 'string' && body.question.trim().length >= 3
+            ? body.question.trim().slice(0, 240)
+            : target.question,
+        description:
+          body.description !== undefined
+            ? String(body.description || '').trim().slice(0, 320) || undefined
+            : target.description,
+        sessionLabel:
+          body.sessionLabel !== undefined
+            ? String(body.sessionLabel || '').trim().slice(0, 80) || undefined
+            : target.sessionLabel,
+        status: nextStatus,
+        allowMultiple:
+          body.allowMultiple !== undefined ? Boolean(body.allowMultiple) : target.allowMultiple,
+        showResultsToPublic:
+          body.showResultsToPublic !== undefined
+            ? Boolean(body.showResultsToPublic)
+            : target.showResultsToPublic,
+        requireVerifiedPass:
+          body.requireVerifiedPass !== undefined
+            ? Boolean(body.requireVerifiedPass)
+            : target.requireVerifiedPass,
+        closedAt:
+          nextStatus === 'closed'
+            ? target.closedAt || new Date().toISOString()
+            : nextStatus === 'active'
+              ? undefined
+              : target.closedAt,
+      };
+      evt.extraDataConfig = {
+        ...existingExtra,
+        polls: prevPolls.map((p) => (p.id === pollId ? updatedPoll : p)),
+      };
+      saveDb(db);
+      const { organizerId: _org, ...cleanEvent } = evt;
+      return { poll: updatedPoll, event: cleanEvent } as T;
+    }
+    if (method === 'DELETE') {
+      evt.extraDataConfig = {
+        ...existingExtra,
+        polls: prevPolls.filter((p) => p.id !== pollId),
+      };
+      saveDb(db);
+      const { organizerId: _org, ...cleanEvent } = evt;
+      return { ok: true, event: cleanEvent } as T;
+    }
+  }
+
   const evtMatch = path.match(/^\/studio\/events\/([^/]+)$/);
   if (evtMatch) {
     requireRoles(user, ['creator', 'organizer']);
@@ -1876,10 +2115,21 @@ export async function localFallbackRequest<T>(
           403
         );
       }
+      const mergedExtra = patch.extraDataConfig
+        ? {
+            ...(existing.extraDataConfig ?? { enableGiftTable: false, customFields: [] }),
+            ...patch.extraDataConfig,
+            giftLedger: patch.extraDataConfig.giftLedger ?? existing.extraDataConfig?.giftLedger,
+            attendantLinks:
+              patch.extraDataConfig.attendantLinks ?? existing.extraDataConfig?.attendantLinks,
+            polls: patch.extraDataConfig.polls ?? existing.extraDataConfig?.polls,
+          }
+        : existing.extraDataConfig;
       const updated = {
         ...existing,
         ...patch,
         id: eventId,
+        extraDataConfig: mergedExtra,
         capacity: getEffectiveEventCapacity(nextCapRaw, user.profile),
         senderId: ent.allowCustomSenderId ? (patch.senderId ?? existing.senderId) : (existing.senderId || DEFAULT_SHARED_SENDER_ID),
         messageConfig: ent.allowCustomMessages ? (patch.messageConfig ?? existing.messageConfig) : existing.messageConfig,

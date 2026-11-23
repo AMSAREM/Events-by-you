@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowLeft,
   Camera,
   CameraOff,
   Check,
@@ -8,6 +9,8 @@ import {
   Copy,
   Download,
   ExternalLink,
+  Maximize2,
+  Minimize2,
   QrCode,
   RotateCcw,
   Search,
@@ -27,7 +30,9 @@ import {
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
 import { buildCameraLinkForOrigin } from '../lib/eventMessages';
-import { DeterministicQrSvg, downloadQrSvg } from '../lib/qr';
+import { useDocumentFullscreen } from '../lib/fullscreen';
+import { buildEventInvitationUrl, DeterministicQrSvg, downloadQrSvg } from '../lib/qr';
+import { CheckInFlyerSidePanel } from './CheckInFlyerSidePanel';
 import { CircularGauge } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
 
@@ -38,6 +43,7 @@ interface QrGateScannerScreenProps {
   profile: OrganizerProfile;
   initialEventId?: string;
   initialCode?: string;
+  onBackToStudio?: () => void;
   onToggleCheckIn: (
     attendeeId: string
   ) => Promise<{
@@ -91,6 +97,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   profile,
   initialEventId,
   initialCode,
+  onBackToStudio,
   onToggleCheckIn,
   onRegisterAttendee,
   onToggleQrPassPublished,
@@ -98,6 +105,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   onNavigateSettings,
   onResolveAlert,
 }) => {
+  const { isFullscreen, toggleFullscreen } = useDocumentFullscreen();
   const activePool = useMemo(() => {
     const liveOrUpcoming = events.filter((e) => e.status === 'live' || e.status === 'upcoming');
     return liveOrUpcoming.length > 0 ? liveOrUpcoming : events;
@@ -117,6 +125,13 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
 
   const selectedEvent =
     events.find((e) => e.id === selectedEventId) ?? activePool[0] ?? events[0];
+  const checkinKioskUrl = useMemo(
+    () =>
+      selectedEvent
+        ? buildEventInvitationUrl(selectedEvent.slug || selectedEvent.id, 'checkin')
+        : '',
+    [selectedEvent]
+  );
   const isEventCreator = profile.appRole !== 'gate_staff';
   const isQrPassPublished = selectedEvent ? selectedEvent.qrPassPublished !== false : false;
 
@@ -489,41 +504,72 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   };
 
   return (
-    <div className="space-y-6">
-      {/* Top Header & Utility Bar */}
+    <div className="w-full space-y-5">
+      {/* Top Full-Screen Header & Utility Bar */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
-          <h1 className="font-display text-[28px] sm:text-[34px] font-bold tracking-[-0.02em] text-[#0B0B0B]">
-            Gate Check-In &amp; QR Scanner
-          </h1>
-          <p className="text-sm text-[#71717A] mt-0.5">
-            Scan digital QR passes, enforce anti-passback, and register walk-in guests on the spot.
-          </p>
+        <div className="flex flex-wrap items-center gap-3 min-w-0">
+          {onBackToStudio && (
+            <button
+              type="button"
+              onClick={onBackToStudio}
+              className="px-3.5 py-2 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Studio</span>
+            </button>
+          )}
+          <div className="min-w-0">
+            <h1 className="font-display text-[26px] sm:text-[32px] font-bold tracking-[-0.02em] text-[#0B0B0B] leading-tight">
+              Gate Check-In &amp; QR Scanner
+            </h1>
+            <p className="text-xs sm:text-sm text-[#71717A] mt-0.5">
+              Scan digital QR passes, enforce anti-passback, and register walk-in guests on the spot.
+            </p>
+          </div>
         </div>
 
-        <div className="lg:w-[440px]">
-          <TopUtilityBar
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            searchPlaceholder="Filter gate roster or pass code..."
-            alerts={alerts}
-            onResolveAlert={onResolveAlert}
-            onInspectAlertEvent={(id) => {
-              const found = events.find((e) => e.id === id);
-              if (found) onManageEvent(found);
-            }}
-            profile={profile}
-            onOpenSettings={onNavigateSettings}
-          />
+        <div className="flex flex-wrap items-center gap-2.5 lg:justify-end">
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className="px-3.5 py-2 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+          >
+            {isFullscreen ? (
+              <>
+                <Minimize2 className="w-3.5 h-3.5" />
+                <span>Exit Full Screen</span>
+              </>
+            ) : (
+              <>
+                <Maximize2 className="w-3.5 h-3.5" />
+                <span>Full Screen</span>
+              </>
+            )}
+          </button>
+          <div className="w-full sm:w-[380px] lg:w-[400px]">
+            <TopUtilityBar
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              searchPlaceholder="Filter gate roster or pass code..."
+              alerts={alerts}
+              onResolveAlert={onResolveAlert}
+              onInspectAlertEvent={(id) => {
+                const found = events.find((e) => e.id === id);
+                if (found) onManageEvent(found);
+              }}
+              profile={profile}
+              onOpenSettings={onNavigateSettings}
+            />
+          </div>
         </div>
       </div>
 
       {/* Active Event Context & Live Throughput Bar */}
       {selectedEvent && (
-        <section className="p-5 sm:p-6 rounded-3xl bg-[#F5F5F7] flex flex-col lg:flex-row lg:items-center justify-between gap-5">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-4 min-w-0">
-            <div className="w-12 h-12 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
-              <QrCode className="w-6 h-6" />
+        <section className="p-4 sm:p-5 rounded-3xl bg-[#F5F5F7] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3.5 min-w-0">
+            <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
+              <QrCode className="w-5 h-5" />
             </div>
             <div className="min-w-0 flex-1">
               <label htmlFor="scanner-event-select" className="block text-[11px] font-semibold text-[#71717A]">
@@ -547,9 +593,9 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-6 shrink-0">
+          <div className="flex flex-wrap items-center gap-4 shrink-0">
             <div className="flex items-center gap-3">
-              <CircularGauge value={turnoutPct} size={48} strokeWidth={4.5} alertThreshold={101} />
+              <CircularGauge value={turnoutPct} size={46} strokeWidth={4.5} alertThreshold={101} />
               <div>
                 <p className="text-sm font-bold text-[#0B0B0B] tabular-nums">
                   {checkedInCount} / {eventAttendees.length} Checked In
@@ -560,7 +606,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={focusWalkInRegistration}
@@ -602,8 +648,26 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
         </section>
       )}
 
-      {/* MAIN COMMAND SPLIT: QR CODE SCANNER (Left 6 cols) + WALK-IN CHECK-IN REGISTRATION (Right 6 cols) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+      {/* FULL-SCREEN SPLIT: EVENT FLYER / LOGO AT SIDE + SCANNER / WALK-IN / MANIFEST */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
+        {selectedEvent && (
+          <div className="xl:col-span-4 2xl:col-span-3 xl:sticky xl:top-4">
+            <CheckInFlyerSidePanel
+              event={selectedEvent}
+              checkedInCount={checkedInCount}
+              registeredCount={eventAttendees.length}
+              checkinUrl={checkinKioskUrl}
+              showQrCard
+              showCheckInCount
+              isFullscreen={isFullscreen}
+              onToggleFullscreen={toggleFullscreen}
+            />
+          </div>
+        )}
+
+        <div className={`${selectedEvent ? 'xl:col-span-8 2xl:col-span-9' : 'xl:col-span-12'} space-y-5 min-w-0`}>
+          {/* MAIN COMMAND SPLIT: QR CODE SCANNER (Left 6 cols) + WALK-IN CHECK-IN REGISTRATION (Right 6 cols) */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
         {/* LEFT 6 COLS: QR Code Scanner & Instant Pass Verification */}
         <section className="lg:col-span-6 bg-[#0B0B0B] text-white rounded-3xl p-6 sm:p-7 flex flex-col justify-between gap-5">
           <div>
@@ -1233,6 +1297,8 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
             </div>
           )}
         </section>
+      </div>
+        </div>
       </div>
 
       {/* Attendee Digital QR Pass Modal */}
