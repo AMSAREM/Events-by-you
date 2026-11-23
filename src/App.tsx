@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Clock, Compass, Database, Loader2, LogOut, ShieldCheck, X } from 'lucide-react';
 import { INITIAL_PROFILE } from './data/initialData';
 import type {
@@ -2506,7 +2506,6 @@ export default function App() {
                 <QrGateScannerScreen
                   events={safeEvents}
                   attendees={safeAttendees}
-                  scheduleBlocks={safeScheduleBlocks}
                   alerts={safeAlerts}
                   profile={profile}
                   initialEventId={checkinEventId}
