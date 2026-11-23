@@ -599,11 +599,18 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     window.setTimeout(() => setCopiedInvite(false), 2000);
 
     if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      const scheduleSnippet =
+        eventSessions.length > 0
+          ? `\nProgram Schedule: ${eventSessions
+              .slice(0, 3)
+              .map((s) => `${s.time} ${s.title}`)
+              .join(' • ')}`
+          : '';
       try {
         await navigator.share({
           title: event.title,
           text: appendPoweredByLine(
-            `${event.title} · ${event.date} at ${event.venue}. Register & get your QR pass:`
+            `${event.title} · ${event.date} at ${event.venue}. Register, view program schedule & get your QR pass:${scheduleSnippet}`
           ),
           url: inviteUrl,
         });

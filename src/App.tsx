@@ -250,6 +250,7 @@ export default function App() {
 
   const [activeScreen, setActiveScreen] = useState<NavScreen>('overview');
   const [publicEvents, setPublicEvents] = useState<EventItem[]>([]);
+  const [publicScheduleBlocks, setPublicScheduleBlocks] = useState<ScheduleBlock[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
   const [attendees, setAttendees] = useState<Attendee[]>([]);
   const [scheduleBlocks, setScheduleBlocks] = useState<ScheduleBlock[]>([]);
@@ -344,8 +345,10 @@ export default function App() {
     try {
       const res = await api.public.getEvents();
       setPublicEvents(Array.isArray(res?.events) ? res.events : []);
+      setPublicScheduleBlocks(Array.isArray(res?.scheduleBlocks) ? res.scheduleBlocks : []);
     } catch {
       setPublicEvents([]);
+      setPublicScheduleBlocks([]);
     } finally {
       setPublicEventsLoading(false);
     }
@@ -506,15 +509,54 @@ export default function App() {
   }, [hydrateStudioWorkspace, loadPublicEvents]);
 
   const safePublicEvents = Array.isArray(publicEvents) ? publicEvents : [];
+  const safePublicScheduleBlocks = Array.isArray(publicScheduleBlocks) ? publicScheduleBlocks : [];
   const safeEvents = Array.isArray(events) ? events : [];
   const safeAttendees = Array.isArray(attendees) ? attendees : [];
   const safeScheduleBlocks = Array.isArray(scheduleBlocks) ? scheduleBlocks : [];
+  const mergedPublicScheduleBlocks = useMemo(() => {
+    const byId = new Map<string, ScheduleBlock>();
+    for (const blk of safePublicScheduleBlocks) {
+      byId.set(blk.id, blk);
+    }
+    for (const blk of safeScheduleBlocks) {
+      byId.set(blk.id, blk);
+    }
+    return Array.from(byId.values());
+  }, [safePublicScheduleBlocks, safeScheduleBlocks]);
   const safeAlerts = Array.isArray(alerts) ? alerts : [];
   const safeDisposableShots = Array.isArray(disposableShots) ? disposableShots : [];
   const safeRollSettings =
     rollSettings && typeof rollSettings === 'object' ? rollSettings : {};
   const safeCreatorApps = Array.isArray(creatorApps) ? creatorApps : [];
   const safeCreatorAppLogs = Array.isArray(creatorAppLogs) ? creatorAppLogs : [];
+
+  const isCheckInScreenActive =
+    (route === 'studio' && activeScreen === 'checkin' && !workspaceEventId && !studioSubScreen) ||
+    (route === 'demo-event' && publicPreviewFocus === 'checkin');
+
+  useEffect(() => {
+    if (route !== 'demo-event' || !publicPreviewEventId) return;
+    let cancelled = false;
+    api.public
+      .getEventBySlugOrId(publicPreviewEventId)
+      .then((res) => {
+        if (cancelled) return;
+        const blocks = Array.isArray(res?.scheduleBlocks) ? res.scheduleBlocks : [];
+        if (blocks.length > 0) {
+          setPublicScheduleBlocks((prev) => {
+            const byId = new Map(prev.map((b) => [b.id, b]));
+            for (const blk of blocks) byId.set(blk.id, blk);
+            return Array.from(byId.values());
+          });
+        }
+      })
+      .catch(() => {
+        // Keep cached public events / schedule blocks if slug lookup fails
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [route, publicPreviewEventId]);
 
   const activeEvents = isSignedIn ? safeEvents : safePublicEvents;
   const selectedEvent = selectedEventId
@@ -830,6 +872,28 @@ export default function App() {
       return;
     }
 
+    if (isCheckInScreenActive) {
+      setSessionWarningSecondsLeft(null);
+      const stampActivity = () => {
+        const ts = Date.now();
+        lastActivityRef.current = ts;
+        try {
+          localStorage.setItem(LAST_ACTIVITY_KEY, String(ts));
+        } catch {
+          // Ignore storage errors
+        }
+      };
+      stampActivity();
+      const keepAliveTimer = window.setInterval(stampActivity, 60 * 1000);
+      const tokenRefreshTimer = window.setInterval(() => {
+        void api.auth.getSession().catch(() => {});
+      }, 15 * 60 * 1000);
+      return () => {
+        window.clearInterval(keepAliveTimer);
+        window.clearInterval(tokenRefreshTimer);
+      };
+    }
+
     const now = Date.now();
     let initialActivity = now;
     try {
@@ -908,7 +972,7 @@ export default function App() {
       });
       window.removeEventListener('storage', handleStorageSync);
     };
-  }, [handleSignOut, isSignedIn]);
+  }, [handleSignOut, isCheckInScreenActive, isSignedIn]);
 
   const closeWalkthrough = useCallback(
     (markComplete = true) => {
@@ -1667,7 +1731,7 @@ export default function App() {
 
 
   const sessionTimeoutModal =
-    isSignedIn && sessionWarningSecondsLeft !== null ? (
+    isSignedIn && !isCheckInScreenActive && sessionWarningSecondsLeft !== null ? (
       <div
         role="dialog"
         aria-modal="true"
@@ -2004,7 +2068,7 @@ export default function App() {
           <PublicEventScreen
           events={demoEventsPool}
           attendees={safeAttendees}
-          scheduleBlocks={safeScheduleBlocks}
+          scheduleBlocks={mergedPublicScheduleBlocks}
           initialEventId={publicPreviewEventId}
           initialFocus={publicPreviewFocus}
           initialDeskToken={publicPreviewDeskToken}
@@ -2442,6 +2506,7 @@ export default function App() {
                 <QrGateScannerScreen
                   events={safeEvents}
                   attendees={safeAttendees}
+                  scheduleBlocks={safeScheduleBlocks}
                   alerts={safeAlerts}
                   profile={profile}
                   initialEventId={checkinEventId}

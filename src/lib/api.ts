@@ -604,10 +604,12 @@ export const api = {
   },
 
   public: {
-    getEvents: () => request<{ events: EventItem[] }>('/api/public/events'),
+    getEvents: () => request<{ events: EventItem[]; scheduleBlocks?: ScheduleBlock[] }>('/api/public/events'),
 
     getEventBySlugOrId: (slugOrId: string) =>
-      request<{ event: EventItem }>(`/api/public/events/${encodeURIComponent(slugOrId)}`),
+      request<{ event: EventItem; scheduleBlocks?: ScheduleBlock[] }>(
+        `/api/public/events/${encodeURIComponent(slugOrId)}`
+      ),
 
     registerAttendee: (
       eventId: string,

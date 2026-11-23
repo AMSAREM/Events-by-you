@@ -800,7 +800,9 @@ export async function localFallbackRequest<T>(
     const events = db.events
       .filter((e) => e.status === 'live' || e.status === 'upcoming')
       .map((e) => sanitizePublicEventItem(e));
-    return { events } as T;
+    const eventIds = new Set(events.map((e) => e.id));
+    const scheduleBlocks = db.scheduleBlocks.filter((b) => eventIds.has(b.eventId));
+    return { events, scheduleBlocks } as T;
   }
 
   const publicEventMatch = path.match(/^\/public\/events\/([^/]+)$/);
@@ -814,7 +816,8 @@ export async function localFallbackRequest<T>(
     if (!matched) {
       throw new LocalApiError('Event invitation not found or no longer active.', 404);
     }
-    return { event: sanitizePublicEventItem(matched) } as T;
+    const scheduleBlocks = db.scheduleBlocks.filter((b) => b.eventId === matched.id);
+    return { event: sanitizePublicEventItem(matched), scheduleBlocks } as T;
   }
 
   const publicRegMatch = path.match(/^\/public\/events\/([^/]+)\/register$/);
