@@ -77,6 +77,25 @@ export function createPublicSupabaseClient(): SupabaseClient {
   });
 }
 
+export function createImplicitSupabaseClient(): SupabaseClient {
+  const { url, anonKey } = getSupabaseConfig();
+  if (!url || !anonKey) {
+    throw new Error(
+      'Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in your environment.'
+    );
+  }
+  const safeFetch = createSupabaseSafeFetch(anonKey);
+  return createClient(url, anonKey, {
+    ...(safeFetch ? { global: { fetch: safeFetch } } : {}),
+    auth: {
+      flowType: 'implicit',
+      autoRefreshToken: false,
+      persistSession: false,
+      detectSessionInUrl: false,
+    },
+  });
+}
+
 export function createUserSupabaseClient(accessToken: string): SupabaseClient {
   const { url, anonKey } = getSupabaseConfig();
   if (!url || !anonKey) {
@@ -433,6 +452,11 @@ export async function ensureProfileRow(
         ? 'creator'
         : 'organizer';
 
+  const metaAvatar =
+    (typeof user.user_metadata?.avatar_url === 'string' && user.user_metadata.avatar_url.trim()) ||
+    (typeof user.user_metadata?.picture === 'string' && user.user_metadata.picture.trim()) ||
+    undefined;
+
   const insertPayload: Record<string, unknown> = {
     id: user.id,
     email: user.email ?? '',
@@ -451,6 +475,7 @@ export async function ensureProfileRow(
     plan: isPrimaryCreator ? 'Pro Organizer' : 'Starter',
     sms_credits: 0,
     capacity_alert_threshold: 90,
+    ...(metaAvatar ? { avatar_url: metaAvatar } : {}),
   };
 
   let { data: created, error: insertErr } = await client

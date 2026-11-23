@@ -310,12 +310,14 @@ async function executeLocalFallback<T>(
 export class ApiError extends Error {
   status: number;
   code?: string;
+  callbackUrl?: string;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(message: string, status: number, code?: string, callbackUrl?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.callbackUrl = callbackUrl;
   }
 }
 
@@ -385,7 +387,7 @@ async function request<T>(
   }
 
   if (!resp.ok) {
-    const parsedErr = parsed as { error?: string; code?: string } | null;
+    const parsedErr = parsed as { error?: string; code?: string; callbackUrl?: string } | null;
     const errMsg = parsedErr?.error || `Request failed (${resp.status})`;
     const lowerErr = errMsg.toLowerCase();
     if (
@@ -399,7 +401,7 @@ async function request<T>(
       saveStoredSession(null);
       saveStoredCreatorToken(null);
     }
-    throw new ApiError(errMsg, resp.status, parsedErr?.code);
+    throw new ApiError(errMsg, resp.status, parsedErr?.code, parsedErr?.callbackUrl);
   }
 
   if (!parsed || typeof parsed !== 'object') {
@@ -418,6 +420,8 @@ export const api = {
       database: string;
       supabaseConfigured: boolean;
       serviceRoleConfigured?: boolean;
+      googleOAuthConfigured?: boolean;
+      googleCallbackUrl?: string;
       resendConfigured?: boolean;
       arkeselConfigured?: boolean;
       arkeselSenderIdConfigured?: boolean;
@@ -564,10 +568,27 @@ export const api = {
         }
       ),
 
-    getOAuthUrl: (provider: 'google' | 'github', redirectTo: string) =>
-      request<{ url: string }>(
-        `/api/auth/oauth/${provider}?redirectTo=${encodeURIComponent(redirectTo)}`
-      ),
+    getOAuthUrl: (
+      provider: 'google',
+      options?: {
+        redirectTo?: string;
+        mode?: 'signin' | 'signup';
+        studio?: string;
+        appRole?: AppRole;
+      }
+    ) => {
+      const params = new URLSearchParams();
+      if (options?.redirectTo) params.set('redirectTo', options.redirectTo);
+      if (options?.mode) params.set('mode', options.mode);
+      if (options?.studio) params.set('studio', options.studio);
+      if (options?.appRole) params.set('appRole', options.appRole);
+      const qs = params.toString();
+      return request<{
+        url: string;
+        mode?: 'direct' | 'supabase';
+        callbackUrl?: string;
+      }>(`/api/auth/oauth/${provider}${qs ? `?${qs}` : ''}`);
+    },
 
     getSession: () => request<{ profile: OrganizerProfile }>('/api/auth/session', {}, true),
 

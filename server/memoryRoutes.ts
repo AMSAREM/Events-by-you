@@ -67,6 +67,11 @@ import {
   verifyAuthOtp,
 } from './phoneAuth.ts';
 import { memoryStore, platformRuntime } from './memoryStore.ts';
+import {
+  buildGoogleAuthorizeUrl,
+  getGoogleOAuthCallbackUrl,
+  isGoogleOAuthConfigured,
+} from './googleAuth.ts';
 
 function requireMemoryAuth(req: AuthedRequest, res: Response, next: NextFunction) {
   const token = getBearerToken(req);
@@ -555,17 +560,27 @@ export function createMemoryRouter() {
 
   router.get('/auth/oauth/:provider', (req, res) => {
     const provider = req.params.provider;
-    if (provider !== 'google' && provider !== 'github') {
-      return res.status(400).json({ error: 'Unsupported OAuth provider.' });
+    if (provider !== 'google') {
+      return res.status(400).json({ error: 'Only Google OAuth is enabled.' });
     }
-    const redirectTo =
-      typeof req.query.redirectTo === 'string' && req.query.redirectTo
-        ? req.query.redirectTo.replace(/\/$/, '')
-        : `${req.protocol}://${req.get('host')}`;
-    const creator = getCreatorCredentials();
-    const session = memoryStore.issueOAuthSession(creator.email);
-    const url = `${redirectTo}/#access_token=${encodeURIComponent(session.accessToken)}&refresh_token=${encodeURIComponent(session.refreshToken)}&expires_in=604800`;
-    return res.json({ url });
+    const callbackUrl = getGoogleOAuthCallbackUrl(req);
+    if (!isGoogleOAuthConfigured()) {
+      return res.status(503).json({
+        error: `Google OAuth is not configured on this server yet. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in environment Secrets and authorize callback URL: ${callbackUrl}`,
+        code: 'GOOGLE_OAUTH_NOT_CONFIGURED',
+        callbackUrl,
+      });
+    }
+    try {
+      const mode = req.query.mode === 'signup' ? 'signup' : 'signin';
+      const studio = typeof req.query.studio === 'string' ? req.query.studio : undefined;
+      const appRole = req.query.appRole === 'gate_staff' ? 'gate_staff' : 'organizer';
+      const { url } = buildGoogleAuthorizeUrl(req, { mode, studio, appRole });
+      return res.json({ url, mode: 'direct', callbackUrl });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to start Google OAuth.';
+      return res.status(500).json({ error: message });
+    }
   });
 
   router.post('/auth/refresh', (req, res) => {

@@ -738,14 +738,10 @@ export async function localFallbackRequest<T>(
 
   // Auth: OAuth
   if (method === 'GET' && path.startsWith('/auth/oauth/')) {
-    const redirectTo =
-      parsedUrl.searchParams.get('redirectTo')?.replace(/\/$/, '') || window.location.origin;
-    const creator = findUserByEmail(db, CREATOR_EMAIL) || Object.values(db.users)[0];
-    const session = createSession(db, creator.id);
-    const urlOut = `${redirectTo}/#access_token=${encodeURIComponent(
-      session.accessToken
-    )}&refresh_token=${encodeURIComponent(session.refreshToken)}&expires_in=604800`;
-    return { url: urlOut } as T;
+    throw new LocalApiError(
+      'Google Sign-In requires the backend server with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (or Supabase Google Auth).',
+      503
+    );
   }
 
   // Auth: Refresh

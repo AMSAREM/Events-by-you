@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import {
+  createImplicitSupabaseClient,
   createPublicSupabaseClient,
   createServiceSupabaseClient,
   createUserSupabaseClient,
@@ -27,6 +28,12 @@ import {
   mapShotRow,
   resolveSupabaseUserContacts,
 } from './server/supabase.ts';
+import {
+  buildGoogleAuthorizeUrl,
+  getGoogleOAuthCallbackUrl,
+  handleGoogleOAuthCallback,
+  isGoogleOAuthConfigured,
+} from './server/googleAuth.ts';
 import { normalizeHexColor } from './src/lib/themeColors.ts';
 import {
   INITIAL_ALERTS,
@@ -1133,7 +1140,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
     return res.send(svg);
   });
 
-  app.get('/api/health', (_req, res) => {
+  app.get('/api/health', (req, res) => {
     const creator = getCreatorCredentials();
     const configured = isSupabaseConfigured();
     const serviceRoleConfigured = Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim());
@@ -1146,6 +1153,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       otpStorage: configured && serviceRoleConfigured ? 'supabase' : 'in-memory',
       supabaseConfigured: configured,
       serviceRoleConfigured,
+      googleOAuthConfigured: isGoogleOAuthConfigured(),
+      googleCallbackUrl: getGoogleOAuthCallbackUrl(req),
       resendConfigured: isResendConfigured(),
       arkeselConfigured: isArkeselConfigured(),
       arkeselSenderIdConfigured: !senderInfo.isDefaultUnverifiedWarning,
@@ -1158,6 +1167,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       timestamp: new Date().toISOString(),
     });
   });
+
+  // Google OAuth Popup Callback (works in both Supabase and In-Memory modes, iframe-safe)
+  app.get(['/auth/callback', '/auth/callback/'], handleGoogleOAuthCallback);
 
   // Public Arkesel Delivery Report (DLR) Webhook (receives async carrier delivery status callbacks)
   app.all('/api/webhooks/arkesel-dlr', (req, res) => {
@@ -2189,26 +2201,40 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
 
   app.get('/api/auth/oauth/:provider', requireSupabaseConfiguredMiddleware, async (req, res) => {
     const provider = req.params.provider;
-    if (provider !== 'google' && provider !== 'github') {
-      return res.status(400).json({ error: 'Unsupported OAuth provider.' });
+    if (provider !== 'google') {
+      return res.status(400).json({ error: 'Only Google OAuth is supported.' });
     }
-    const redirectTo =
-      typeof req.query.redirectTo === 'string' && req.query.redirectTo
-        ? req.query.redirectTo
-        : resolveBaseUrl(req);
+    const callbackUrl = getGoogleOAuthCallbackUrl(req);
+    const mode = req.query.mode === 'signup' ? 'signup' : 'signin';
+    const studio = typeof req.query.studio === 'string' ? req.query.studio : undefined;
+    const appRole = req.query.appRole === 'gate_staff' ? 'gate_staff' : 'organizer';
+
+    if (isGoogleOAuthConfigured() && createServiceSupabaseClient()) {
+      try {
+        const { url } = buildGoogleAuthorizeUrl(req, { mode, studio, appRole });
+        return res.json({ url, mode: 'direct', callbackUrl });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unable to start Google OAuth.';
+        return res.status(500).json({ error: message });
+      }
+    }
+
     try {
-      const supabase = createPublicSupabaseClient();
+      const supabase = createImplicitSupabaseClient();
       const { data, error } = await supabase.auth.signInWithOAuth({
-        provider,
+        provider: 'google',
         options: {
-          redirectTo,
+          redirectTo: callbackUrl,
           skipBrowserRedirect: true,
+          queryParams: {
+            prompt: 'select_account',
+          },
         },
       });
       if (error || !data.url) {
-        return res.status(400).json({ error: error?.message || 'OAuth initialization failed.' });
+        return res.status(400).json({ error: error?.message || 'Google OAuth initialization failed.' });
       }
-      return res.json({ url: data.url });
+      return res.json({ url: data.url, mode: 'supabase', callbackUrl });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'OAuth error.';
       return res.status(500).json({ error: message });
@@ -6383,7 +6409,17 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       );
     }
     if (fs.existsSync(distDir)) {
-      app.use(express.static(distDir, { index: false, maxAge: '1h' }));
+      app.use(
+        express.static(distDir, {
+          index: false,
+          maxAge: '1h',
+          setHeaders: (res, filePath) => {
+            if (/(?:sw\.js|workbox-[^/]+\.js|manifest\.webmanifest)$/i.test(filePath)) {
+              res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+            }
+          },
+        })
+      );
     }
     app.get('*', async (req, res) => {
       const indexPath = resolveIndexHtmlPath();

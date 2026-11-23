@@ -407,6 +407,7 @@ export function getOrCreateMemoryUser(
     appRole?: AppRole;
     phone?: string;
     phoneVerified?: boolean;
+    avatarUrl?: string;
   }
 ): MemoryUser {
   const email = emailInput.trim().toLowerCase();
@@ -425,6 +426,9 @@ export function getOrCreateMemoryUser(
     }
     if (options?.phoneVerified) {
       user.profile.phoneVerified = true;
+    }
+    if (options?.avatarUrl && !user.profile.avatarUrl) {
+      user.profile.avatarUrl = options.avatarUrl;
     }
     return user;
   }
@@ -460,6 +464,7 @@ export function getOrCreateMemoryUser(
     plan: isCreator ? 'Pro Organizer' : 'Starter',
     smsCredits: 0,
     capacityAlertThreshold: 90,
+    avatarUrl: options?.avatarUrl,
     timezone: 'Africa/Accra',
     twoFactorEnabled: false,
     senderId: 'EVENTSAPP',
@@ -633,13 +638,45 @@ export const memoryStore = {
     return { session, profile: user.profile };
   },
 
-  issueOAuthSession(emailInput = 'amoakoimml@gmail.com') {
-    const user = getOrCreateMemoryUser(emailInput);
+  signInWithGoogle(payload: {
+    email: string;
+    name?: string;
+    givenName?: string;
+    avatarUrl?: string;
+    studio?: string;
+    appRole?: AppRole;
+  }) {
+    const email = payload.email.trim().toLowerCase();
+    const existing = this.getUserByEmail(email);
+    const isNewUser = !existing;
+    if (isNewUser && !platformRuntime.flags.signupsEnabled) {
+      throw new Error('New organiser signups are temporarily paused by platform administrator.');
+    }
+    const displayName =
+      payload.name?.trim() ||
+      payload.givenName?.trim() ||
+      (email.includes('@') ? email.split('@')[0] : 'Organiser');
+    const firstWord = (payload.givenName?.trim() || displayName.split(/\s+/)[0] || 'My').trim();
+    const defaultStudio = payload.studio?.trim() || `${firstWord}'s Events`;
+    const user = getOrCreateMemoryUser(email, {
+      name: displayName,
+      studio: defaultStudio,
+      avatarUrl: payload.avatarUrl,
+      appRole: payload.appRole === 'gate_staff' ? 'gate_staff' : 'organizer',
+    });
     if (user.suspended) {
-      throw new Error('This organiser account has been suspended.');
+      throw new Error('This organiser account has been suspended. Contact support.');
+    }
+    if (payload.avatarUrl && !user.profile.avatarUrl) {
+      user.profile.avatarUrl = payload.avatarUrl;
+    }
+    if (payload.name?.trim() && (!user.profile.name || user.profile.name === 'Organiser')) {
+      user.profile.name = payload.name.trim();
+      user.profile.firstName = payload.name.trim().split(/\s+/)[0] || user.profile.firstName;
     }
     user.lastLoginAt = new Date().toISOString();
-    return createMemorySession(user.id);
+    const session = createMemorySession(user.id);
+    return { session, profile: user.profile, isNewUser };
   },
 
   refreshSession(refreshToken: string) {
