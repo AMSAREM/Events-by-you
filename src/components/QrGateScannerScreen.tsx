@@ -661,7 +661,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
           <button
             type="button"
             onClick={toggleFullscreen}
-            className="px-3.5 py-2 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+            className="min-h-[40px] px-3.5 py-2 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
           >
             {isFullscreen ? (
               <>
@@ -735,17 +735,17 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full sm:w-auto">
               <button
                 type="button"
                 onClick={focusWalkInRegistration}
-                className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white hover:bg-zinc-800 text-xs font-bold inline-flex items-center gap-1.5 shadow-sm transition-colors whitespace-nowrap shrink-0"
+                className="col-span-2 sm:col-span-1 min-h-[40px] px-4 py-2 rounded-full bg-[#0B0B0B] text-white hover:bg-zinc-800 text-xs font-bold inline-flex items-center justify-center gap-1.5 shadow-sm transition-colors whitespace-nowrap shrink-0"
               >
-                <UserPlus className="w-3.5 h-3.5" />
-                Walk-In Check-In Registration
+                <UserPlus className="w-3.5 h-3.5 shrink-0" />
+                <span>Walk-In Registration</span>
               </button>
               <span
-                className={`px-3 py-1.5 rounded-full text-[11px] font-semibold border whitespace-nowrap ${
+                className={`min-h-[40px] px-3 py-1.5 rounded-full text-[11px] font-semibold border whitespace-nowrap inline-flex items-center justify-center ${
                   isQrPassPublished
                     ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
                     : 'bg-[#0B0B0B] border-[#0B0B0B] text-white'
@@ -760,7 +760,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                   onClick={() =>
                     void onToggleQrPassPublished(selectedEvent.id, !isQrPassPublished)
                   }
-                  className={`px-4 py-2 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 ${
+                  className={`min-h-[40px] px-4 py-2 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 inline-flex items-center justify-center ${
                     isQrPassPublished
                       ? 'bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B]'
                       : 'bg-[#0B0B0B] text-white hover:bg-zinc-800'
@@ -772,7 +772,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               <button
                 type="button"
                 onClick={() => onManageEvent(selectedEvent)}
-                className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0"
+                className="col-span-2 sm:col-span-1 min-h-[40px] px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0 inline-flex items-center justify-center"
               >
                 Open Event Workspace
               </button>
@@ -784,7 +784,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       {/* FULL-SCREEN SPLIT: EVENT FLYER / LOGO AT SIDE + SCANNER / WALK-IN / MANIFEST */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
         {selectedEvent && (
-          <div className="xl:col-span-4 2xl:col-span-3 xl:sticky xl:top-4">
+          <div className="xl:col-span-4 2xl:col-span-3 xl:sticky xl:top-4 xl:h-[calc(100dvh-2rem)] xl:max-h-[820px] xl:flex xl:flex-col">
             <CheckInFlyerSidePanel
               event={selectedEvent}
               checkedInCount={checkedInCount}
@@ -794,6 +794,8 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               showCheckInCount
               isFullscreen={isFullscreen}
               onToggleFullscreen={toggleFullscreen}
+              heroHeightClass="h-[200px] sm:h-[230px] xl:h-auto xl:min-h-0 xl:flex-1"
+              className="xl:flex-1 xl:min-h-0"
             />
           </div>
         )}
@@ -834,7 +836,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                 <button
                   type="button"
                   onClick={() => qrImageInputRef.current?.click()}
-                  className="px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                  className="min-h-[40px] px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
                 >
                   <ImageUp className="w-3.5 h-3.5" />
                   <span>Scan Image</span>
@@ -842,7 +844,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                 <button
                   type="button"
                   onClick={cameraActive ? stopCamera : startCamera}
-                  className={`px-4 py-2 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[40px] px-4 py-2 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
                     cameraActive
                       ? 'bg-[#EF4444] text-white hover:bg-red-600'
                       : 'bg-white text-[#0B0B0B] hover:bg-zinc-200'
@@ -866,28 +868,29 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
             <canvas ref={canvasRef} className="hidden" aria-hidden="true" />
 
             {/* Camera Viewfinder Frame */}
-            <div className="mt-5 relative rounded-2xl bg-zinc-900 border border-white/10 overflow-hidden min-h-[210px] flex items-center justify-center">
+            <div className="mt-5 relative rounded-2xl bg-zinc-900 border border-white/10 overflow-hidden h-[min(62vw,250px)] sm:h-64 xl:h-[280px] flex items-center justify-center">
               {cameraActive ? (
                 <>
                   <video
                     ref={videoRef}
                     muted
                     playsInline
-                    className="w-full h-56 object-cover"
+                    className="w-full h-full object-cover"
                   />
                   {/* Reticle overlay */}
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <div className="w-40 h-40 rounded-2xl border-2 border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)] relative">
-                      <span className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-[11px] font-mono text-white whitespace-nowrap bg-[#0B0B0B]/80 px-2.5 py-0.5 rounded-full">
-                        Live QR scanner active — point at pass
-                      </span>
-                    </div>
+                    <div className="w-[min(44vw,176px)] h-[min(44vw,176px)] sm:w-44 sm:h-44 rounded-2xl border-2 border-white/85 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]" />
+                  </div>
+                  <div className="absolute bottom-2.5 inset-x-3 flex justify-center pointer-events-none">
+                    <span className="text-[11px] font-mono text-white whitespace-nowrap bg-[#0B0B0B]/85 border border-white/15 px-3 py-1 rounded-full">
+                      Live QR scanner active — point at pass
+                    </span>
                   </div>
                 </>
               ) : (
-                <div className="p-6 text-center max-w-md space-y-3">
-                  <div className="w-16 h-16 rounded-2xl bg-white/10 border border-white/15 mx-auto flex items-center justify-center">
-                    <QrCode className="w-8 h-8 text-white" />
+                <div className="p-5 sm:p-6 text-center max-w-md space-y-2.5 sm:space-y-3">
+                  <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-white/10 border border-white/15 mx-auto flex items-center justify-center">
+                    <QrCode className="w-7 h-7 sm:w-8 sm:h-8 text-white" />
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-white">
@@ -1419,11 +1422,11 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto shrink-0">
                     <button
                       type="button"
                       onClick={() => setPreviewPass(att)}
-                      className="px-3 py-1.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1 whitespace-nowrap"
+                      className="min-h-[40px] px-3.5 py-1.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
                     >
                       <QrCode className="w-3.5 h-3.5" />
                       Pass QR
@@ -1447,7 +1450,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                           });
                         });
                       }}
-                      className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap ${
+                      className={`min-h-[40px] px-4 py-1.5 rounded-full text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 whitespace-nowrap ${
                         att.checkedIn
                           ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
                           : 'bg-[#0B0B0B] text-white hover:bg-zinc-800'
@@ -1527,14 +1530,14 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
           aria-modal="true"
           aria-labelledby="qr-pass-preview-title"
         >
-          <div className="bg-white w-full max-w-sm rounded-3xl p-6 border border-[#E5E5EA] soft-popover-shadow text-center space-y-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-5 sm:p-6 border border-[#E5E5EA] soft-popover-shadow text-center space-y-4 max-h-[92dvh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-[#71717A]">Digital Gate Pass</span>
               <button
                 type="button"
                 onClick={() => setPreviewPass(null)}
                 aria-label="Close pass modal"
-                className="w-8 h-8 rounded-full border border-[#E5E5EA] flex items-center justify-center text-[#0B0B0B] hover:bg-[#F5F5F7]"
+                className="w-9 h-9 rounded-full border border-[#E5E5EA] flex items-center justify-center text-[#0B0B0B] hover:bg-[#F5F5F7]"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1549,11 +1552,12 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               </p>
             </div>
 
-            <div className="p-5 bg-[#F5F5F7] rounded-2xl flex flex-col items-center">
-              <div className="p-3 bg-white rounded-2xl border border-[#E5E5EA]">
+            <div className="p-4 sm:p-5 bg-[#F5F5F7] rounded-2xl flex flex-col items-center">
+              <div className="w-[min(56vw,210px)] aspect-square p-3 bg-white rounded-2xl border border-[#E5E5EA] flex items-center justify-center">
                 <DeterministicQrSvg
                   value={`${previewPass.ticketCode}|${selectedEvent?.slug ?? previewPass.eventId}|${previewPass.phone}`}
-                  size={156}
+                  size={240}
+                  className="w-full h-full block"
                 />
               </div>
               <span className="mt-3 font-mono text-sm font-bold tracking-widest text-[#0B0B0B] tabular-nums">
@@ -1575,7 +1579,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                   verifyAndProcessCode(previewPass.ticketCode);
                   setPreviewPass(null);
                 }}
-                className="flex-1 h-10 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
+                className="flex-1 h-11 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
               >
                 {previewPass.checkedIn ? 'Verify Status' : 'Scan & Check In'}
               </button>
@@ -1588,7 +1592,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                   )
                 }
                 aria-label="Download QR SVG"
-                className="px-3.5 h-10 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
+                className="px-3.5 h-11 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
               >
                 <Download className="w-3.5 h-3.5" />
                 SVG
@@ -1596,7 +1600,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               <button
                 type="button"
                 onClick={() => setPreviewPass(null)}
-                className="px-4 h-10 rounded-full border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B]"
+                className="px-4 h-11 rounded-full border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B]"
               >
                 Close
               </button>

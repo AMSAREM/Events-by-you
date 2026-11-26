@@ -13,6 +13,7 @@ export type AppRoute =
 
 export type NavScreen =
   | 'overview'
+  | 'planning'
   | 'checkin'
   | 'camera'
   | 'gifts'
@@ -149,6 +150,86 @@ export interface EventPoll {
   closedAt?: string;
 }
 
+export type PlanningTaskPhase =
+  | 'Venue & Permits'
+  | 'Vendors & Catering'
+  | 'Marketing & Invites'
+  | 'Gate & Tech'
+  | 'Day-Of Operations';
+
+export type PlanningPriority = 'high' | 'medium' | 'low';
+
+export interface PlanningTask {
+  id: string;
+  title: string;
+  phase: PlanningTaskPhase;
+  priority: PlanningPriority;
+  dueLabel: string;
+  assignee: string;
+  completed: boolean;
+  completedAt?: string;
+  notes?: string;
+}
+
+export type PlanningBudgetCategory =
+  | 'Venue'
+  | 'AV & Production'
+  | 'Catering'
+  | 'Decor & Signage'
+  | 'Security & Staffing'
+  | 'Marketing & SMS'
+  | 'Contingency';
+
+export type PlanningBudgetStatus = 'planned' | 'deposit_paid' | 'settled';
+
+export interface PlanningBudgetItem {
+  id: string;
+  title: string;
+  category: PlanningBudgetCategory;
+  estimatedCost: number;
+  actualCost: number;
+  depositPaid: number;
+  status: PlanningBudgetStatus;
+  vendorName?: string;
+  notes?: string;
+}
+
+export type PlanningVendorStatus = 'sourcing' | 'quoted' | 'confirmed' | 'paid';
+
+export interface PlanningVendor {
+  id: string;
+  name: string;
+  serviceCategory: string;
+  contactPerson: string;
+  phone: string;
+  email?: string;
+  quotedFee: number;
+  status: PlanningVendorStatus;
+  arrivalWindow?: string;
+  notes?: string;
+}
+
+export interface PlanningTeamRole {
+  id: string;
+  memberName: string;
+  roleTitle: string;
+  station: string;
+  shiftWindow: string;
+  phone?: string;
+  briefed: boolean;
+}
+
+export interface EventPlanningConfig {
+  appliedTemplateCategory?: string;
+  currency: 'GHS' | 'USD';
+  targetBudget: number;
+  tasks: PlanningTask[];
+  budgetItems: PlanningBudgetItem[];
+  vendors: PlanningVendor[];
+  teamRoles: PlanningTeamRole[];
+  updatedAt?: string;
+}
+
 export interface EventExtraDataConfig {
   enableGiftTable: boolean;
   giftTitle?: string;
@@ -160,6 +241,7 @@ export interface EventExtraDataConfig {
   enablePolls?: boolean;
   pollsTitle?: string;
   polls?: EventPoll[];
+  planningConfig?: EventPlanningConfig;
   brandColor?: string;
   customFields: CustomFormField[];
 }

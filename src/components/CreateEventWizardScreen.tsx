@@ -44,6 +44,7 @@ import {
   STARTER_MAX_ATTENDEES_PER_EVENT,
 } from '../lib/subscriptionPlans';
 import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
+import { createStarterPlanningConfig } from '../lib/planningTemplates';
 import { EventFlyerCard } from './EventFlyerCard';
 import { MonochromePoster } from './MonochromeArtwork';
 import { ThemeColorPicker } from './ThemeColorPicker';
@@ -332,6 +333,11 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
           enablePolls,
           pollsTitle: pollsTitle.trim() || 'Live Corporate & Delegate Polls',
           polls: preset.extraDataConfig.polls ?? [],
+          planningConfig: createStarterPlanningConfig(
+            category || tags[0] || 'Events',
+            profile.name || profile.studio || 'Organiser',
+            venueFormat === 'virtual' ? 'Livestream Stage' : venue.trim() || 'Main Auditorium'
+          ),
           brandColor,
           customFields,
         },

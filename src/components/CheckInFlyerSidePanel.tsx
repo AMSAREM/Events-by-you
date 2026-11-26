@@ -31,6 +31,7 @@ interface CheckInFlyerSidePanelProps {
   featherBreakpoint?: 'md' | 'lg';
   showCheckInCount?: boolean;
   topBarRightPaddingClass?: string;
+  heroHeightClass?: string;
   className?: string;
 }
 
@@ -55,6 +56,7 @@ export const CheckInFlyerSidePanel: React.FC<CheckInFlyerSidePanelProps> = ({
   featherBreakpoint = 'lg',
   showCheckInCount = false,
   topBarRightPaddingClass = '',
+  heroHeightClass,
   className = '',
 }) => {
   const preset = getCategoryPreset(event.category);
@@ -113,11 +115,13 @@ export const CheckInFlyerSidePanel: React.FC<CheckInFlyerSidePanelProps> = ({
       {/* Top Hero Event Flyer or Vector Logo Artwork */}
       <div
         className={`relative w-full overflow-hidden select-none ${
-          isCompact
-            ? 'aspect-[16/10] sm:aspect-[4/3]'
-            : isMdFeather
-              ? 'min-h-[260px] sm:min-h-[320px] md:min-h-0 flex-1'
-              : 'min-h-[280px] sm:min-h-[360px] lg:min-h-0 flex-1'
+          heroHeightClass
+            ? heroHeightClass
+            : isCompact
+              ? 'aspect-[16/10] sm:aspect-[4/3]'
+              : isMdFeather
+                ? 'h-[230px] sm:h-[280px] md:h-auto md:min-h-0 md:flex-1'
+                : 'h-[240px] sm:h-[300px] lg:h-auto lg:min-h-0 lg:flex-1'
         }`}
       >
         {flyerSrc && !imageFailed ? (
@@ -216,15 +220,15 @@ export const CheckInFlyerSidePanel: React.FC<CheckInFlyerSidePanelProps> = ({
 
         {/* Bottom Flyer Overlay Title & Venue Logistics */}
         <div
-          className={`absolute left-4 right-4 z-10 space-y-2 ${
+          className={`absolute left-4 right-4 z-10 space-y-1.5 sm:space-y-2 ${
             isFeatheredWhite
               ? isMdFeather
-                ? 'bottom-16 sm:bottom-20 md:bottom-6 md:pr-24 lg:pr-28 drop-shadow-[0_2px_12px_rgba(0,0,0,0.8)]'
-                : 'bottom-16 sm:bottom-20 lg:bottom-6 lg:pr-28 xl:pr-36 drop-shadow-[0_2px_12px_rgba(0,0,0,0.8)]'
+                ? 'bottom-10 sm:bottom-14 md:bottom-6 md:pr-24 lg:pr-28 drop-shadow-[0_2px_12px_rgba(0,0,0,0.88)]'
+                : 'bottom-10 sm:bottom-14 lg:bottom-6 lg:pr-28 xl:pr-36 drop-shadow-[0_2px_12px_rgba(0,0,0,0.88)]'
               : 'bottom-4'
           }`}
         >
-          <h2 className="font-display text-xl sm:text-2xl font-bold tracking-[-0.02em] leading-snug text-white text-balance">
+          <h2 className="font-display text-lg sm:text-2xl font-bold tracking-[-0.02em] leading-snug text-white text-balance line-clamp-2">
             {event.title}
           </h2>
           {event.subtitle && !isCompact && (
@@ -286,10 +290,10 @@ export const CheckInFlyerSidePanel: React.FC<CheckInFlyerSidePanelProps> = ({
 
           {showQrCard && checkinUrl && (
             <div className="p-3.5 rounded-2xl bg-white text-[#0B0B0B] flex items-center justify-between gap-3">
-              <div className="min-w-0 flex-1 space-y-1">
+              <div className="min-w-0 flex-1 space-y-1.5">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-[#71717A] flex items-center gap-1">
-                  <QrCode className="w-3 h-3 text-[#0B0B0B]" />
-                  Gate Check-In Kiosk Link
+                  <QrCode className="w-3 h-3 text-[#0B0B0B] shrink-0" />
+                  <span className="truncate">Gate Check-In Kiosk Link</span>
                 </p>
                 <p className="text-xs font-mono text-[#0B0B0B] truncate">
                   /e/{event.slug}/checkin
@@ -297,16 +301,16 @@ export const CheckInFlyerSidePanel: React.FC<CheckInFlyerSidePanelProps> = ({
                 <button
                   type="button"
                   onClick={handleCopyUrl}
-                  className="px-3 py-1 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1 transition-colors whitespace-nowrap"
+                  className="min-h-[36px] px-3.5 py-1.5 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
                 >
                   {copiedUrl ? (
                     <>
-                      <Check className="w-3 h-3 text-emerald-600" />
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
                       <span>Copied</span>
                     </>
                   ) : (
                     <>
-                      <Copy className="w-3 h-3" />
+                      <Copy className="w-3.5 h-3.5" />
                       <span>Copy Link</span>
                     </>
                   )}
@@ -316,7 +320,8 @@ export const CheckInFlyerSidePanel: React.FC<CheckInFlyerSidePanelProps> = ({
               <div className="p-2 rounded-xl bg-[#F5F5F7] border border-[#E5E5EA] shrink-0">
                 <DeterministicQrSvg
                   value={checkinUrl}
-                  size={68}
+                  size={72}
+                  className="w-16 h-16 sm:w-[72px] sm:h-[72px] block"
                   label={`Gate check-in QR for ${event.title}`}
                 />
               </div>

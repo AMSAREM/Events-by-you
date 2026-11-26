@@ -14,6 +14,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  EventPlanningConfig,
   EventPollStatus,
   GiftTableEntry,
   NavScreen,
@@ -66,6 +67,11 @@ const PublicEventScreen = lazyWithRetry(() =>
 );
 const OverviewScreen = lazyWithRetry(() =>
   import('./components/OverviewScreen').then((m) => ({ default: m.OverviewScreen }))
+);
+const EventPlanningHubScreen = lazyWithRetry(() =>
+  import('./components/EventPlanningHubScreen').then((m) => ({
+    default: m.EventPlanningHubScreen,
+  }))
 );
 const EventsScreen = lazyWithRetry(() =>
   import('./components/EventsScreen').then((m) => ({ default: m.EventsScreen }))
@@ -1103,7 +1109,13 @@ export default function App() {
     try {
       const res = await api.studio.createEvent(newEvt, newBlocks);
       setEvents((prev) => [res.event, ...prev]);
-      setPublicEvents((prev) => [res.event, ...prev]);
+      if (res.event.status === 'live' || res.event.status === 'upcoming') {
+        const publicSafeCreated: EventItem = {
+          ...res.event,
+          extraDataConfig: sanitizePublicExtraDataConfig(res.event.extraDataConfig),
+        };
+        setPublicEvents((prev) => [publicSafeCreated, ...prev]);
+      }
       if (res.blocks.length > 0) {
         setScheduleBlocks((prev) => [...prev, ...res.blocks]);
       }
@@ -1305,16 +1317,47 @@ export default function App() {
   const handleUpdateEvent = async (updated: EventItem) => {
     const previousEvents = events;
     const previousPublicEvents = publicEvents;
+    const sanitizedUpdated: EventItem = {
+      ...updated,
+      extraDataConfig: sanitizePublicExtraDataConfig(updated.extraDataConfig),
+    };
     setEvents((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
-    setPublicEvents((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
+    setPublicEvents((prev) => prev.map((e) => (e.id === updated.id ? sanitizedUpdated : e)));
     try {
       const res = await api.studio.updateEvent(updated);
-      setEvents((prev) => prev.map((e) => (e.id === updated.id ? res.event : e)));
-      setPublicEvents((prev) => prev.map((e) => (e.id === updated.id ? res.event : e)));
+      syncUpdatedEventWithPublicSanitize(res.event);
     } catch (err) {
       setEvents(previousEvents);
       setPublicEvents(previousPublicEvents);
       notifyError(err, 'Failed to update event in Supabase.');
+      throw err;
+    }
+  };
+
+  const handleUpdateEventPlanning = async (
+    eventId: string,
+    planningConfig: EventPlanningConfig
+  ) => {
+    const previousEvents = events;
+    setEvents((prev) =>
+      prev.map((evt) =>
+        evt.id === eventId
+          ? {
+              ...evt,
+              extraDataConfig: {
+                ...(evt.extraDataConfig ?? { enableGiftTable: false, customFields: [] }),
+                planningConfig,
+              },
+            }
+          : evt
+      )
+    );
+    try {
+      const res = await api.studio.updateEventPlanning(eventId, planningConfig);
+      syncUpdatedEventWithPublicSanitize(res.event);
+    } catch (err) {
+      setEvents(previousEvents);
+      notifyError(err, 'Failed to save event planning in Supabase.');
       throw err;
     }
   };
@@ -2637,6 +2680,7 @@ export default function App() {
               }}
               onOpenEditModal={(evt) => setSelectedEventId(evt.id)}
               onUpdateEvent={handleUpdateEvent}
+              onSavePlanning={handleUpdateEventPlanning}
               onOpenPlans={openBillingScreen}
               onPreviewPublicEvent={(
                 focus?: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls'
@@ -2697,6 +2741,20 @@ export default function App() {
                   onNavigateSettings={() => setActiveScreen('settings')}
                   onOpenPlans={openBillingScreen}
                   onOpenGuide={() => setShowWalkthrough(true)}
+                  onResolveAlert={handleResolveAlert}
+                />
+              )}
+
+              {activeScreen === 'planning' && (
+                <EventPlanningHubScreen
+                  events={safeEvents}
+                  alerts={safeAlerts}
+                  profile={profile}
+                  onUpdateEvent={handleUpdateEvent}
+                  onSavePlanning={handleUpdateEventPlanning}
+                  onOpenCreateModal={openCreateWizard}
+                  onManageEvent={handleOpenWorkspace}
+                  onNavigateSettings={() => setActiveScreen('settings')}
                   onResolveAlert={handleResolveAlert}
                 />
               )}

@@ -30,6 +30,10 @@ import {
   sanitizePollForPublic,
   sanitizePublicExtraDataConfig,
 } from './polls';
+import {
+  createStarterPlanningConfig,
+  sanitizeEventPlanningConfig,
+} from './planningTemplates';
 import type {
   AppRole,
   Attendee,
@@ -1767,11 +1771,32 @@ export async function localFallbackRequest<T>(
     const slugTaken = db.events.some((e) => e.slug === baseSlug);
     const uniqueSlug = slugTaken ? `${baseSlug}-${randomHex(2)}` : baseSlug;
     const uniqueEventId = `evt-${Date.now().toString(36)}-${randomHex(4)}`;
+    const initialExtraDataConfig = event.extraDataConfig
+      ? {
+          ...event.extraDataConfig,
+          planningConfig:
+            event.extraDataConfig.planningConfig ??
+            createStarterPlanningConfig(
+              event.category || 'Events',
+              event.organizer || user.profile.name || 'Organiser',
+              event.venue || 'Main Venue'
+            ),
+        }
+      : {
+          enableGiftTable: false,
+          customFields: [],
+          planningConfig: createStarterPlanningConfig(
+            event.category || 'Events',
+            event.organizer || user.profile.name || 'Organiser',
+            event.venue || 'Main Venue'
+          ),
+        };
     const created: EventItem = {
       ...event,
       id: uniqueEventId,
       slug: uniqueSlug,
       capacity: getEffectiveEventCapacity(event.capacity, user.profile),
+      extraDataConfig: initialExtraDataConfig,
       senderId: ent.allowCustomSenderId ? event.senderId : DEFAULT_SHARED_SENDER_ID,
       messageConfig: ent.allowCustomMessages ? event.messageConfig : undefined,
       qrPassPublished: event.status === 'draft' ? false : Boolean(event.qrPassPublished),
@@ -2123,6 +2148,8 @@ export async function localFallbackRequest<T>(
             attendantLinks:
               patch.extraDataConfig.attendantLinks ?? existing.extraDataConfig?.attendantLinks,
             polls: patch.extraDataConfig.polls ?? existing.extraDataConfig?.polls,
+            planningConfig:
+              patch.extraDataConfig.planningConfig ?? existing.extraDataConfig?.planningConfig,
           }
         : existing.extraDataConfig;
       const updated = {
@@ -2145,6 +2172,34 @@ export async function localFallbackRequest<T>(
       saveDb(db);
       return { ok: true } as T;
     }
+  }
+
+  const studioPlanningMatch = path.match(/^\/studio\/events\/([^/]+)\/planning$/);
+  if (studioPlanningMatch && (method === 'GET' || method === 'PUT')) {
+    requireRoles(user, ['creator', 'organizer']);
+    const eventId = decodeURIComponent(studioPlanningMatch[1]);
+    const idx = db.events.findIndex((e) => e.id === eventId && e.organizerId === user.id);
+    if (idx === -1) throw new LocalApiError('Event not found in studio.', 404);
+    const existing = db.events[idx];
+    if (method === 'GET') {
+      const { organizerId: _org, ...clean } = existing;
+      return {
+        planningConfig: clean.extraDataConfig?.planningConfig ?? null,
+        event: clean,
+      } as T;
+    }
+    const sanitizedPlanning = sanitizeEventPlanningConfig(body, existing.category || 'Events');
+    const updated = {
+      ...existing,
+      extraDataConfig: {
+        ...(existing.extraDataConfig ?? { enableGiftTable: false, customFields: [] }),
+        planningConfig: sanitizedPlanning,
+      },
+    };
+    db.events[idx] = updated;
+    saveDb(db);
+    const { organizerId: _org, ...clean } = updated;
+    return { planningConfig: sanitizedPlanning, event: clean } as T;
   }
 
   const checkinMatch = path.match(/^\/studio\/attendees\/([^/]+)\/checkin$/);

@@ -200,6 +200,8 @@ alter table public.events
   add column if not exists extra_data_config jsonb;
 alter table public.events
   add column if not exists message_config jsonb;
+alter table public.events
+  add column if not exists planning_config jsonb;
 
 create index if not exists idx_events_organizer on public.events(organizer_id);
 create index if not exists idx_events_status on public.events(status);
@@ -800,5 +802,70 @@ end;
 $$;
 
 grant execute on function public.activate_organizer_subscription(text, text) to service_role;
+
+-- 14. Event Preparation & Planning Configurations (Checklists, Budget, Vendors, Crew Roles)
+create table if not exists public.event_planning_configs (
+  event_id text primary key references public.events(id) on delete cascade,
+  organizer_id uuid not null references public.profiles(id) on delete cascade,
+  applied_template_category text not null default 'Events',
+  currency text not null default 'GHS' check (currency in ('GHS', 'USD')),
+  target_budget numeric(12, 2) not null default 0 check (target_budget >= 0),
+  tasks jsonb not null default '[]'::jsonb,
+  budget_items jsonb not null default '[]'::jsonb,
+  vendors jsonb not null default '[]'::jsonb,
+  team_roles jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_event_planning_organizer
+  on public.event_planning_configs(organizer_id);
+
+alter table public.event_planning_configs enable row level security;
+
+drop policy if exists "Organizers can view own event planning" on public.event_planning_configs;
+create policy "Organizers can view own event planning" on public.event_planning_configs
+  for select using (
+    (auth.uid() = organizer_id and public.current_app_role() in ('creator', 'organizer'))
+    or public.is_creator()
+    or exists (
+      select 1 from public.events e
+      where e.id = event_planning_configs.event_id and e.organizer_id = auth.uid()
+    )
+  );
+
+drop policy if exists "Organizers can insert own event planning" on public.event_planning_configs;
+create policy "Organizers can insert own event planning" on public.event_planning_configs
+  for insert with check (
+    public.current_app_role() in ('creator', 'organizer')
+    and (
+      auth.uid() = organizer_id
+      or public.is_creator()
+    )
+    and exists (
+      select 1 from public.events e
+      where e.id = event_planning_configs.event_id and e.organizer_id = auth.uid()
+    )
+  );
+
+drop policy if exists "Organizers can update own event planning" on public.event_planning_configs;
+create policy "Organizers can update own event planning" on public.event_planning_configs
+  for update using (
+    (
+      auth.uid() = organizer_id
+      and public.current_app_role() in ('creator', 'organizer')
+    )
+    or public.is_creator()
+  );
+
+drop policy if exists "Organizers can delete own event planning" on public.event_planning_configs;
+create policy "Organizers can delete own event planning" on public.event_planning_configs
+  for delete using (
+    (
+      auth.uid() = organizer_id
+      and public.current_app_role() in ('creator', 'organizer')
+    )
+    or public.is_creator()
+  );
 
 notify pgrst, 'reload schema';

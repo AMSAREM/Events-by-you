@@ -1548,6 +1548,24 @@ export function createMemoryRouter() {
     }
   });
 
+  router.get('/studio/events/:eventId/planning', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    try {
+      return res.json(memoryStore.getEventPlanning(req.user!.id, req.params.eventId));
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to load event planning.' });
+    }
+  });
+
+  router.put('/studio/events/:eventId/planning', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    try {
+      return res.json(memoryStore.updateEventPlanning(req.user!.id, req.params.eventId, req.body));
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to save event planning.' });
+    }
+  });
+
   router.patch('/studio/events/:id/qr-pass', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
     try {
       const published = Boolean((req.body as { published?: boolean })?.published);

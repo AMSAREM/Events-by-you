@@ -113,7 +113,7 @@ export function sanitizePublicExtraDataConfig(
   extra?: EventExtraDataConfig
 ): EventExtraDataConfig | undefined {
   if (!extra) return extra;
-  const { attendantLinks: _attLinks, polls, ...rest } = extra;
+  const { attendantLinks: _attLinks, planningConfig: _planCfg, polls, ...rest } = extra;
   if (!Array.isArray(polls)) {
     return rest;
   }

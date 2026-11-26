@@ -16,6 +16,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  EventPlanningConfig,
   EventPoll,
   EventPollStatus,
   GiftTableAttendantLink,
@@ -891,6 +892,20 @@ export const api = {
       request<{ event: EventItem }>(
         `/api/studio/events/${encodeURIComponent(event.id)}`,
         { method: 'PATCH', body: JSON.stringify(event) },
+        true
+      ),
+
+    getEventPlanning: (eventId: string) =>
+      request<{ planningConfig: EventPlanningConfig | null; event: EventItem }>(
+        `/api/studio/events/${encodeURIComponent(eventId)}/planning`,
+        {},
+        true
+      ),
+
+    updateEventPlanning: (eventId: string, planningConfig: EventPlanningConfig) =>
+      request<{ planningConfig: EventPlanningConfig; event: EventItem }>(
+        `/api/studio/events/${encodeURIComponent(eventId)}/planning`,
+        { method: 'PUT', body: JSON.stringify(planningConfig) },
         true
       ),
 

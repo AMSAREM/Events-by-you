@@ -8,12 +8,14 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  EventPlanningConfig,
   OrganizerProfile,
   ScheduleBlock,
   SystemAlert,
 } from '../src/types/events.ts';
 import { isSyntheticPhoneEmail } from './phoneAuth.ts';
 import { normalizeHexColor } from '../src/lib/themeColors.ts';
+import { sanitizeEventPlanningConfig } from '../src/lib/planningTemplates.ts';
 
 function cleanEnvValue(raw: string | undefined): string {
   if (!raw) return '';
@@ -206,7 +208,32 @@ export function extractEventShotShootersMap(rawExtraConfig: unknown): Record<str
   return map as Record<string, string>;
 }
 
-export function mapEventRow(row: Record<string, unknown>): EventItem {
+export function mapPlanningRow(
+  row: Record<string, unknown>,
+  fallbackCategory = 'Events'
+): EventPlanningConfig {
+  return sanitizeEventPlanningConfig(
+    {
+      appliedTemplateCategory: row.applied_template_category ?? fallbackCategory,
+      currency: row.currency === 'USD' ? 'USD' : 'GHS',
+      targetBudget: Number(row.target_budget ?? 0),
+      tasks: Array.isArray(row.tasks) ? row.tasks : [],
+      budgetItems: Array.isArray(row.budget_items) ? row.budget_items : [],
+      vendors: Array.isArray(row.vendors) ? row.vendors : [],
+      teamRoles: Array.isArray(row.team_roles) ? row.team_roles : [],
+      updatedAt:
+        typeof row.updated_at === 'string' && row.updated_at.trim()
+          ? row.updated_at
+          : undefined,
+    },
+    fallbackCategory
+  );
+}
+
+export function mapEventRow(
+  row: Record<string, unknown>,
+  planningOverride?: EventPlanningConfig
+): EventItem {
   const rawExtraObj =
     row.extra_data_config && typeof row.extra_data_config === 'object'
       ? ({ ...(row.extra_data_config as Record<string, unknown>) })
@@ -222,9 +249,24 @@ export function mapEventRow(row: Record<string, unknown>): EventItem {
     delete rawExtraObj.__shotShooters;
   }
 
-  const rawExtra = rawExtraObj as EventItem['extraDataConfig'] | undefined;
+  const resolvedPlanning =
+    planningOverride ??
+    (row.planning_config && typeof row.planning_config === 'object'
+      ? sanitizeEventPlanningConfig(row.planning_config, String(row.category ?? 'Events'))
+      : rawExtraObj?.planningConfig && typeof rawExtraObj.planningConfig === 'object'
+        ? sanitizeEventPlanningConfig(rawExtraObj.planningConfig, String(row.category ?? 'Events'))
+        : undefined);
+
+  const mergedExtra =
+    rawExtraObj || resolvedPlanning
+      ? ({
+          ...(rawExtraObj ?? { enableGiftTable: false, customFields: [] }),
+          ...(resolvedPlanning ? { planningConfig: resolvedPlanning } : {}),
+        } as EventItem['extraDataConfig'])
+      : undefined;
+
   const resolvedBrandColor = normalizeHexColor(
-    row.brand_color != null ? String(row.brand_color) : rawExtra?.brandColor
+    row.brand_color != null ? String(row.brand_color) : mergedExtra?.brandColor
   );
 
   return {
@@ -262,7 +304,7 @@ export function mapEventRow(row: Record<string, unknown>): EventItem {
       row.validation_config && typeof row.validation_config === 'object'
         ? (row.validation_config as EventItem['validationConfig'])
         : undefined,
-    extraDataConfig: rawExtra,
+    extraDataConfig: mergedExtra,
     messageConfig:
       row.message_config && typeof row.message_config === 'object'
         ? (row.message_config as EventItem['messageConfig'])

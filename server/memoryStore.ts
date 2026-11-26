@@ -17,6 +17,10 @@ import {
   sanitizePublicExtraDataConfig,
 } from '../src/lib/polls.ts';
 import {
+  createStarterPlanningConfig,
+  sanitizeEventPlanningConfig,
+} from '../src/lib/planningTemplates.ts';
+import {
   PLAN_MRR_USD,
   DEFAULT_SHARED_SENDER_ID,
   STARTER_MAX_ACTIVE_EVENTS,
@@ -50,6 +54,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  EventPlanningConfig,
   EventPoll,
   EventPollStatus,
   GiftTableAttendantLink,
@@ -1383,7 +1388,7 @@ export const memoryStore = {
     if (stored) {
       db.events.set(evt.id, { ...stored, extraDataConfig: updatedEvt.extraDataConfig });
     }
-    const { attendantLinks: _att, ...pubExtra } = updatedEvt.extraDataConfig!;
+    const pubExtra = sanitizePublicExtraDataConfig(updatedEvt.extraDataConfig);
     return {
       gift,
       event: recordedVia === 'public-table' ? { ...updatedEvt, extraDataConfig: pubExtra } : updatedEvt,
@@ -1422,10 +1427,12 @@ export const memoryStore = {
       });
     }
     const { token: _secret, ...safeAttendant } = link;
-    const { attendantLinks: _att, ...pubExtra } = matchedEvt.extraDataConfig ?? {
-      enableGiftTable: true,
-      customFields: [],
-    };
+    const pubExtra = sanitizePublicExtraDataConfig(
+      matchedEvt.extraDataConfig ?? {
+        enableGiftTable: true,
+        customFields: [],
+      }
+    );
     return {
       event: { ...matchedEvt, extraDataConfig: pubExtra },
       attendant: safeAttendant,
@@ -1485,7 +1492,7 @@ export const memoryStore = {
     };
     db.events.set(stored.id, stored);
     const { organizerId: _org, ...clean } = stored;
-    const { attendantLinks: _att, ...pubExtra } = clean.extraDataConfig!;
+    const pubExtra = sanitizePublicExtraDataConfig(clean.extraDataConfig);
     const { token: _secret, ...safeAttendant } = updatedLink;
     return {
       gift,
@@ -1799,11 +1806,33 @@ export const memoryStore = {
       ent.maxAttendeesPerEvent != null
         ? Math.min(Math.max(1, Number(event.capacity) || 50), ent.maxAttendeesPerEvent)
         : Math.max(1, Number(event.capacity) || 100);
+    const initialExtraDataConfig = event.extraDataConfig
+      ? {
+          ...event.extraDataConfig,
+          planningConfig:
+            event.extraDataConfig.planningConfig ??
+            createStarterPlanningConfig(
+              event.category || 'Events',
+              event.organizer || owner?.profile.name || 'Organiser',
+              event.venue || 'Main Venue'
+            ),
+        }
+      : {
+          enableGiftTable: false,
+          customFields: [],
+          planningConfig: createStarterPlanningConfig(
+            event.category || 'Events',
+            event.organizer || owner?.profile.name || 'Organiser',
+            event.venue || 'Main Venue'
+          ),
+        };
+
     const created: EventItem = {
       ...event,
       id: uniqueEventId,
       slug: uniqueSlug,
       capacity: enforcedCapacity,
+      extraDataConfig: initialExtraDataConfig,
       senderId: ent.allowCustomSenderId ? event.senderId : undefined,
       messageConfig: ent.allowCustomMessages
         ? event.messageConfig
@@ -1909,6 +1938,9 @@ export const memoryStore = {
             ...(incomingExtra.polls === undefined && existingExtra?.polls !== undefined
               ? { polls: existingExtra.polls }
               : {}),
+            ...(incomingExtra.planningConfig === undefined && existingExtra?.planningConfig !== undefined
+              ? { planningConfig: existingExtra.planningConfig }
+              : {}),
           };
 
     const next = {
@@ -1939,6 +1971,53 @@ export const memoryStore = {
     db.events.set(eventId, next);
     const { organizerId: _org, ...clean } = next;
     return clean;
+  },
+
+  getEventPlanning(
+    userId: string,
+    eventId: string
+  ): { planningConfig: EventPlanningConfig | null; event: EventItem } {
+    const existing = db.events.get(eventId);
+    if (!existing || existing.organizerId !== userId) {
+      throw Object.assign(new Error('Event not found in studio.'), { status: 404 });
+    }
+    const { organizerId: _org, ...clean } = existing;
+    return {
+      planningConfig: clean.extraDataConfig?.planningConfig ?? null,
+      event: clean,
+    };
+  },
+
+  updateEventPlanning(
+    userId: string,
+    eventId: string,
+    rawPlanning: unknown
+  ): { planningConfig: EventPlanningConfig; event: EventItem } {
+    const existing = db.events.get(eventId);
+    if (!existing || existing.organizerId !== userId) {
+      throw Object.assign(new Error('Event not found in studio.'), { status: 404 });
+    }
+    const sanitizedPlanning = sanitizeEventPlanningConfig(
+      rawPlanning,
+      existing.category || 'Events'
+    );
+    const prevExtra = existing.extraDataConfig ?? {
+      enableGiftTable: false,
+      customFields: [],
+    };
+    const next = {
+      ...existing,
+      extraDataConfig: {
+        ...prevExtra,
+        planningConfig: sanitizedPlanning,
+      },
+    };
+    db.events.set(eventId, next);
+    const { organizerId: _org, ...clean } = next;
+    return {
+      planningConfig: sanitizedPlanning,
+      event: clean,
+    };
   },
 
   publishQrPass(userId: string, eventId: string, published: boolean): EventItem {

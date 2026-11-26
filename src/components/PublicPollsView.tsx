@@ -514,10 +514,15 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
             </span>
             <span className="text-[11px] font-mono text-[#71717A]">/polls</span>
           </div>
-          <div className="p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-center justify-center">
+          <div
+            className={`w-[min(56vw,220px)] ${
+              isFullscreen ? 'lg:w-[min(24vw,280px)]' : 'lg:w-[min(22vw,210px)]'
+            } aspect-square p-3.5 sm:p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-center justify-center`}
+          >
             <DeterministicQrSvg
               value={pollsUrl}
-              size={isFullscreen ? 240 : 196}
+              size={280}
+              className="w-full h-full block"
               label={`Live Polls QR for ${event.title}`}
             />
           </div>
@@ -533,14 +538,14 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
             <button
               type="button"
               onClick={() => void handleSharePollsLink()}
-              className="h-9 px-3 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B]"
+              className="min-h-[42px] px-3 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B]"
             >
               {copiedLink ? 'Copied!' : 'Copy Link'}
             </button>
             <button
               type="button"
               onClick={() => downloadQrSvg(pollsUrl, `${event.slug}-polls-qr.svg`)}
-              className="h-9 px-3 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-1"
+              className="min-h-[42px] px-3 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-1"
             >
               <Download className="w-3.5 h-3.5" />
               <span>Save QR</span>

@@ -936,6 +936,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               featherEdge="white"
               featherBreakpoint="md"
               showFooter={false}
+              heroHeightClass="h-[220px] sm:h-[260px] md:h-auto md:min-h-0 md:flex-1"
               className="rounded-none border-0 shadow-none flex-1"
             />
           </div>
@@ -1420,13 +1421,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               type="button"
               onClick={() => setShowCheckinModal(false)}
               aria-label="Close check-in QR screen"
-              className="fixed lg:absolute top-[max(0.875rem,env(safe-area-inset-top))] right-[max(0.875rem,env(safe-area-inset-right))] z-30 h-9 sm:h-10 px-3.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] border border-[#E5E5EA] inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-[#0B0B0B] shadow-md transition-colors"
+              className="fixed lg:absolute top-[max(0.875rem,env(safe-area-inset-top))] right-[max(0.875rem,env(safe-area-inset-right))] z-30 min-h-[40px] px-3.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] border border-[#E5E5EA] inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-[#0B0B0B] shadow-md transition-colors"
             >
               <X className="w-4 h-4" />
               <span>Close</span>
             </button>
 
-            <div className="lg:col-span-6 flex flex-col min-h-[280px] sm:min-h-[360px] lg:h-dvh min-w-0 bg-white">
+            <div className="lg:col-span-6 flex flex-col lg:h-dvh min-w-0 bg-white">
               <CheckInFlyerSidePanel
                 event={selectedEvent}
                 variant="full"
@@ -1434,12 +1435,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 showFooter={false}
                 isFullscreen={isFullscreen}
                 onToggleFullscreen={toggleFullscreen}
+                heroHeightClass="h-[24dvh] min-h-[168px] max-h-[230px] sm:h-[28dvh] sm:max-h-[280px] lg:h-auto lg:max-h-none lg:min-h-0 lg:flex-1"
                 topBarRightPaddingClass="pr-24 lg:pr-0"
                 className="rounded-none border-0 shadow-none flex-1"
               />
             </div>
 
-            <div className="lg:col-span-6 p-4 sm:p-6 lg:p-6 xl:p-8 pb-[max(1.25rem,env(safe-area-inset-bottom))] gap-3 sm:gap-4 flex flex-col justify-between bg-white lg:h-dvh min-w-0 overflow-x-hidden lg:overflow-y-auto relative z-10">
+            <div className="lg:col-span-6 p-4 sm:p-6 lg:p-6 xl:p-8 pb-[max(1.25rem,env(safe-area-inset-bottom))] gap-3 sm:gap-4 flex flex-col justify-between bg-white lg:h-dvh min-w-0 min-h-0 overflow-x-hidden lg:overflow-y-auto relative z-10">
               <div className="space-y-2 pr-20 sm:pr-24 shrink-0 min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[10px] font-bold uppercase tracking-wider">
@@ -1450,7 +1452,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => setQrModalMode('checkin')}
-                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${
+                      className={`min-h-[34px] px-3.5 py-1.5 rounded-full text-[11px] font-semibold transition-colors ${
                         qrModalMode === 'checkin'
                           ? 'bg-[#0B0B0B] text-white'
                           : 'text-[#71717A] hover:text-[#0B0B0B]'
@@ -1461,7 +1463,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => setQrModalMode('walkin')}
-                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${
+                      className={`min-h-[34px] px-3.5 py-1.5 rounded-full text-[11px] font-semibold transition-colors ${
                         qrModalMode === 'walkin'
                           ? 'bg-[#0B0B0B] text-white'
                           : 'text-[#71717A] hover:text-[#0B0B0B]'
@@ -1480,7 +1482,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               </div>
 
               <div className="flex-1 min-h-0 w-full bg-[#F5F5F7] rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 flex flex-col items-center justify-between text-center gap-2.5 sm:gap-3 border border-[#E5E5EA] overflow-hidden min-w-0">
-                <div className="w-full h-[min(66vw,300px)] sm:h-[min(54vw,380px)] lg:h-auto lg:flex-1 lg:min-h-0 flex items-center justify-center qr-stage-box min-w-0">
+                <div className="w-full flex-1 min-h-[190px] sm:min-h-[240px] lg:min-h-[200px] flex items-center justify-center qr-stage-box min-w-0">
                   <div className="qr-stage-square p-3 sm:p-4 xl:p-5 bg-white rounded-2xl sm:rounded-3xl shadow-md border border-[#E5E5EA] flex items-center justify-center box-border">
                     <DeterministicQrSvg
                       value={qrModalMode === 'walkin' ? walkInRegistrationUrl : checkinKioskUrl}
@@ -1785,18 +1787,16 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
         className={`flex-1 w-full flex flex-col ${
           isFullscreen
             ? 'pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]'
-            : isStandaloneSideLayout
-              ? 'pt-[4.5rem] sm:pt-20 pb-8'
-              : 'pt-[4.5rem] sm:pt-20 pb-10'
+            : 'pt-[calc(4rem+env(safe-area-inset-top))] sm:pt-[calc(4.75rem+env(safe-area-inset-top))] pb-[max(1.75rem,env(safe-area-inset-bottom))]'
         } ${
-          isStandaloneSideLayout || standalonePolls ? 'px-4 sm:px-6 lg:px-8' : 'px-4 sm:px-6'
+          isStandaloneSideLayout || standalonePolls ? 'px-3 sm:px-6 lg:px-8' : 'px-3 sm:px-6'
         }`}
       >
         <div
           className={`mx-auto flex flex-col ${
             isStandaloneSideLayout
-              ? 'w-full max-w-none flex-1 space-y-5'
-              : standalonePolls
+              ? 'w-full max-w-none flex-1 space-y-4 sm:space-y-5'
+              : standalonePolls || Boolean(issuedPass)
                 ? 'w-full max-w-6xl space-y-5'
                 : 'w-full max-w-4xl space-y-6'
           }`}
@@ -1811,25 +1811,25 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             standalonePolls ? (
               <div className="space-y-5">
                 {!isFullscreen && (
-                  <div className="lg:hidden flex items-center justify-between gap-1 bg-white rounded-full p-1.5 shadow-sm border border-[#E5E5EA] overflow-x-auto">
+                  <div className="lg:hidden flex items-center gap-1 bg-white rounded-full p-1 shadow-sm border border-[#E5E5EA] overflow-x-auto">
                     <button
                       type="button"
                       onClick={() => switchScreenMode('top')}
-                      className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                     >
                       Invitation
                     </button>
                     <button
                       type="button"
                       onClick={() => switchScreenMode('checkin')}
-                      className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                     >
                       Check-In
                     </button>
                     <button
                       type="button"
                       onClick={() => switchScreenMode('walkin')}
-                      className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                     >
                       Walk-In
                     </button>
@@ -1837,7 +1837,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => switchScreenMode('gifts')}
-                        className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                        className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                       >
                         Gift Table
                       </button>
@@ -1845,7 +1845,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => switchScreenMode('polls')}
-                      className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white whitespace-nowrap"
+                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white whitespace-nowrap shrink-0"
                     >
                       Polls
                     </button>
@@ -1863,32 +1863,32 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               <>
                 {/* Mobile & Tablet View Mode Switcher (hidden for Gift Desk staff so they stay inside the Gift Table terminal) */}
                 {!isGiftDeskPortal && (
-                  <div className="lg:hidden flex items-center justify-between gap-1 bg-white rounded-full p-1.5 shadow-sm border border-[#E5E5EA] overflow-x-auto">
+                  <div className="lg:hidden flex items-center gap-1 bg-white rounded-full p-1 shadow-sm border border-[#E5E5EA] overflow-x-auto">
                     <button
                       type="button"
                       onClick={() => switchScreenMode('top')}
-                      className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                     >
                       Invitation
                     </button>
                     <button
                       type="button"
                       onClick={() => switchScreenMode('checkin')}
-                      className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                     >
                       Check-In
                     </button>
                     <button
                       type="button"
                       onClick={() => switchScreenMode('walkin')}
-                      className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                     >
                       Walk-In
                     </button>
                     <button
                       type="button"
                       onClick={() => switchScreenMode('gifts')}
-                      className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white whitespace-nowrap"
+                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white whitespace-nowrap shrink-0"
                     >
                       Gift Table
                     </button>
@@ -1896,7 +1896,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => switchScreenMode('polls')}
-                        className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                        className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                       >
                         Polls
                       </button>
@@ -2370,18 +2370,18 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               <div className="flex-1 flex flex-col gap-5">
                 {/* Mobile & Tablet View Mode Switcher */}
                 {!isFullscreen && (
-                  <div className="lg:hidden flex items-center justify-between gap-1 bg-white rounded-full p-1.5 shadow-sm border border-[#E5E5EA] overflow-x-auto">
+                  <div className="lg:hidden flex items-center gap-1 bg-white rounded-full p-1 shadow-sm border border-[#E5E5EA] overflow-x-auto">
                     <button
                       type="button"
                       onClick={() => switchScreenMode('top')}
-                      className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                     >
                       Invitation
                     </button>
                     <button
                       type="button"
                       onClick={() => switchScreenMode('checkin')}
-                      className={`flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold whitespace-nowrap ${
+                      className={`min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 ${
                         standaloneCheckin ? 'bg-[#0B0B0B] text-white' : 'text-[#71717A]'
                       }`}
                     >
@@ -2390,7 +2390,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => switchScreenMode('walkin')}
-                      className={`flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold whitespace-nowrap ${
+                      className={`min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 ${
                         standaloneWalkin ? 'bg-[#0B0B0B] text-white' : 'text-[#71717A]'
                       }`}
                     >
@@ -2400,7 +2400,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => switchScreenMode('gifts')}
-                        className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                        className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                       >
                         Gift Table
                       </button>
@@ -2409,7 +2409,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => switchScreenMode('polls')}
-                        className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                        className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                       >
                         Polls
                       </button>
@@ -2418,7 +2418,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 )}
 
                 {/* Full-Screen Side-by-Side Check-In / Walk-In Kiosk: Feathered Event Flyer + Registration / Lookup */}
-                <div className="flex-1 bg-white rounded-[32px] shadow-md border border-[#E5E5EA]/70 overflow-hidden grid grid-cols-1 lg:grid-cols-12 items-stretch">
+                <div
+                  className={`flex-1 bg-white rounded-[28px] sm:rounded-[32px] shadow-md border border-[#E5E5EA]/70 overflow-hidden grid grid-cols-1 lg:grid-cols-12 items-stretch ${
+                    isFullscreen ? 'lg:min-h-[calc(100dvh-2rem)]' : 'lg:min-h-[calc(100dvh-7.25rem)]'
+                  }`}
+                >
                   <div className="lg:col-span-5 xl:col-span-4 flex flex-col bg-white">
                     <CheckInFlyerSidePanel
                       event={selectedEvent}
@@ -2428,6 +2432,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       showFooter={false}
                       isFullscreen={isFullscreen}
                       onToggleFullscreen={toggleFullscreen}
+                      heroHeightClass="h-[25dvh] min-h-[180px] max-h-[240px] sm:h-[280px] sm:max-h-[300px] lg:h-auto lg:max-h-none lg:min-h-0 lg:flex-1"
                       className="rounded-none border-0 shadow-none flex-1"
                     />
                   </div>
@@ -2503,25 +2508,25 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             ) : (
             <>
               {/* Mobile & Tablet View Mode Switcher (matches hidden lg:flex in header) */}
-              <div className="lg:hidden flex items-center justify-between gap-1 bg-white rounded-full p-1.5 shadow-sm border border-[#E5E5EA] overflow-x-auto">
+              <div className="lg:hidden flex items-center gap-1 bg-white rounded-full p-1 shadow-sm border border-[#E5E5EA] overflow-x-auto">
                 <button
                   type="button"
                   onClick={() => switchScreenMode('top')}
-                  className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white whitespace-nowrap"
+                  className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white whitespace-nowrap shrink-0"
                 >
                   Invitation
                 </button>
                 <button
                   type="button"
                   onClick={() => switchScreenMode('checkin')}
-                  className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                  className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                 >
                   Check-In
                 </button>
                 <button
                   type="button"
                   onClick={() => switchScreenMode('walkin')}
-                  className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                  className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                 >
                   Walk-In
                 </button>
@@ -2529,7 +2534,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => switchScreenMode('gifts')}
-                    className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                    className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                   >
                     Gift Table
                   </button>
@@ -2538,7 +2543,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => switchScreenMode('polls')}
-                    className="flex-1 py-1.5 px-2.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap"
+                    className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                   >
                     Polls
                   </button>
@@ -2742,12 +2747,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               </section>
 
               {/* Prominent Check-In & QR Code Kiosk Desk Card */}
-              <section className="bg-[#0B0B0B] text-white rounded-[28px] p-5 sm:p-6 shadow-md flex flex-col sm:flex-row items-center justify-between gap-5">
+              <section className="bg-[#0B0B0B] text-white rounded-[28px] p-5 sm:p-6 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-5">
                 <div className="flex items-center gap-4 min-w-0">
                   <div className="p-2.5 bg-white rounded-2xl shrink-0">
                     <DeterministicQrSvg
                       value={checkinKioskUrl}
-                      size={76}
+                      size={120}
+                      className="w-[76px] h-[76px] sm:w-[88px] sm:h-[88px] block"
                       label={`Gate QR for ${selectedEvent.title}`}
                     />
                   </div>
@@ -2764,35 +2770,35 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     </p>
                   </div>
                 </div>
-                <div className="flex flex-col sm:items-end gap-2 w-full sm:w-auto shrink-0">
-                  <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+                <div className="flex flex-col md:items-end gap-2 w-full md:w-auto shrink-0">
+                  <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2 w-full md:w-auto">
                     <button
                       type="button"
                       onClick={() => switchScreenMode('checkin')}
-                      className="flex-1 sm:flex-initial h-10 px-4 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                      className="min-h-[42px] px-4 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
                     >
-                      <QrCode className="w-4 h-4" />
+                      <QrCode className="w-4 h-4 shrink-0" />
                       <span>Check-In Screen</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => switchScreenMode('walkin')}
-                      className="flex-1 sm:flex-initial h-10 px-4 rounded-full bg-white/15 hover:bg-white/25 text-white border border-white/20 text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                      className="min-h-[42px] px-4 rounded-full bg-white/15 hover:bg-white/25 text-white border border-white/20 text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
                     >
-                      <UserPlus className="w-4 h-4" />
+                      <UserPlus className="w-4 h-4 shrink-0" />
                       <span>Walk-In Link</span>
                     </button>
                   </div>
-                  <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <div className="grid grid-cols-2 md:flex items-center gap-2 w-full md:w-auto">
                     <button
                       type="button"
                       onClick={() => {
                         setQrModalMode('checkin');
                         setShowCheckinModal(true);
                       }}
-                      className="flex-1 sm:flex-initial h-9 px-3.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                      className="min-h-[40px] px-3.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
                     >
-                      <QrCode className="w-3.5 h-3.5" />
+                      <QrCode className="w-3.5 h-3.5 shrink-0" />
                       <span>QR Kiosk</span>
                     </button>
                     <button
@@ -2800,9 +2806,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       onClick={() =>
                         downloadQrSvg(checkinKioskUrl, `${selectedEvent.slug}-checkin-qr.svg`)
                       }
-                      className="flex-1 sm:flex-initial h-9 px-3.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                      className="min-h-[40px] px-3.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
                     >
-                      <Download className="w-3.5 h-3.5" />
+                      <Download className="w-3.5 h-3.5 shrink-0" />
                       <span>Save QR</span>
                     </button>
                   </div>
@@ -3006,7 +3012,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             )
           ) : (
             /* SCREEN 2: TICKET CONFIRMATION & DIGITAL PASS SCREEN (with Feathered Event Flyer / Logo Side Panel) */
-            <div className="flex-1 bg-white rounded-[32px] shadow-md border border-[#E5E5EA]/70 overflow-hidden grid grid-cols-1 lg:grid-cols-12 items-stretch">
+            <div className="flex-1 bg-white rounded-[28px] sm:rounded-[32px] shadow-md border border-[#E5E5EA]/70 overflow-hidden grid grid-cols-1 lg:grid-cols-12 items-stretch">
               <div className={isStandaloneSideLayout ? 'lg:col-span-5 xl:col-span-4 flex flex-col bg-white' : 'lg:col-span-5 flex flex-col bg-white'}>
                 <CheckInFlyerSidePanel
                   event={selectedEvent}
@@ -3016,6 +3022,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   showFooter={false}
                   isFullscreen={isFullscreen}
                   onToggleFullscreen={toggleFullscreen}
+                  heroHeightClass="h-[24dvh] min-h-[180px] max-h-[240px] sm:h-[280px] lg:h-auto lg:max-h-none lg:min-h-0 lg:flex-1"
                   className="rounded-none border-0 shadow-none flex-1"
                 />
               </div>
@@ -3034,7 +3041,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   <span className="w-2 h-2 rounded-full bg-[#0B0B0B]" />
                   Registration Confirmed
                 </div>
-                <h2 className="font-display text-[28px] leading-[34px] font-bold text-[#0B0B0B] tracking-[-0.02em] mb-1">
+                <h2 className="font-display text-[26px] sm:text-[28px] leading-[32px] sm:leading-[34px] font-bold text-[#0B0B0B] tracking-[-0.02em] mb-1">
                   You&apos;re in, {firstName}!
                 </h2>
                 <p className="text-[13px] text-[#71717A]">
@@ -3043,7 +3050,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               </div>
 
               {/* Digital Pass / Ticket Card */}
-              <div className="relative bg-white rounded-[32px] p-6 shadow-sm overflow-hidden mb-6">
+              <div className="relative bg-white rounded-[28px] sm:rounded-[32px] p-5 sm:p-6 border border-[#E5E5EA] overflow-hidden mb-6">
                 <div className="flex items-start justify-between gap-2 mb-4">
                   <div>
                     <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
@@ -3063,7 +3070,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                         </span>
                       )}
                     </div>
-                    <h3 className="font-display text-[22px] leading-7 font-bold text-[#0B0B0B] tracking-[-0.02em]">
+                    <h3 className="font-display text-[20px] sm:text-[22px] leading-7 font-bold text-[#0B0B0B] tracking-[-0.02em]">
                       {selectedEvent.title}
                     </h3>
                   </div>
@@ -3097,15 +3104,16 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 </div>
 
                 {/* Unique Deterministic QR Code Section */}
-                <div className="relative flex flex-col items-center justify-center p-4 bg-[#F9F9FB] rounded-2xl mb-4">
-                  <div className="relative p-3 bg-white rounded-2xl shadow-sm border border-[#E5E5EA]">
+                <div className="relative flex flex-col items-center justify-center p-4 sm:p-5 bg-[#F9F9FB] rounded-2xl mb-4">
+                  <div className="relative w-[min(58vw,220px)] sm:w-[220px] aspect-square p-3 bg-white rounded-2xl shadow-sm border border-[#E5E5EA] flex items-center justify-center">
                     <DeterministicQrSvg
                       value={`${issuedPass.ticketCode}|${selectedEvent.slug}|${issuedPass.phone}`}
-                      size={156}
+                      size={260}
+                      className="w-full h-full block"
                       label={`Check-In QR Pass for ${issuedPass.name}`}
                     />
                   </div>
-                  <p className="text-[11px] text-[#71717A] mt-2 tracking-wide uppercase">
+                  <p className="text-[11px] text-[#71717A] mt-2.5 tracking-wide uppercase">
                     Scan at gate for instant badge check-in
                   </p>
                   <button
@@ -3116,9 +3124,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                         `${selectedEvent.slug}-${issuedPass.ticketCode.replace(/[^A-Za-z0-9-]/g, '')}.svg`
                       )
                     }
-                    className="mt-2 px-3.5 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5"
+                    className="mt-2.5 min-h-[40px] px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5"
                   >
-                    <Download className="w-3 h-3" />
+                    <Download className="w-3.5 h-3.5" />
                     Download Personal QR Pass (.svg)
                   </button>
                 </div>

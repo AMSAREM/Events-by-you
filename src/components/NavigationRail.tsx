@@ -4,6 +4,7 @@ import {
   CalendarDays,
   CalendarPlus,
   Camera,
+  ClipboardCheck,
   CreditCard,
   Gift,
   Globe,
@@ -34,6 +35,7 @@ interface NavigationRailProps {
 
 const NAV_ITEMS: { id: NavScreen; label: string; shortLabel: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'overview', label: 'Overview', shortLabel: 'Home', icon: Home },
+  { id: 'planning', label: 'Event Planning', shortLabel: 'Plan', icon: ClipboardCheck },
   { id: 'checkin', label: 'Check-In & QR Scanner', shortLabel: 'Scan', icon: QrCode },
   { id: 'camera', label: 'Disposable Camera', shortLabel: 'Camera', icon: Camera },
   { id: 'gifts', label: 'Gift Table', shortLabel: 'Gifts', icon: Gift },
@@ -58,7 +60,7 @@ export const NavigationRail: React.FC<NavigationRailProps> = ({
 
   const visibleItems = NAV_ITEMS.filter((item) => {
     if (item.id === 'console' && userRole !== 'creator') return false;
-    if (item.id === 'billing' && userRole === 'gate_staff') return false;
+    if ((item.id === 'billing' || item.id === 'planning') && userRole === 'gate_staff') return false;
     return true;
   });
 
@@ -283,6 +285,24 @@ export const NavigationRail: React.FC<NavigationRailProps> = ({
                   <p className="text-[10px] text-zinc-400 truncate">Manage RSVPs</p>
                 </div>
               </button>
+
+              {userRole !== 'gate_staff' && (
+                <button
+                  type="button"
+                  onClick={() => handleMobileNavigate('planning')}
+                  className="col-span-2 flex items-center gap-2.5 p-3 rounded-2xl bg-white/8 hover:bg-white/14 text-white text-left transition-colors"
+                >
+                  <div className="w-8 h-8 rounded-xl bg-white/12 flex items-center justify-center shrink-0">
+                    <ClipboardCheck className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold truncate">Event Planning</p>
+                    <p className="text-[10px] text-zinc-400 truncate">
+                      Checklists, budget, vendors &amp; ushers
+                    </p>
+                  </div>
+                </button>
+              )}
 
               <button
                 type="button"

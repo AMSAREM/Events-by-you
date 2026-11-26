@@ -683,13 +683,14 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                   featherEdge="white"
                   featherBreakpoint="md"
                   showFooter={false}
+                  heroHeightClass="h-[190px] sm:h-[220px] md:h-auto md:min-h-0 md:flex-1"
                   className="rounded-none border-0 shadow-none flex-1"
                 />
               </div>
             )}
-            <div className={`${selectedWalkInEvent ? 'md:col-span-7' : 'md:col-span-12'} p-6 bg-white relative z-10`}>
-            <div className="flex items-center justify-between mb-4">
-              <div>
+            <div className={`${selectedWalkInEvent ? 'md:col-span-7' : 'md:col-span-12'} p-4 sm:p-6 bg-white relative z-10`}>
+            <div className="flex items-start justify-between gap-2 mb-4">
+              <div className="min-w-0">
                 <h2 id="walkin-modal-title" className="text-lg font-bold text-[#0B0B0B]">
                   Register Walk-In Guest
                 </h2>
@@ -701,7 +702,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                 type="button"
                 onClick={() => setWalkInOpen(false)}
                 aria-label="Close walk-in modal"
-                className="w-8 h-8 rounded-full border border-[#E5E5EA] flex items-center justify-center text-[#0B0B0B] hover:bg-[#F5F5F7]"
+                className="w-10 h-10 shrink-0 rounded-full border border-[#E5E5EA] flex items-center justify-center text-[#0B0B0B] hover:bg-[#F5F5F7]"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -809,7 +810,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                 </select>
               </div>
 
-              <label className="flex items-center gap-2.5 pt-1 cursor-pointer select-none">
+              <label className="flex items-center gap-2.5 pt-1 cursor-pointer select-none min-h-[36px]">
                 <input
                   type="checkbox"
                   checked={walkInCheckedIn}
@@ -822,7 +823,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
               </label>
 
               {selectedWalkInEvent && (
-                <div className="p-3 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="p-3 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                   <div className="min-w-0">
                     <p className="text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1">
                       <Link2 className="w-3 h-3" />
@@ -832,7 +833,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                       {buildWalkInRegistrationUrl(selectedWalkInEvent.slug || selectedWalkInEvent.id)}
                     </p>
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="grid grid-cols-2 sm:flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
                       onClick={() => {
@@ -844,9 +845,9 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                         }
                         showToast('Walk-in registration link copied');
                       }}
-                      className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
+                      className="min-h-[38px] px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1 whitespace-nowrap"
                     >
-                      <Copy className="w-3 h-3" />
+                      <Copy className="w-3 h-3 shrink-0" />
                       Copy Link
                     </button>
                     <button
@@ -861,9 +862,9 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                         );
                         showToast('Walk-in QR downloaded');
                       }}
-                      className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
+                      className="min-h-[38px] px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1 whitespace-nowrap"
                     >
-                      <Download className="w-3 h-3" />
+                      <Download className="w-3 h-3 shrink-0" />
                       Walk-In QR
                     </button>
                   </div>

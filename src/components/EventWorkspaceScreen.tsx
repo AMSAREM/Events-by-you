@@ -6,6 +6,7 @@ import {
   Calendar,
   Camera,
   Check,
+  ClipboardCheck,
   Clock,
   Copy,
   Download,
@@ -33,6 +34,7 @@ import {
   Attendee,
   AttendeeTier,
   EventItem,
+  EventPlanningConfig,
   EventPoll,
   EventPollStatus,
   GiftTableAttendantLink,
@@ -72,12 +74,15 @@ import { CheckInFlyerSidePanel } from './CheckInFlyerSidePanel';
 import { resolveEventBrandColor } from '../lib/themeColors';
 import { GiftAttendantLinksCard } from './GiftAttendantLinksCard';
 import { EventPollsManager } from './EventPollsManager';
+import { EventPlanningPanel } from './EventPlanningPanel';
+import { computeEventReadiness } from '../lib/planningTemplates';
 import { MonochromePoster, SplineChart } from './MonochromeArtwork';
 import { ThemeColorPicker } from './ThemeColorPicker';
 import { TopUtilityBar } from './TopUtilityBar';
 
 type WorkspaceTab =
   | 'overview'
+  | 'planning'
   | 'program'
   | 'messages'
   | 'attendees'
@@ -96,6 +101,7 @@ interface EventWorkspaceScreenProps {
   onBackToEvents: () => void;
   onOpenEditModal: (event: EventItem) => void;
   onUpdateEvent?: (updated: EventItem) => Promise<void> | void;
+  onSavePlanning?: (eventId: string, planningConfig: EventPlanningConfig) => Promise<void> | void;
   onOpenPlans: () => void;
   onPreviewPublicEvent: (focus?: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls') => void;
   onToggleCheckIn: (attendeeId: string) => void;
@@ -177,6 +183,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   onBackToEvents,
   onOpenEditModal,
   onUpdateEvent,
+  onSavePlanning,
   onOpenPlans,
   onPreviewPublicEvent,
   onToggleCheckIn,
@@ -448,6 +455,11 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const pollsCount = Array.isArray(event.extraDataConfig?.polls)
     ? event.extraDataConfig!.polls!.length
     : 0;
+  const planningReadiness = useMemo(() => computeEventReadiness(event), [event]);
+  const planningPendingCount = Math.max(
+    0,
+    planningReadiness.totalTasks - planningReadiness.completedTasks
+  );
 
   const velocitySeries = useMemo(
     () => computeVelocitySeries([event], eventAttendees, timeRange),
@@ -935,6 +947,16 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
         {(
           [
             { id: 'overview', label: 'Overview & Details' },
+            ...(isEventCreator
+              ? [
+                  {
+                    id: 'planning' as const,
+                    label: 'Planning',
+                    icon: ClipboardCheck,
+                    count: planningPendingCount,
+                  },
+                ]
+              : []),
             { id: 'program', label: 'Program Builder', icon: LayoutGrid },
             { id: 'messages', label: 'Message Templates' },
             { id: 'attendees', label: 'Attendees', count: totalRegistered },
@@ -972,7 +994,16 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
         })}
       </div>
 
-      {/* Main Multi-Zone Content Grid */}
+      {activeTab === 'planning' && isEventCreator ? (
+        <EventPlanningPanel
+          event={event}
+          organizerName={profile.name || profile.studio || 'Organiser'}
+          onUpdateEvent={onUpdateEvent}
+          onSavePlanning={onSavePlanning}
+          canEdit={isEventCreator}
+        />
+      ) : (
+      /* Main Multi-Zone Content Grid */
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left / Primary Column (Span 8) */}
         <div className="lg:col-span-8 flex flex-col gap-6 min-w-0">
@@ -1321,6 +1352,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       featherEdge="white"
                       featherBreakpoint="md"
                       showFooter={false}
+                      heroHeightClass="h-[190px] sm:h-[220px] md:h-auto md:min-h-0 md:flex-1"
                       className="rounded-none border-0 shadow-none flex-1"
                     />
                   </div>
@@ -2474,10 +2506,11 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
 
             {isEventCreator && isQrPassPublished ? (
               <>
-                <div className="p-4 bg-white rounded-2xl shadow-sm flex items-center justify-center border border-[#E5E5EA]">
+                <div className="p-3.5 sm:p-4 bg-white rounded-2xl shadow-sm flex items-center justify-center border border-[#E5E5EA] w-[min(50vw,184px)] sm:w-[184px] aspect-square">
                   <DeterministicQrSvg
                     value={checkinKioskUrl}
-                    size={160}
+                    size={220}
+                    className="w-full h-full block"
                     label={`Kiosk QR for ${event.title}`}
                   />
                 </div>
@@ -2495,7 +2528,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   <button
                     type="button"
                     onClick={handleDownloadQrSvg}
-                    className="py-2 px-3 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-xs font-semibold shadow-sm"
+                    className="min-h-[40px] py-2 px-3 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-xs font-semibold shadow-sm"
                   >
                     Check-In SVG
                   </button>
@@ -2505,7 +2538,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       downloadQrSvg(walkInRegistrationUrl, `${event.slug}-walkin-qr.svg`);
                       triggerToast('Walk-In registration SVG QR downloaded');
                     }}
-                    className="py-2 px-3 rounded-full bg-[#0B0B0B] text-white hover:opacity-90 transition-all text-xs font-semibold shadow-sm inline-flex items-center justify-center gap-1.5"
+                    className="min-h-[40px] py-2 px-3 rounded-full bg-[#0B0B0B] text-white hover:opacity-90 transition-all text-xs font-semibold shadow-sm inline-flex items-center justify-center gap-1.5"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>Walk-In SVG</span>
@@ -2519,7 +2552,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     }
                     triggerToast('Walk-In registration link copied');
                   }}
-                  className="w-full py-2 px-3 rounded-full bg-white text-[#0B0B0B] border border-[#E5E5EA] hover:border-[#0B0B0B] transition-colors text-[11px] font-semibold inline-flex items-center justify-center gap-1.5"
+                  className="w-full min-h-[40px] py-2 px-3 rounded-full bg-white text-[#0B0B0B] border border-[#E5E5EA] hover:border-[#0B0B0B] transition-colors text-[11px] font-semibold inline-flex items-center justify-center gap-1.5"
                 >
                   <Link2 className="w-3.5 h-3.5" />
                   <span>Copy Walk-In Registration Link</span>
@@ -2559,6 +2592,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           </section>
         </div>
       </div>
+      )}
     </div>
   );
 };

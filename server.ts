@@ -22,6 +22,7 @@ import {
   mapCreatorAppLogRow,
   mapCreatorAppRow,
   mapEventRow,
+  mapPlanningRow,
   mapProfileRow,
   mapRollSettingsRow,
   mapScheduleRow,
@@ -55,6 +56,7 @@ import type {
   DisposableRollSettings,
   DisposableShot,
   EventItem,
+  EventPlanningConfig,
   EventPoll,
   EventPollStatus,
   GiftTableAttendantLink,
@@ -97,6 +99,10 @@ import {
   sanitizePollForPublic,
   sanitizePublicExtraDataConfig,
 } from './src/lib/polls.ts';
+import {
+  createStarterPlanningConfig,
+  sanitizeEventPlanningConfig,
+} from './src/lib/planningTemplates.ts';
 import {
   resolveAuthoritativeSmsBundle,
   validateReceiptReference,
@@ -211,13 +217,22 @@ function isMissingColumnError(err: { code?: string; message?: string } | null | 
 
 function stripOptionalEventColumns<T extends Record<string, unknown>>(
   row: T
-): Omit<T, 'qr_pass_published' | 'design_theme' | 'validation_config' | 'extra_data_config' | 'message_config'> {
+): Omit<
+  T,
+  | 'qr_pass_published'
+  | 'design_theme'
+  | 'validation_config'
+  | 'extra_data_config'
+  | 'message_config'
+  | 'planning_config'
+> {
   const {
     qr_pass_published: _q,
     design_theme: _d,
     validation_config: _v,
     extra_data_config: _e,
     message_config: _m,
+    planning_config: _p,
     ...legacy
   } = row;
   return legacy;
@@ -258,6 +273,9 @@ function withEmbeddedMessageConfig(
     }
     if ((extraDataConfig as EventItem['extraDataConfig'])?.polls === undefined && existingObj.polls !== undefined) {
       base.polls = existingObj.polls;
+    }
+    if ((extraDataConfig as EventItem['extraDataConfig'])?.planningConfig === undefined && existingObj.planningConfig !== undefined) {
+      base.planningConfig = existingObj.planningConfig;
     }
   }
   if (messageConfig && typeof messageConfig === 'object') {
@@ -859,6 +877,33 @@ async function requireSupabaseAuth(req: AuthedRequest, res: Response, next: Next
   }
 }
 
+async function syncEventPlanningRow(
+  client: SupabaseClient,
+  eventId: string,
+  organizerId: string,
+  planning: EventPlanningConfig
+): Promise<void> {
+  const nowIso = planning.updatedAt || new Date().toISOString();
+  const { error } = await client.from('event_planning_configs').upsert(
+    {
+      event_id: eventId,
+      organizer_id: organizerId,
+      applied_template_category: planning.appliedTemplateCategory || 'Events',
+      currency: planning.currency === 'USD' ? 'USD' : 'GHS',
+      target_budget: Number(planning.targetBudget) || 0,
+      tasks: planning.tasks ?? [],
+      budget_items: planning.budgetItems ?? [],
+      vendors: planning.vendors ?? [],
+      team_roles: planning.teamRoles ?? [],
+      updated_at: nowIso,
+    },
+    { onConflict: 'event_id' }
+  );
+  if (error && !isMissingTableError(error)) {
+    throw new Error(error.message);
+  }
+}
+
 async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
   const profile = await ensureProfileRow(client, user);
 
@@ -872,15 +917,17 @@ async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
 
   const attendeeMetaByEvent = new Map<string, ReturnType<typeof extractEventAttendeeMetaMap>>();
   const shotShootersByEvent = new Map<string, Record<string, string>>();
+  const eventCategoryById = new Map<string, string>();
   for (const row of eventRows ?? []) {
     const rec = row as Record<string, unknown>;
     const evtId = String(rec.id);
     attendeeMetaByEvent.set(evtId, extractEventAttendeeMetaMap(rec.extra_data_config));
     shotShootersByEvent.set(evtId, extractEventShotShootersMap(rec.extra_data_config));
+    eventCategoryById.set(evtId, String(rec.category ?? 'Events'));
   }
 
-  const events = (eventRows ?? []).map((r) => mapEventRow(r as Record<string, unknown>));
-  const eventIds = events.map((e) => e.id);
+  const rawEventRows = eventRows ?? [];
+  const rawEventIds = rawEventRows.map((r) => String((r as Record<string, unknown>).id));
 
   const { data: alertRows, error: alertsErr } = await client
     .from('system_alerts')
@@ -918,10 +965,10 @@ async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
     throw new Error(appsErr.message);
   }
 
-  if (eventIds.length === 0) {
+  if (rawEventIds.length === 0) {
     return {
       profile,
-      events,
+      events: [] as EventItem[],
       attendees: [] as Attendee[],
       scheduleBlocks: [] as ScheduleBlock[],
       alerts,
@@ -932,17 +979,35 @@ async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
     };
   }
 
-  const [attRes, schRes, shotRes, rollRes] = await Promise.all([
-    client.from('attendees').select('*').in('event_id', eventIds).order('created_at', { ascending: false }),
-    client.from('schedule_blocks').select('*').in('event_id', eventIds).order('created_at', { ascending: true }),
-    client.from('disposable_shots').select('*').in('event_id', eventIds).order('created_at', { ascending: false }),
-    client.from('disposable_roll_settings').select('*').in('event_id', eventIds),
+  const [attRes, schRes, shotRes, rollRes, planningRes] = await Promise.all([
+    client.from('attendees').select('*').in('event_id', rawEventIds).order('created_at', { ascending: false }),
+    client.from('schedule_blocks').select('*').in('event_id', rawEventIds).order('created_at', { ascending: true }),
+    client.from('disposable_shots').select('*').in('event_id', rawEventIds).order('created_at', { ascending: false }),
+    client.from('disposable_roll_settings').select('*').in('event_id', rawEventIds),
+    client.from('event_planning_configs').select('*').in('event_id', rawEventIds),
   ]);
 
   if (attRes.error) throw new Error(attRes.error.message);
   if (schRes.error) throw new Error(schRes.error.message);
   if (shotRes.error) throw new Error(shotRes.error.message);
   if (rollRes.error) throw new Error(rollRes.error.message);
+  if (planningRes.error && !isMissingTableError(planningRes.error)) {
+    throw new Error(planningRes.error.message);
+  }
+
+  const planningByEvent = new Map<string, EventPlanningConfig>();
+  if (!planningRes.error) {
+    for (const row of planningRes.data ?? []) {
+      const rec = row as Record<string, unknown>;
+      const eid = String(rec.event_id);
+      planningByEvent.set(eid, mapPlanningRow(rec, eventCategoryById.get(eid) || 'Events'));
+    }
+  }
+
+  const events = rawEventRows.map((r) => {
+    const rec = r as Record<string, unknown>;
+    return mapEventRow(rec, planningByEvent.get(String(rec.id)));
+  });
 
   const attendees = (attRes.data ?? []).map((r) => {
     const mapped = mapAttendeeRow(r as Record<string, unknown>);
@@ -4686,6 +4751,16 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
 
       const uniqueEventId = `evt-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
 
+      const starterPlanning = sanitizeEventPlanningConfig(
+        event.extraDataConfig?.planningConfig ??
+          createStarterPlanningConfig(
+            event.category || 'Events',
+            event.organizer || 'Organiser',
+            event.venue || 'Main Venue'
+          ),
+        event.category || 'Events'
+      );
+
       const eventRow: Record<string, unknown> = {
         id: uniqueEventId,
         organizer_id: req.user!.id,
@@ -4714,8 +4789,12 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         sender_id: event.senderId ?? null,
         qr_pass_published: event.status === 'draft' ? false : Boolean(event.qrPassPublished),
         validation_config: event.validationConfig ?? null,
+        planning_config: starterPlanning,
         extra_data_config: withEmbeddedMessageConfig(
-          event.extraDataConfig,
+          {
+            ...(event.extraDataConfig ?? { enableGiftTable: false, customFields: [] }),
+            planningConfig: starterPlanning,
+          },
           event.messageConfig,
           event.brandColor
         ),
@@ -4728,8 +4807,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .select('*')
         .single();
       if (evtErr && isMissingColumnError(evtErr)) {
-        const { message_config: _mc, ...withoutMsgCol } = eventRow;
-        const retryWithExtra = await client.from('events').insert(withoutMsgCol).select('*').single();
+        const { message_config: _mc, planning_config: _pc, ...withoutNewCols } = eventRow;
+        const retryWithExtra = await client.from('events').insert(withoutNewCols).select('*').single();
         createdEvt = retryWithExtra.data;
         evtErr = retryWithExtra.error;
         if (evtErr && isMissingColumnError(evtErr)) {
@@ -4740,6 +4819,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         }
       }
       if (evtErr) return res.status(400).json({ error: evtErr.message });
+
+      await syncEventPlanningRow(client, uniqueEventId, req.user!.id, starterPlanning);
 
       let createdBlocks: ScheduleBlock[] = [];
       if (blocks && blocks.length > 0) {
@@ -4763,7 +4844,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       }
 
       return res.status(201).json({
-        event: mapEventRow(createdEvt as Record<string, unknown>),
+        event: mapEventRow(createdEvt as Record<string, unknown>, starterPlanning),
         blocks: createdBlocks,
       });
     } catch (err) {
@@ -4777,10 +4858,18 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
     try {
       const { data: existingEvtRow } = await req
         .supabase!.from('events')
-        .select('extra_data_config')
+        .select('extra_data_config, planning_config, category')
         .eq('id', req.params.id)
         .eq('organizer_id', req.user!.id)
         .maybeSingle();
+
+      const existingRec = existingEvtRow as Record<string, unknown> | null;
+      const incomingPlanning = updated.extraDataConfig?.planningConfig
+        ? sanitizeEventPlanningConfig(
+            updated.extraDataConfig.planningConfig,
+            updated.category || String(existingRec?.category || 'Events')
+          )
+        : undefined;
 
       const updatePayload: Record<string, unknown> = {
         slug: updated.slug,
@@ -4803,11 +4892,14 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         venue_format: updated.venueFormat ?? 'in-person',
         sender_id: updated.senderId ?? null,
         validation_config: updated.validationConfig ?? null,
+        ...(incomingPlanning ? { planning_config: incomingPlanning } : {}),
         extra_data_config: withEmbeddedMessageConfig(
-          updated.extraDataConfig,
+          incomingPlanning && updated.extraDataConfig
+            ? { ...updated.extraDataConfig, planningConfig: incomingPlanning }
+            : updated.extraDataConfig,
           updated.messageConfig,
           updated.brandColor,
-          (existingEvtRow as Record<string, unknown> | null)?.extra_data_config
+          existingRec?.extra_data_config
         ),
         message_config: updated.messageConfig ?? null,
       };
@@ -4825,10 +4917,10 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .select('*')
         .single();
       if (error && isMissingColumnError(error)) {
-        const { message_config: _mc, ...withoutMsgCol } = updatePayload;
+        const { message_config: _mc, planning_config: _pc, ...withoutNewCols } = updatePayload;
         const retryWithExtra = await req
           .supabase!.from('events')
-          .update(withoutMsgCol)
+          .update(withoutNewCols)
           .eq('id', req.params.id)
           .eq('organizer_id', req.user!.id)
           .select('*')
@@ -4849,12 +4941,132 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         }
       }
       if (error) return res.status(400).json({ error: error.message });
-      return res.json({ event: mapEventRow(data as Record<string, unknown>) });
+
+      if (incomingPlanning) {
+        await syncEventPlanningRow(req.supabase!, req.params.id, req.user!.id, incomingPlanning);
+      }
+
+      return res.json({
+        event: mapEventRow(data as Record<string, unknown>, incomingPlanning),
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update event.';
       return res.status(500).json({ error: message });
     }
   });
+
+  app.get(
+    '/api/studio/events/:eventId/planning',
+    requireSupabaseAuth,
+    requireRole('creator', 'organizer'),
+    async (req: AuthedRequest, res) => {
+      try {
+        const client = req.supabase!;
+        const { data: evtRow, error: evtErr } = await client
+          .from('events')
+          .select('*')
+          .eq('id', req.params.eventId)
+          .eq('organizer_id', req.user!.id)
+          .maybeSingle();
+        if (evtErr || !evtRow) {
+          return res.status(404).json({ error: 'Event not found in studio.' });
+        }
+
+        const { data: planRow, error: planErr } = await client
+          .from('event_planning_configs')
+          .select('*')
+          .eq('event_id', req.params.eventId)
+          .maybeSingle();
+        if (planErr && !isMissingTableError(planErr)) {
+          return res.status(400).json({ error: planErr.message });
+        }
+
+        const rec = evtRow as Record<string, unknown>;
+        const override =
+          !planErr && planRow
+            ? mapPlanningRow(planRow as Record<string, unknown>, String(rec.category ?? 'Events'))
+            : undefined;
+        const mappedEvent = mapEventRow(rec, override);
+        return res.json({
+          planningConfig: mappedEvent.extraDataConfig?.planningConfig ?? null,
+          event: mappedEvent,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to load event planning config.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
+  app.put(
+    '/api/studio/events/:eventId/planning',
+    requireSupabaseAuth,
+    requireRole('creator', 'organizer'),
+    async (req: AuthedRequest, res) => {
+      try {
+        const client = req.supabase!;
+        const { data: evtRow, error: evtErr } = await client
+          .from('events')
+          .select('*')
+          .eq('id', req.params.eventId)
+          .eq('organizer_id', req.user!.id)
+          .maybeSingle();
+        if (evtErr || !evtRow) {
+          return res.status(404).json({ error: 'Event not found in studio.' });
+        }
+
+        const rec = evtRow as Record<string, unknown>;
+        const sanitizedPlanning = sanitizeEventPlanningConfig(
+          req.body,
+          String(rec.category ?? 'Events')
+        );
+        const existingExtra =
+          rec.extra_data_config && typeof rec.extra_data_config === 'object'
+            ? (rec.extra_data_config as Record<string, unknown>)
+            : { enableGiftTable: false, customFields: [] };
+        const nextExtra: Record<string, unknown> = {
+          ...existingExtra,
+          planningConfig: sanitizedPlanning,
+        };
+
+        let { data: updatedEvt, error: updErr } = await client
+          .from('events')
+          .update({
+            planning_config: sanitizedPlanning,
+            extra_data_config: nextExtra,
+          })
+          .eq('id', req.params.eventId)
+          .eq('organizer_id', req.user!.id)
+          .select('*')
+          .single();
+
+        if (updErr && isMissingColumnError(updErr)) {
+          const retry = await client
+            .from('events')
+            .update({ extra_data_config: nextExtra })
+            .eq('id', req.params.eventId)
+            .eq('organizer_id', req.user!.id)
+            .select('*')
+            .single();
+          updatedEvt = retry.data;
+          updErr = retry.error;
+        }
+        if (updErr) {
+          return res.status(400).json({ error: updErr.message });
+        }
+
+        await syncEventPlanningRow(client, req.params.eventId, req.user!.id, sanitizedPlanning);
+
+        return res.json({
+          planningConfig: sanitizedPlanning,
+          event: mapEventRow(updatedEvt as Record<string, unknown>, sanitizedPlanning),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to save planning configuration.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
 
   app.patch('/api/studio/events/:id/qr-pass', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const published = Boolean((req.body as { published?: boolean })?.published);
