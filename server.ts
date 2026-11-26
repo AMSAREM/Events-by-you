@@ -2745,10 +2745,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         customResponses?: Record<string, string>;
       };
 
-      if (!name?.trim() || !email?.trim() || !phone?.trim()) {
-        return res.status(400).json({ error: 'Name, email, and phone number are required.' });
+      if (!name?.trim() || !phone?.trim()) {
+        return res.status(400).json({ error: 'Full name and mobile phone number are required.' });
       }
 
+      const cleanEmail = email?.trim() || '';
       const normalizedPhone = normalizePhoneE164(phone.trim());
       const attendeeId = `att-${Date.now()}-${Math.floor(100 + Math.random() * 899)}`;
       const finalCode = ticketCode?.trim() || `#EVT-2026-${Math.floor(1000 + Math.random() * 8999)}`;
@@ -2776,7 +2777,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           p_id: attendeeId,
           p_event_id: eventId,
           p_name: name.trim(),
-          p_email: email.trim(),
+          p_email: cleanEmail,
           p_phone: normalizedPhone,
           p_organization: organization?.trim() || 'Fast Pass Attendee',
           p_tier: tier || 'General',
@@ -2794,7 +2795,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
             p_id: attendeeId,
             p_event_id: eventId,
             p_name: name.trim(),
-            p_email: email.trim(),
+            p_email: cleanEmail,
             p_phone: normalizedPhone,
             p_organization: organization?.trim() || 'Fast Pass Attendee',
             p_tier: tier || 'General',
@@ -2897,9 +2898,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                 resolvedMsg.text
               )
             : Promise.resolve('Pending' as const),
-          isResendConfigured()
+          isResendConfigured() && cleanEmail.includes('@')
             ? sendEventPassEmail({
-                to: email.trim(),
+                to: cleanEmail,
                 attendeeName: name.trim(),
                 eventTitle: event.title,
                 eventDate: event.date,
@@ -5745,7 +5746,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         id: attendee.id,
         event_id: eventId,
         name: attendee.name,
-        email: attendee.email,
+        email: (attendee.email || '').trim(),
         phone: normalizedPhone,
         organization: attendee.organization || 'General Guest',
         tier: attendee.tier || 'General',

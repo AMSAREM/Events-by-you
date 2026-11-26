@@ -857,8 +857,8 @@ export async function localFallbackRequest<T>(
     const name = String(body.name || '').trim();
     const email = String(body.email || '').trim();
     const phone = String(body.phone || '').trim();
-    if (!name || !email || !phone) {
-      throw new LocalApiError('Name, email, and phone number are required.', 400);
+    if (!name || !phone) {
+      throw new LocalApiError('Full name and mobile phone number are required.', 400);
     }
     const evt = db.events.find(
       (e) => e.id === eventId && (e.status === 'live' || e.status === 'upcoming')

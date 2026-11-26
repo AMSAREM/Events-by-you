@@ -2472,6 +2472,7 @@ export const memoryStore = {
     const created: Attendee = {
       ...attendee,
       eventId,
+      email: (attendee.email || '').trim(),
       phone: normalizedPhone,
       organization: attendee.organization || 'General Guest',
       tier: attendee.tier || 'General',

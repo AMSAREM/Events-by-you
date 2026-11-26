@@ -669,10 +669,11 @@ export function createMemoryRouter() {
       customResponses?: Record<string, string>;
     };
 
-    if (!name?.trim() || !email?.trim() || !phone?.trim()) {
-      return res.status(400).json({ error: 'Name, email, and phone number are required.' });
+    if (!name?.trim() || !phone?.trim()) {
+      return res.status(400).json({ error: 'Full name and mobile phone number are required.' });
     }
 
+    const cleanEmail = email?.trim() || '';
     const normalizedPhone = normalizePhoneE164(phone.trim());
     const attendeeId = `att-${Date.now()}-${Math.floor(100 + Math.random() * 899)}`;
     const finalCode = ticketCode?.trim() || `#EVT-2026-${Math.floor(1000 + Math.random() * 8999)}`;
@@ -711,9 +712,9 @@ export function createMemoryRouter() {
               resolvedMsg?.text
             )
           : Promise.resolve('Pending' as const),
-        isResendConfigured() && targetEvent
+        isResendConfigured() && targetEvent && cleanEmail.includes('@')
           ? sendEventPassEmail({
-              to: email.trim(),
+              to: cleanEmail,
               attendeeName: name.trim(),
               eventTitle: targetEvent.title,
               eventDate: targetEvent.date,
@@ -754,7 +755,7 @@ export function createMemoryRouter() {
         id: attendeeId,
         eventId,
         name: name.trim(),
-        email: email.trim(),
+        email: cleanEmail,
         phone: normalizedPhone,
         organization,
         tier,
