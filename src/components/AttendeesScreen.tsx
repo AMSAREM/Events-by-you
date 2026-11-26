@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Check, Copy, Download, Link2, Lock, Mail, Plus, QrCode, Send, UserPlus, X } from 'lucide-react';
+import { AlertCircle, Check, Download, Lock, Mail, Plus, QrCode, Send, Trash2, UserPlus, X } from 'lucide-react';
 import {
   Attendee,
   AttendeeTier,
@@ -9,7 +9,6 @@ import {
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
 import { appendPoweredByLine, calculateSmsCredits, POWERED_BY_LINE } from '../lib/eventMessages';
-import { buildWalkInRegistrationUrl, downloadQrSvg } from '../lib/qr';
 import { getPlanEntitlements } from '../lib/subscriptionPlans';
 import { CheckInFlyerSidePanel } from './CheckInFlyerSidePanel';
 import { CircularGauge } from './MonochromeArtwork';
@@ -34,6 +33,7 @@ interface AttendeesScreenProps {
     | void;
   onRetryPayment: (attendeeId: string) => void;
   onRegisterAttendee: (eventId: string, attendee: Attendee) => void;
+  onDeleteAttendee?: (attendeeId: string) => Promise<void> | void;
   onBroadcast?: (payload: {
     eventId?: string;
     attendeeIds: string[];
@@ -64,6 +64,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
   onToggleCheckIn,
   onRetryPayment,
   onRegisterAttendee,
+  onDeleteAttendee,
   onBroadcast,
   onOpenPlans,
   onManageEvent,
@@ -118,6 +119,8 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
   const [walkInTier, setWalkInTier] = useState<AttendeeTier>('General');
   const [walkInCheckedIn, setWalkInCheckedIn] = useState(true);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [confirmDeleteAttendee, setConfirmDeleteAttendee] = useState<Attendee | null>(null);
+  const [deletingAttendee, setDeletingAttendee] = useState(false);
 
   useEffect(() => {
     setEventFilter(initialEventFilter);
@@ -617,45 +620,58 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                         )}
                       </td>
                       <td className="py-3.5 px-5 text-right">
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            try {
-                              const res = await Promise.resolve(onToggleCheckIn(att.id));
-                              if (res && res.checkInSmsSent) {
+                        <div className="inline-flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                const res = await Promise.resolve(onToggleCheckIn(att.id));
+                                if (res && res.checkInSmsSent) {
+                                  showToast(
+                                    `Checked in ${att.name} — SMS + Disposable Camera link sent!`
+                                  );
+                                } else if (res && res.smsSkippedReason) {
+                                  showToast(
+                                    `Checked in ${att.name}. SMS skipped: ${res.smsSkippedReason}`
+                                  );
+                                } else if (res && res.checkInMessageSent) {
+                                  showToast(
+                                    `Checked in ${att.name} — check-in welcome email + camera link sent!`
+                                  );
+                                }
+                              } catch (err) {
                                 showToast(
-                                  `Checked in ${att.name} — SMS + Disposable Camera link sent!`
-                                );
-                              } else if (res && res.smsSkippedReason) {
-                                showToast(
-                                  `Checked in ${att.name}. SMS skipped: ${res.smsSkippedReason}`
-                                );
-                              } else if (res && res.checkInMessageSent) {
-                                showToast(
-                                  `Checked in ${att.name} — check-in welcome email + camera link sent!`
+                                  err instanceof Error ? err.message : 'Unable to update check-in.'
                                 );
                               }
-                            } catch (err) {
-                              showToast(
-                                err instanceof Error ? err.message : 'Unable to update check-in.'
-                              );
-                            }
-                          }}
-                          className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                            att.checkedIn
-                              ? 'bg-[#F5F5F7] text-[#0B0B0B] border border-[#E5E5EA] hover:border-[#0B0B0B]'
-                              : 'bg-[#0B0B0B] text-white hover:bg-zinc-800'
-                          }`}
-                        >
-                          {att.checkedIn ? (
-                            <>
-                              <Check className="w-3.5 h-3.5" />
-                              Checked In ({att.checkedInAt})
-                            </>
-                          ) : (
-                            'Check In'
+                            }}
+                            className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                              att.checkedIn
+                                ? 'bg-[#F5F5F7] text-[#0B0B0B] border border-[#E5E5EA] hover:border-[#0B0B0B]'
+                                : 'bg-[#0B0B0B] text-white hover:bg-zinc-800'
+                            }`}
+                          >
+                            {att.checkedIn ? (
+                              <>
+                                <Check className="w-3.5 h-3.5" />
+                                Checked In ({att.checkedInAt})
+                              </>
+                            ) : (
+                              'Check In'
+                            )}
+                          </button>
+                          {isEventCreator && onDeleteAttendee && (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteAttendee(att)}
+                              title="Delete attendee"
+                              aria-label={`Delete ${att.name}`}
+                              className="w-8 h-8 rounded-full bg-white border border-[#E5E5EA] hover:border-[#EF4444] hover:bg-red-50 text-[#71717A] hover:text-[#EF4444] transition-colors inline-flex items-center justify-center shrink-0"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           )}
-                        </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -821,55 +837,6 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                   Check guest in immediately at gate
                 </span>
               </label>
-
-              {selectedWalkInEvent && (
-                <div className="p-3 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1">
-                      <Link2 className="w-3 h-3" />
-                      Self-Service Walk-In Link
-                    </p>
-                    <p className="text-[11px] font-mono text-[#71717A] truncate">
-                      {buildWalkInRegistrationUrl(selectedWalkInEvent.slug || selectedWalkInEvent.id)}
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-2 sm:flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const url = buildWalkInRegistrationUrl(
-                          selectedWalkInEvent.slug || selectedWalkInEvent.id
-                        );
-                        if (navigator.clipboard?.writeText) {
-                          navigator.clipboard.writeText(url).catch(() => {});
-                        }
-                        showToast('Walk-in registration link copied');
-                      }}
-                      className="min-h-[38px] px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1 whitespace-nowrap"
-                    >
-                      <Copy className="w-3 h-3 shrink-0" />
-                      Copy Link
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const url = buildWalkInRegistrationUrl(
-                          selectedWalkInEvent.slug || selectedWalkInEvent.id
-                        );
-                        downloadQrSvg(
-                          url,
-                          `${selectedWalkInEvent.slug || selectedWalkInEvent.id}-walkin-qr.svg`
-                        );
-                        showToast('Walk-in QR downloaded');
-                      }}
-                      className="min-h-[38px] px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1 whitespace-nowrap"
-                    >
-                      <Download className="w-3 h-3 shrink-0" />
-                      Walk-In QR
-                    </button>
-                  </div>
-                </div>
-              )}
 
               {!walkInQrPublished && (
                 <div className="p-3 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] text-[11px] text-[#0B0B0B]">
@@ -1082,6 +1049,82 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Attendee Confirmation Modal */}
+      {confirmDeleteAttendee && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="attendees-delete-title"
+        >
+          <div className="bg-white w-full max-w-sm rounded-3xl p-5 sm:p-6 border border-[#E5E5EA] soft-popover-shadow space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <h3 id="attendees-delete-title" className="text-base font-bold text-[#0B0B0B]">
+                  Delete attendee?
+                </h3>
+                <p className="text-xs text-[#71717A] leading-relaxed">
+                  Remove{' '}
+                  <span className="font-semibold text-[#0B0B0B]">
+                    {confirmDeleteAttendee.name}
+                  </span>{' '}
+                  ({confirmDeleteAttendee.ticketCode}) from{' '}
+                  <span className="font-semibold text-[#0B0B0B]">
+                    {eventMap.get(confirmDeleteAttendee.eventId)?.title ?? 'this event'}
+                  </span>
+                  {confirmDeleteAttendee.checkedIn ? ', including their check-in record' : ''}? This
+                  action cannot be undone.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !deletingAttendee && setConfirmDeleteAttendee(null)}
+                disabled={deletingAttendee}
+                aria-label="Cancel delete attendee"
+                className="w-8 h-8 rounded-full border border-[#E5E5EA] flex items-center justify-center text-[#0B0B0B] hover:bg-[#F5F5F7] shrink-0 disabled:opacity-40"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteAttendee(null)}
+                disabled={deletingAttendee}
+                className="px-4 h-10 rounded-full border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] hover:bg-[#F5F5F7] disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deletingAttendee}
+                onClick={async () => {
+                  if (!onDeleteAttendee || deletingAttendee) return;
+                  const target = confirmDeleteAttendee;
+                  setDeletingAttendee(true);
+                  try {
+                    await onDeleteAttendee(target.id);
+                    setConfirmDeleteAttendee(null);
+                    showToast(`Removed ${target.name} from attendee roster`);
+                  } catch (err) {
+                    setConfirmDeleteAttendee(null);
+                    showToast(
+                      err instanceof Error ? err.message : `Unable to delete ${target.name}.`
+                    );
+                  } finally {
+                    setDeletingAttendee(false);
+                  }
+                }}
+                className="px-4 h-10 rounded-full bg-[#EF4444] text-white text-xs font-semibold hover:bg-red-600 transition-colors disabled:opacity-50"
+              >
+                {deletingAttendee ? 'Deleting...' : 'Delete Attendee'}
+              </button>
+            </div>
           </div>
         </div>
       )}

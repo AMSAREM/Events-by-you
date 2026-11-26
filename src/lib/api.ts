@@ -954,6 +954,13 @@ export const api = {
         true
       ),
 
+    deleteAttendee: (attendeeId: string) =>
+      request<{ ok: boolean; deletedAttendeeId: string; event: EventItem }>(
+        `/api/studio/attendees/${encodeURIComponent(attendeeId)}`,
+        { method: 'DELETE' },
+        true
+      ),
+
     recordGiftTableEntry: (
       eventId: string,
       payload: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>

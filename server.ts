@@ -5997,6 +5997,102 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
     }
   });
 
+  app.delete(
+    '/api/studio/attendees/:id',
+    requireSupabaseAuth,
+    requireRole('creator', 'organizer'),
+    async (req: AuthedRequest, res) => {
+      try {
+        const client = req.supabase!;
+        const { data: existing, error: fetchErr } = await client
+          .from('attendees')
+          .select('*')
+          .eq('id', req.params.id)
+          .maybeSingle();
+        if (fetchErr || !existing) {
+          return res.status(404).json({ error: 'Attendee not found.' });
+        }
+
+        const attRec = existing as Record<string, unknown>;
+        const eventId = String(attRec.event_id);
+        const { data: evtRow, error: evtErr } = await client
+          .from('events')
+          .select('*')
+          .eq('id', eventId)
+          .maybeSingle();
+        if (evtErr || !evtRow) {
+          return res.status(404).json({ error: 'Parent event not found.' });
+        }
+        const evtRec = evtRow as Record<string, unknown>;
+        if (String(evtRec.organizer_id) !== req.user!.id) {
+          return res.status(403).json({
+            error: 'Only the event creator can delete attendees from this event.',
+          });
+        }
+
+        const { error: delErr } = await client
+          .from('attendees')
+          .delete()
+          .eq('id', req.params.id)
+          .eq('event_id', eventId);
+        if (delErr) {
+          return res.status(400).json({ error: delErr.message });
+        }
+
+        const wasCheckedIn = Boolean(attRec.checked_in);
+        const wasPaid = attRec.payment_status === 'paid';
+        const ticketPrice = Number(evtRec.ticket_price ?? 0);
+        const nextRegistered = Math.max(0, Number(evtRec.registered ?? 0) - 1);
+        const nextCheckedIn = wasCheckedIn
+          ? Math.max(0, Number(evtRec.checked_in ?? 0) - 1)
+          : Math.max(0, Number(evtRec.checked_in ?? 0));
+        const nextRevenue = wasPaid
+          ? Math.max(0, Number(evtRec.revenue ?? 0) - ticketPrice)
+          : Math.max(0, Number(evtRec.revenue ?? 0));
+
+        const updateFields: Record<string, unknown> = {
+          registered: nextRegistered,
+          checked_in: nextCheckedIn,
+          revenue: nextRevenue,
+        };
+
+        if (
+          evtRec.extra_data_config &&
+          typeof evtRec.extra_data_config === 'object'
+        ) {
+          const extraObj = { ...(evtRec.extra_data_config as Record<string, unknown>) };
+          if (
+            extraObj.__attendeeMeta &&
+            typeof extraObj.__attendeeMeta === 'object' &&
+            req.params.id in (extraObj.__attendeeMeta as Record<string, unknown>)
+          ) {
+            const nextMeta = { ...(extraObj.__attendeeMeta as Record<string, unknown>) };
+            delete nextMeta[req.params.id];
+            extraObj.__attendeeMeta = nextMeta;
+            updateFields.extra_data_config = extraObj;
+          }
+        }
+
+        const { data: updatedEvt } = await client
+          .from('events')
+          .update(updateFields)
+          .eq('id', eventId)
+          .eq('organizer_id', req.user!.id)
+          .select('*')
+          .maybeSingle();
+
+        return res.json({
+          ok: true,
+          deletedAttendeeId: req.params.id,
+          event: mapEventRow((updatedEvt ?? { ...evtRec, ...updateFields }) as Record<string, unknown>),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to delete attendee.';
+        return res.status(500).json({ error: message });
+      }
+    }
+  );
+
   app.patch(
     '/api/studio/attendees/:id/retry-payment',
     requireSupabaseAuth,

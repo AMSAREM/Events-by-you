@@ -1920,6 +1920,15 @@ export function createMemoryRouter() {
     }
   });
 
+  router.delete('/studio/attendees/:id', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    try {
+      return res.json(memoryStore.deleteAttendee(req.user!.id, req.params.id));
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to delete attendee.' });
+    }
+  });
+
   router.patch('/studio/attendees/:id/retry-payment', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
     try {
       const attendee = memoryStore.retryPayment(req.user!.id, req.params.id);

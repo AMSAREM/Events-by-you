@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   CalendarDays,
-  Check,
-  Copy,
+  Download,
   MapPin,
   Maximize2,
   Minimize2,
@@ -12,7 +11,7 @@ import {
 } from 'lucide-react';
 import type { DesignTheme, EventItem } from '../types/events';
 import { getCategoryPreset } from '../data/initialData';
-import { DeterministicQrSvg } from '../lib/qr';
+import { DeterministicQrSvg, downloadQrSvg } from '../lib/qr';
 import { getContrastTextColor, normalizeHexColor } from '../lib/themeColors';
 import { BrandMark } from './BrandLogo';
 import { CircularGauge, MonochromePoster } from './MonochromeArtwork';
@@ -62,7 +61,6 @@ export const CheckInFlyerSidePanel: React.FC<CheckInFlyerSidePanelProps> = ({
   const preset = getCategoryPreset(event.category);
   const flyerSrc = event.flyerUrl || preset.flyerUrl;
   const [imageFailed, setImageFailed] = useState(false);
-  const [copiedUrl, setCopiedUrl] = useState(false);
 
   useEffect(() => {
     setImageFailed(false);
@@ -86,15 +84,6 @@ export const CheckInFlyerSidePanel: React.FC<CheckInFlyerSidePanelProps> = ({
       .join('')
       .slice(0, 2)
       .toUpperCase() || 'EV';
-
-  const handleCopyUrl = () => {
-    if (!checkinUrl) return;
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(checkinUrl).catch(() => {});
-    }
-    setCopiedUrl(true);
-    window.setTimeout(() => setCopiedUrl(false), 1800);
-  };
 
   const isCompact = variant === 'compact';
   const isFeatheredWhite = featherEdge === 'white';
@@ -293,27 +282,20 @@ export const CheckInFlyerSidePanel: React.FC<CheckInFlyerSidePanelProps> = ({
               <div className="min-w-0 flex-1 space-y-1.5">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-[#71717A] flex items-center gap-1">
                   <QrCode className="w-3 h-3 text-[#0B0B0B] shrink-0" />
-                  <span className="truncate">Gate Check-In Kiosk Link</span>
+                  <span className="truncate">Validate &amp; Check-In QR</span>
                 </p>
-                <p className="text-xs font-mono text-[#0B0B0B] truncate">
-                  /e/{event.slug}/checkin
+                <p className="text-xs text-[#71717A] leading-snug">
+                  Scan to open guest pass validation and check-in directly.
                 </p>
                 <button
                   type="button"
-                  onClick={handleCopyUrl}
+                  onClick={() =>
+                    downloadQrSvg(checkinUrl, `${event.slug || event.id}-checkin-qr.svg`)
+                  }
                   className="min-h-[36px] px-3.5 py-1.5 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
                 >
-                  {copiedUrl ? (
-                    <>
-                      <Check className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Copied</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5" />
-                      <span>Copy Link</span>
-                    </>
-                  )}
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download QR</span>
                 </button>
               </div>
 

@@ -2260,6 +2260,30 @@ export async function localFallbackRequest<T>(
     } as T;
   }
 
+  const deleteAttendeeMatch = path.match(/^\/studio\/attendees\/([^/]+)$/);
+  if (method === 'DELETE' && deleteAttendeeMatch) {
+    requireRoles(user, ['creator', 'organizer']);
+    const attId = decodeURIComponent(deleteAttendeeMatch[1]);
+    const idx = db.attendees.findIndex((a) => a.id === attId);
+    if (idx === -1) throw new LocalApiError('Attendee not found.', 404);
+    const att = db.attendees[idx];
+    const evt = db.events.find((e) => e.id === att.eventId);
+    if (!evt || evt.organizerId !== user.id) {
+      throw new LocalApiError('Only the event creator can delete attendees from this event.', 403);
+    }
+    db.attendees.splice(idx, 1);
+    evt.registered = Math.max(0, evt.registered - 1);
+    if (att.checkedIn) {
+      evt.checkedIn = Math.max(0, evt.checkedIn - 1);
+    }
+    if (att.paymentStatus === 'paid') {
+      evt.revenue = Math.max(0, evt.revenue - evt.ticketPrice);
+    }
+    saveDb(db);
+    const { organizerId: _org, ...cleanEvent } = evt;
+    return { ok: true, deletedAttendeeId: attId, event: cleanEvent } as T;
+  }
+
   const retryPayMatch = path.match(/^\/studio\/attendees\/([^/]+)\/retry-payment$/);
   if (method === 'PATCH' && retryPayMatch) {
     requireRoles(user, ['creator', 'organizer']);

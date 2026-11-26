@@ -174,7 +174,7 @@ function parseInvitationFromValues(pathname: string, search: string): {
 
   const checkinMatch = pathname.match(/^\/e\/([^/]+)\/checkin\/?$/i);
   if (checkinMatch && checkinMatch[1]) {
-    return { slugOrId: decodeURIComponent(checkinMatch[1]), focus: 'checkin' };
+    return { slugOrId: decodeURIComponent(checkinMatch[1]), focus: 'checkin', guest, pass };
   }
   const match = pathname.match(/^\/e\/([^/]+)\/?$/i);
   const tab = (params.get('tab') || '').toLowerCase();
@@ -356,6 +356,9 @@ export default function App() {
   );
   const [publicPreviewDeskToken, setPublicPreviewDeskToken] = useState<string | undefined>(
     () => initialInvite.desk
+  );
+  const [publicPreviewPassCode, setPublicPreviewPassCode] = useState<string | undefined>(
+    () => (initialInvite.focus === 'camera' ? undefined : initialInvite.pass)
   );
   const [publicEventsLoading, setPublicEventsLoading] = useState<boolean>(true);
   const [selectedCheckoutBundleId, setSelectedCheckoutBundleId] = useState<string | null>(null);
@@ -714,6 +717,7 @@ export default function App() {
       setPublicPreviewEventId(targetId);
       setPublicPreviewFocus(focus);
       setPublicPreviewDeskToken(focus === 'gifts' ? deskToken : undefined);
+      setPublicPreviewPassCode(undefined);
       setRoute('demo-event');
       if (slugOrId) {
         const cleanSlug = encodeURIComponent(slugOrId);
@@ -774,6 +778,7 @@ export default function App() {
             : 'top'
         );
         setPublicPreviewDeskToken(invite.desk);
+        setPublicPreviewPassCode(invite.pass);
         setRoute('demo-event');
         return;
       }
@@ -1616,6 +1621,44 @@ export default function App() {
     }
   };
 
+  const handleDeleteAttendee = async (attendeeId: string) => {
+    const previousAttendees = attendees;
+    const previousEvents = events;
+    const previousPublicEvents = publicEvents;
+    const target = attendees.find((a) => a.id === attendeeId);
+
+    setAttendees((prev) => prev.filter((a) => a.id !== attendeeId));
+    if (target) {
+      const targetEvent = events.find((e) => e.id === target.eventId);
+      const revenueDelta =
+        target.paymentStatus === 'paid' ? Math.max(0, Number(targetEvent?.ticketPrice ?? 0)) : 0;
+      const updateEventCounters = (evt: EventItem): EventItem =>
+        evt.id === target.eventId
+          ? {
+              ...evt,
+              registered: Math.max(0, evt.registered - 1),
+              checkedIn: target.checkedIn ? Math.max(0, evt.checkedIn - 1) : evt.checkedIn,
+              revenue: Math.max(0, evt.revenue - revenueDelta),
+            }
+          : evt;
+      setEvents((prev) => prev.map(updateEventCounters));
+      setPublicEvents((prev) => prev.map(updateEventCounters));
+    }
+
+    try {
+      const res = await api.studio.deleteAttendee(attendeeId);
+      if (res?.event) {
+        syncUpdatedEventWithPublicSanitize(res.event);
+      }
+    } catch (err) {
+      setAttendees(previousAttendees);
+      setEvents(previousEvents);
+      setPublicEvents(previousPublicEvents);
+      notifyError(err, 'Failed to delete attendee in Supabase.');
+      throw err;
+    }
+  };
+
   const handleRetryPayment = async (attendeeId: string) => {
     const previousAttendees = attendees;
     const previousAlerts = alerts;
@@ -2250,6 +2293,7 @@ export default function App() {
           initialEventId={publicPreviewEventId}
           initialFocus={publicPreviewFocus}
           initialDeskToken={publicPreviewDeskToken}
+          initialPassCode={publicPreviewPassCode}
           isLoadingEvents={publicEventsLoading}
           isSignedIn={isSignedIn}
           canOpenStudio={isSignedIn && isStudioAuthorized}
@@ -2688,6 +2732,7 @@ export default function App() {
                 openEventInvitation(workspaceEvent, focus ?? 'top');
               }}
               onToggleCheckIn={handleToggleCheckIn}
+              onDeleteAttendee={handleDeleteAttendee}
               onRegisterAttendee={handleStudioRegisterAttendee}
               onBroadcast={handleBroadcastUpdate}
               onRecordGiftEntry={handleStudioRecordGiftTableEntry}
@@ -2768,6 +2813,7 @@ export default function App() {
                   initialEventId={checkinEventId}
                   initialCode={checkinPrefillCode}
                   onToggleCheckIn={handleToggleCheckIn}
+                  onDeleteAttendee={handleDeleteAttendee}
                   onRegisterAttendee={handleStudioRegisterAttendee}
                   onToggleQrPassPublished={handleToggleQrPassPublished}
                   onManageEvent={handleOpenWorkspace}
@@ -2858,6 +2904,7 @@ export default function App() {
                   profile={profile}
                   initialEventFilter={attendeeEventFilter}
                   onToggleCheckIn={handleToggleCheckIn}
+                  onDeleteAttendee={handleDeleteAttendee}
                   onRetryPayment={handleRetryPayment}
                   onRegisterAttendee={handleStudioRegisterAttendee}
                   onBroadcast={handleBroadcastUpdate}

@@ -29,6 +29,7 @@ import {
   ShieldCheck,
   Trash2,
   UserPlus,
+  X,
 } from 'lucide-react';
 import {
   Attendee,
@@ -66,7 +67,6 @@ import { compressFlyerImageFile } from '../lib/flyerUpload';
 import {
   buildEventInvitationUrl,
   buildEventOgImageUrl,
-  buildWalkInRegistrationUrl,
   DeterministicQrSvg,
   downloadQrSvg,
 } from '../lib/qr';
@@ -105,6 +105,7 @@ interface EventWorkspaceScreenProps {
   onOpenPlans: () => void;
   onPreviewPublicEvent: (focus?: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls') => void;
   onToggleCheckIn: (attendeeId: string) => void;
+  onDeleteAttendee?: (attendeeId: string) => Promise<void> | void;
   onRegisterAttendee?: (eventId: string, attendee: Attendee) => void;
   onBroadcast?: (payload: {
     eventId?: string;
@@ -187,6 +188,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   onOpenPlans,
   onPreviewPublicEvent,
   onToggleCheckIn,
+  onDeleteAttendee,
   onRegisterAttendee,
   onBroadcast,
   onRecordGiftEntry,
@@ -277,6 +279,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const [editingReminder, setEditingReminder] = useState(false);
   const [thankYouSent, setThankYouSent] = useState(false);
   const [actionToast, setActionToast] = useState<string | null>(null);
+  const [confirmDeleteAttendee, setConfirmDeleteAttendee] = useState<Attendee | null>(null);
+  const [deletingAttendee, setDeletingAttendee] = useState(false);
 
   useEffect(() => {
     const cfg = getDefaultMessageConfig(event);
@@ -419,10 +423,6 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   );
   const checkinKioskUrl = useMemo(
     () => buildEventInvitationUrl(event.slug || event.id, 'checkin'),
-    [event.slug, event.id]
-  );
-  const walkInRegistrationUrl = useMemo(
-    () => buildWalkInRegistrationUrl(event.slug || event.id),
     [event.slug, event.id]
   );
   const ogImageUrl = useMemo(
@@ -712,19 +712,6 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
               <Copy className="w-3.5 h-3.5" />
               Copy Invite Link
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (navigator.clipboard?.writeText) {
-                  navigator.clipboard.writeText(walkInRegistrationUrl).catch(() => {});
-                }
-                triggerToast('Walk-In registration link copied');
-              }}
-              className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-[11px] font-medium shadow-sm"
-            >
-              <UserPlus className="w-3.5 h-3.5" />
-              Copy Walk-In Link
-            </button>
             {copiedToast && (
               <span className="text-[11px] font-semibold text-[#0B0B0B]">Copied!</span>
             )}
@@ -738,14 +725,6 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
             >
               <QrCode className="w-4 h-4" />
               Check-In &amp; QR Screen
-            </button>
-            <button
-              type="button"
-              onClick={() => onPreviewPublicEvent('walkin')}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] transition-colors text-xs font-semibold shadow-sm whitespace-nowrap shrink-0"
-            >
-              <UserPlus className="w-4 h-4" />
-              Walk-In Page
             </button>
             {onOpenDisposableCamera && (
               <button
@@ -1377,50 +1356,6 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                         )}
                       </div>
                     )}
-                    <div className="sm:col-span-2 p-3 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-[11px] font-semibold text-[#0B0B0B]">
-                          Self-Service Walk-In Registration Link
-                        </p>
-                        <p className="text-[11px] font-mono text-[#71717A] truncate">
-                          {walkInRegistrationUrl}
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (navigator.clipboard?.writeText) {
-                              navigator.clipboard.writeText(walkInRegistrationUrl).catch(() => {});
-                            }
-                            triggerToast('Walk-In link copied');
-                          }}
-                          className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B] hover:border-[#0B0B0B] inline-flex items-center gap-1"
-                        >
-                          <Copy className="w-3 h-3" />
-                          Copy Link
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            downloadQrSvg(walkInRegistrationUrl, `${event.slug}-walkin-qr.svg`);
-                            triggerToast('Walk-In registration QR downloaded');
-                          }}
-                          className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B] hover:border-[#0B0B0B] inline-flex items-center gap-1"
-                        >
-                          <Download className="w-3 h-3" />
-                          Walk-In QR
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onPreviewPublicEvent('walkin')}
-                          className="px-3 py-1.5 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold inline-flex items-center gap-1"
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                          Open
-                        </button>
-                      </div>
-                    </div>
                     <input
                       type="text"
                       required
@@ -1589,6 +1524,17 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                               </>
                             )}
                           </button>
+                          {isEventCreator && onDeleteAttendee && (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteAttendee(att)}
+                              title="Delete attendee"
+                              aria-label={`Delete ${att.name}`}
+                              className="w-8 h-8 rounded-full bg-white border border-[#E5E5EA] hover:border-[#EF4444] hover:bg-red-50 text-[#71717A] hover:text-[#EF4444] transition-colors inline-flex items-center justify-center shrink-0"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
@@ -2118,55 +2064,36 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 <div className="flex items-center gap-4 min-w-0">
                   <div className="p-2 rounded-xl bg-[#F5F5F7] border border-[#E5E5EA] shrink-0">
                     <DeterministicQrSvg
-                      value={walkInRegistrationUrl}
+                      value={checkinKioskUrl}
                       size={72}
-                      label={`Walk-In registration QR for ${event.title}`}
+                      label={`Validate & check-in QR for ${event.title}`}
                     />
                   </div>
                   <div className="min-w-0">
                     <span className="text-xs font-semibold text-[#0B0B0B] block">
-                      Walk-In Guest Registration Link (Gate Self-Service)
-                    </span>
-                    <span className="text-xs font-mono text-[#71717A] break-all block mt-0.5">
-                      {walkInRegistrationUrl}
+                      Validate &amp; Check-In Gate QR Code
                     </span>
                     <span className="text-[11px] text-[#71717A] block mt-1">
-                      Print at reception or share so un-registered walk-ins get an instant QR pass.
+                      Guests scan this QR code to open the pass validation and check-in QR screen directly.
                     </span>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <button
                     type="button"
-                    onClick={() => {
-                      if (navigator.clipboard?.writeText) {
-                        navigator.clipboard.writeText(walkInRegistrationUrl).catch(() => {});
-                      }
-                      triggerToast('Walk-In registration URL copied');
-                    }}
-                    className="px-4 py-2 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    Copy Walk-In Link
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      downloadQrSvg(walkInRegistrationUrl, `${event.slug}-walkin-qr.svg`);
-                      triggerToast('Walk-In registration SVG QR downloaded');
-                    }}
+                    onClick={handleDownloadQrSvg}
                     className="px-4 py-2 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    Walk-In QR
+                    Download QR SVG
                   </button>
                   <button
                     type="button"
-                    onClick={() => onPreviewPublicEvent('walkin')}
+                    onClick={() => onPreviewPublicEvent('checkin')}
                     className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold inline-flex items-center gap-1"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
-                    Open Walk-In
+                    Preview Validate Screen
                   </button>
                 </div>
               </div>
@@ -2191,7 +2118,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     {!isEventCreator
                       ? 'Only the event creator can activate or export live check-in QR passes.'
                       : isQrPassPublished
-                        ? 'Live Check-In QR is active for gate scanning, walk-in registration, and kiosk passes.'
+                        ? 'Live Check-In QR is active for gate scanning and guest QR pass validation.'
                         : 'Inactive — activate live QR so guests can receive passes and scan into the venue.'}
                   </span>
                 </div>
@@ -2520,43 +2447,28 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     Live Kiosk &amp; Entry QR Active
                   </span>
                   <p className="text-[11px] text-[#71717A]">
-                    Scannable QR ready for live venue check-in, self check-in kiosk, and printed badges
+                    Guests scan this QR code to open guest validation &amp; check-in QR passes directly
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 w-full pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full pt-1">
                   <button
                     type="button"
                     onClick={handleDownloadQrSvg}
-                    className="min-h-[40px] py-2 px-3 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-xs font-semibold shadow-sm"
+                    className="min-h-[40px] py-2 px-3 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-xs font-semibold shadow-sm inline-flex items-center justify-center gap-1.5"
                   >
-                    Check-In SVG
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download QR SVG</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      downloadQrSvg(walkInRegistrationUrl, `${event.slug}-walkin-qr.svg`);
-                      triggerToast('Walk-In registration SVG QR downloaded');
-                    }}
+                    onClick={() => onPreviewPublicEvent('checkin')}
                     className="min-h-[40px] py-2 px-3 rounded-full bg-[#0B0B0B] text-white hover:opacity-90 transition-all text-xs font-semibold shadow-sm inline-flex items-center justify-center gap-1.5"
                   >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Walk-In SVG</span>
+                    <QrCode className="w-3.5 h-3.5" />
+                    <span>Open Validate Screen</span>
                   </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (navigator.clipboard?.writeText) {
-                      navigator.clipboard.writeText(walkInRegistrationUrl).catch(() => {});
-                    }
-                    triggerToast('Walk-In registration link copied');
-                  }}
-                  className="w-full min-h-[40px] py-2 px-3 rounded-full bg-white text-[#0B0B0B] border border-[#E5E5EA] hover:border-[#0B0B0B] transition-colors text-[11px] font-semibold inline-flex items-center justify-center gap-1.5"
-                >
-                  <Link2 className="w-3.5 h-3.5" />
-                  <span>Copy Walk-In Registration Link</span>
-                </button>
               </>
             ) : isEventCreator ? (
               <div className="w-full p-5 rounded-2xl bg-white border border-[#E5E5EA] space-y-3">
@@ -2566,7 +2478,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 <p className="text-[11px] text-[#71717A] leading-relaxed">
                   {event.status === 'draft'
                     ? 'Launch this draft event first, then activate Live Check-In QR so guests receive scannable tickets.'
-                    : 'Activate Live Check-In QR to enable public QR passes, gate camera scanning, and self-service walk-in links.'}
+                    : 'Activate Live Check-In QR to enable public QR passes, pass validation, and gate camera scanning.'}
                 </p>
                 {onToggleQrPassPublished && (
                   <button
@@ -2592,6 +2504,83 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           </section>
         </div>
       </div>
+      )}
+
+      {/* Delete Attendee Confirmation Modal */}
+      {confirmDeleteAttendee && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workspace-delete-attendee-title"
+        >
+          <div className="bg-white w-full max-w-sm rounded-3xl p-5 sm:p-6 border border-[#E5E5EA] soft-popover-shadow space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <h3
+                  id="workspace-delete-attendee-title"
+                  className="text-base font-bold text-[#0B0B0B]"
+                >
+                  Delete attendee?
+                </h3>
+                <p className="text-xs text-[#71717A] leading-relaxed">
+                  Remove{' '}
+                  <span className="font-semibold text-[#0B0B0B]">
+                    {confirmDeleteAttendee.name}
+                  </span>{' '}
+                  ({confirmDeleteAttendee.ticketCode}) from{' '}
+                  <span className="font-semibold text-[#0B0B0B]">{event.title}</span>
+                  {confirmDeleteAttendee.checkedIn ? ', including their check-in record' : ''}? This
+                  action cannot be undone.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !deletingAttendee && setConfirmDeleteAttendee(null)}
+                disabled={deletingAttendee}
+                aria-label="Cancel delete attendee"
+                className="w-8 h-8 rounded-full border border-[#E5E5EA] flex items-center justify-center text-[#0B0B0B] hover:bg-[#F5F5F7] shrink-0 disabled:opacity-40"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteAttendee(null)}
+                disabled={deletingAttendee}
+                className="px-4 h-10 rounded-full border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] hover:bg-[#F5F5F7] disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deletingAttendee}
+                onClick={async () => {
+                  if (!onDeleteAttendee || deletingAttendee) return;
+                  const target = confirmDeleteAttendee;
+                  setDeletingAttendee(true);
+                  try {
+                    await onDeleteAttendee(target.id);
+                    setConfirmDeleteAttendee(null);
+                    triggerToast(`Removed ${target.name}`);
+                  } catch (err) {
+                    setConfirmDeleteAttendee(null);
+                    triggerToast(
+                      err instanceof Error ? err.message : `Unable to delete ${target.name}.`
+                    );
+                  } finally {
+                    setDeletingAttendee(false);
+                  }
+                }}
+                className="px-4 h-10 rounded-full bg-[#EF4444] text-white text-xs font-semibold hover:bg-red-600 transition-colors disabled:opacity-50"
+              >
+                {deletingAttendee ? 'Deleting...' : 'Delete Attendee'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

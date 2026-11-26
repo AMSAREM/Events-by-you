@@ -32,7 +32,6 @@ import { isPollsEnabledForEvent } from '../lib/polls';
 import {
   buildEventInvitationUrl,
   buildEventOgImageUrl,
-  buildWalkInRegistrationUrl,
   downloadQrSvg,
 } from '../lib/qr';
 import {
@@ -557,10 +556,9 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   const isAtCeiling = pct >= capacityThreshold;
   const eventSessions = scheduleBlocks.filter((b) => b.eventId === event.id);
   const inviteUrl = buildEventInvitationUrl(event.slug || event.id);
-  const walkInUrl = buildWalkInRegistrationUrl(event.slug || event.id);
+  const checkinQrUrl = buildEventInvitationUrl(event.slug || event.id, 'checkin');
   const ogUrl = buildEventOgImageUrl(event.slug || event.id);
   const flyerSrc = flyerDraft || preset.flyerUrl;
-  const [copiedWalkIn, setCopiedWalkIn] = useState(false);
 
   const handleStatusChange = async (newStatus: EventStatus) => {
     if (starterActiveBlocked && isActiveEventStatus(newStatus)) return;
@@ -881,34 +879,20 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
             <div className="min-w-0">
               <p className="text-[11px] font-semibold text-[#71717A] flex items-center gap-1">
                 <QrCode className="w-3 h-3 text-[#0B0B0B]" />
-                Walk-In Registration Link (Gate Self-Service)
+                Validate &amp; Check-In Gate QR
               </p>
-              <p className="text-xs font-mono font-semibold text-[#0B0B0B] truncate mt-0.5">
-                {walkInUrl}
+              <p className="text-[11px] text-[#71717A] mt-0.5">
+                Guests scan this QR code to open the pass validation and check-in screen directly.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 shrink-0">
               <button
                 type="button"
-                onClick={() => {
-                  if (navigator.clipboard?.writeText) {
-                    navigator.clipboard.writeText(walkInUrl).catch(() => {});
-                  }
-                  setCopiedWalkIn(true);
-                  window.setTimeout(() => setCopiedWalkIn(false), 1800);
-                }}
-                className="px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shrink-0"
-              >
-                {copiedWalkIn ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedWalkIn ? 'Walk-In Copied' : 'Copy Walk-In Link'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => downloadQrSvg(walkInUrl, `${event.slug || event.id}-walkin-qr.svg`)}
+                onClick={() => downloadQrSvg(checkinQrUrl, `${event.slug || event.id}-checkin-qr.svg`)}
                 className="px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shrink-0"
               >
                 <Download className="w-3.5 h-3.5" />
-                <span>Walk-In QR</span>
+                <span>Download Check-In QR</span>
               </button>
             </div>
           </div>

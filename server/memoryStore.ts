@@ -2504,6 +2504,39 @@ export const memoryStore = {
     return updated;
   },
 
+  deleteAttendee(
+    userId: string,
+    attendeeId: string
+  ): { ok: boolean; deletedAttendeeId: string; event: EventItem } {
+    const att = db.attendees.get(attendeeId);
+    if (!att) {
+      throw Object.assign(new Error('Attendee not found.'), { status: 404 });
+    }
+    const evt = db.events.get(att.eventId);
+    if (!evt || evt.organizerId !== userId) {
+      throw Object.assign(
+        new Error('Only the event creator can delete attendees from this event.'),
+        { status: 403 }
+      );
+    }
+
+    db.attendees.delete(attendeeId);
+    evt.registered = Math.max(0, evt.registered - 1);
+    if (att.checkedIn) {
+      evt.checkedIn = Math.max(0, evt.checkedIn - 1);
+    }
+    if (att.paymentStatus === 'paid') {
+      evt.revenue = Math.max(0, evt.revenue - evt.ticketPrice);
+    }
+    db.events.set(evt.id, evt);
+    const { organizerId: _org, ...cleanEvent } = evt;
+    return {
+      ok: true,
+      deletedAttendeeId: attendeeId,
+      event: cleanEvent,
+    };
+  },
+
   retryPayment(userId: string, attendeeId: string): Attendee {
     const att = db.attendees.get(attendeeId);
     if (!att) throw new Error('Attendee not found.');

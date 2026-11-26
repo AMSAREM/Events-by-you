@@ -52,7 +52,6 @@ import {
   buildEventInvitationUrl,
   buildEventOgImageUrl,
   buildGiftDeskUrl,
-  buildWalkInRegistrationUrl,
   DeterministicQrSvg,
   downloadQrSvg,
 } from '../lib/qr';
@@ -69,6 +68,7 @@ interface PublicEventScreenProps {
   initialEventId?: string;
   initialFocus?: 'top' | 'register' | 'checkin' | 'walkin' | 'gifts' | 'polls';
   initialDeskToken?: string;
+  initialPassCode?: string;
   isLoadingEvents?: boolean;
   isSignedIn?: boolean;
   canOpenStudio?: boolean;
@@ -141,6 +141,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   initialEventId,
   initialFocus = 'top',
   initialDeskToken,
+  initialPassCode,
   isLoadingEvents = false,
   isSignedIn = false,
   canOpenStudio = false,
@@ -197,7 +198,6 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const standaloneGifts = screenMode === 'gifts';
   const standalonePolls = screenMode === 'polls';
   const [showCheckinModal, setShowCheckinModal] = useState(false);
-  const [qrModalMode, setQrModalMode] = useState<'checkin' | 'walkin'>('checkin');
   const [activatingQr, setActivatingQr] = useState(false);
 
   useEffect(() => {
@@ -356,11 +356,6 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     [selectedEvent?.slug, selectedEvent?.id]
   );
 
-  const walkInRegistrationUrl = useMemo(
-    () => buildWalkInRegistrationUrl(selectedEvent?.slug ?? selectedEvent?.id ?? 'event'),
-    [selectedEvent?.slug, selectedEvent?.id]
-  );
-
   const giftsStandaloneUrl = useMemo(
     () =>
       deskToken
@@ -411,6 +406,42 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     };
   }, [standaloneGifts, deskToken, selectedEvent?.id, selectedEvent?.slug]);
 
+  useEffect(() => {
+    const code = initialPassCode?.trim();
+    if (!code || !selectedEvent) return;
+    let cancelled = false;
+    const cleanCode = code.toLowerCase().replace(/^#/, '');
+    const localMatch = attendees.find(
+      (att) =>
+        att.eventId === selectedEvent.id &&
+        att.ticketCode.toLowerCase().replace(/^#/, '') === cleanCode
+    );
+    if (localMatch) {
+      setIssuedPass(localMatch);
+      return;
+    }
+    setCheckinSubMode('lookup');
+    setLookupQuery(code);
+    setLookingUpPass(true);
+    api.public
+      .lookupPass(selectedEvent.id, code)
+      .then((res) => {
+        if (!cancelled && res.attendee) {
+          setIssuedPass(res.attendee);
+          setLookupError(null);
+        }
+      })
+      .catch(() => {
+        // Keep lookup pre-filled cleanly if pass is not immediately found
+      })
+      .finally(() => {
+        if (!cancelled) setLookingUpPass(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialPassCode, selectedEvent?.id]);
+
   const switchScreenMode = (mode: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls') => {
     setScreenMode(mode);
     setGiftReceipt(null);
@@ -445,80 +476,20 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   };
 
   const handleShare = () => {
-    const targetUrl = standaloneWalkin
-      ? walkInRegistrationUrl
-      : standaloneCheckin
-        ? checkinKioskUrl
-        : standaloneGifts
-          ? giftsStandaloneUrl
-          : standalonePolls
-            ? pollsStandaloneUrl
-            : invitationUrl;
+    const targetUrl = standaloneGifts
+      ? giftsStandaloneUrl
+      : standalonePolls
+        ? pollsStandaloneUrl
+        : invitationUrl;
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(targetUrl).catch(() => {});
     }
     setShareToast(
-      standaloneWalkin
-        ? `Walk-In Registration link copied: /e/${selectedEvent?.slug}/walkin`
-        : standaloneCheckin
-          ? `Check-in link copied: /e/${selectedEvent?.slug}/checkin`
-          : standaloneGifts
-            ? `Gift Table link copied: /e/${selectedEvent?.slug}/gifts`
-            : standalonePolls
-              ? `Live Polls link copied: /e/${selectedEvent?.slug}/polls`
-              : `Invitation link copied: /e/${selectedEvent?.slug}`
-    );
-    setTimeout(() => setShareToast(null), 2600);
-  };
-
-  const handleShareWalkInUrl = async () => {
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(walkInRegistrationUrl).catch(() => {});
-    }
-    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function' && selectedEvent) {
-      try {
-        await navigator.share({
-          title: `${selectedEvent.title} — Walk-In Registration`,
-          text: appendPoweredByLine(
-            `Walk-In Guest Registration for ${selectedEvent.title} (${selectedEvent.date} · ${selectedEvent.venue})`
-          ),
-          url: walkInRegistrationUrl,
-        });
-      } catch {
-        // Ignore cancelled share dialog
-      }
-    }
-    setShareToast(`Walk-In Registration URL copied: /e/${selectedEvent?.slug}/walkin`);
-    setTimeout(() => setShareToast(null), 2600);
-  };
-
-  const handleShareCheckinUrl = async () => {
-    const target = qrModalMode === 'walkin' && showCheckinModal ? walkInRegistrationUrl : checkinKioskUrl;
-    const isWalkInTarget = target === walkInRegistrationUrl;
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(target).catch(() => {});
-    }
-    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function' && selectedEvent) {
-      try {
-        await navigator.share({
-          title: isWalkInTarget
-            ? `${selectedEvent.title} — Walk-In Registration`
-            : `${selectedEvent.title} — Event Check-In`,
-          text: appendPoweredByLine(
-            isWalkInTarget
-              ? `Register as a walk-in guest for ${selectedEvent.title} (${selectedEvent.date} · ${selectedEvent.venue})`
-              : `Check in for ${selectedEvent.title} (${selectedEvent.date} · ${selectedEvent.venue})`
-          ),
-          url: target,
-        });
-      } catch {
-        // Ignore user-cancelled share dialog
-      }
-    }
-    setShareToast(
-      isWalkInTarget
-        ? `Walk-In Registration URL copied: /e/${selectedEvent?.slug}/walkin`
-        : `Standalone Check-In URL copied: /e/${selectedEvent?.slug}/checkin`
+      standaloneGifts
+        ? `Gift Table link copied: /e/${selectedEvent?.slug}/gifts`
+        : standalonePolls
+          ? `Live Polls link copied: /e/${selectedEvent?.slug}/polls`
+          : `Invitation link copied: /e/${selectedEvent?.slug}`
     );
     setTimeout(() => setShareToast(null), 2600);
   };
@@ -997,16 +968,6 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               </div>
 
               <div className="flex items-center gap-2">
-                {!standaloneWalkin && (
-                  <button
-                    type="button"
-                    onClick={() => switchScreenMode('walkin')}
-                    className="text-[11px] font-semibold text-[#0B0B0B] bg-[#F5F5F7] hover:bg-[#E8E8EA] px-3 py-1 rounded-full inline-flex items-center gap-1 transition-colors"
-                  >
-                    <UserPlus className="w-3 h-3" />
-                    <span>Walk-In Link</span>
-                  </button>
-                )}
                 <button
                   type="button"
                   onClick={() => switchScreenMode(isStandaloneSideLayout ? 'top' : 'checkin')}
@@ -1019,7 +980,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     </>
                   ) : (
                     <>
-                      <span>Open Standalone Check-In Screen</span>
+                      <span>Open Validate &amp; Check-In Screen</span>
                       <ExternalLink className="w-3 h-3" />
                     </>
                   )}
@@ -1446,32 +1407,8 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[10px] font-bold uppercase tracking-wider">
                     <QrCode className="w-3 h-3" />
-                    {qrModalMode === 'walkin' ? 'Live Walk-In Registration QR' : 'Live Gate Check-In QR'}
+                    Validate &amp; Check-In QR
                   </span>
-                  <div className="inline-flex items-center p-0.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA]">
-                    <button
-                      type="button"
-                      onClick={() => setQrModalMode('checkin')}
-                      className={`min-h-[34px] px-3.5 py-1.5 rounded-full text-[11px] font-semibold transition-colors ${
-                        qrModalMode === 'checkin'
-                          ? 'bg-[#0B0B0B] text-white'
-                          : 'text-[#71717A] hover:text-[#0B0B0B]'
-                      }`}
-                    >
-                      Check-In QR
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setQrModalMode('walkin')}
-                      className={`min-h-[34px] px-3.5 py-1.5 rounded-full text-[11px] font-semibold transition-colors ${
-                        qrModalMode === 'walkin'
-                          ? 'bg-[#0B0B0B] text-white'
-                          : 'text-[#71717A] hover:text-[#0B0B0B]'
-                      }`}
-                    >
-                      Walk-In QR
-                    </button>
-                  </div>
                 </div>
                 <h2 id="checkin-qr-kiosk-title" className="font-display text-lg sm:text-xl xl:text-2xl font-bold text-[#0B0B0B] tracking-tight pt-0.5 truncate">
                   {selectedEvent.title}
@@ -1485,14 +1422,10 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 <div className="w-full flex-1 min-h-[190px] sm:min-h-[240px] lg:min-h-[200px] flex items-center justify-center qr-stage-box min-w-0">
                   <div className="qr-stage-square p-3 sm:p-4 xl:p-5 bg-white rounded-2xl sm:rounded-3xl shadow-md border border-[#E5E5EA] flex items-center justify-center box-border">
                     <DeterministicQrSvg
-                      value={qrModalMode === 'walkin' ? walkInRegistrationUrl : checkinKioskUrl}
+                      value={checkinKioskUrl}
                       size={520}
                       className="w-full h-full block"
-                      label={
-                        qrModalMode === 'walkin'
-                          ? `Walk-In Registration QR code for ${selectedEvent.title}`
-                          : `Gate check-in QR code for ${selectedEvent.title}`
-                      }
+                      label={`Validate & check-in QR code for ${selectedEvent.title}`}
                     />
                   </div>
                 </div>
@@ -1500,14 +1433,10 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 <div className="w-full max-w-md space-y-2 shrink-0 min-w-0">
                   <div className="space-y-0.5 min-w-0">
                     <p className="text-xs sm:text-sm font-semibold text-[#0B0B0B]">
-                      {qrModalMode === 'walkin'
-                        ? 'Scan to Self-Register as a Walk-In Guest'
-                        : 'Scan at Gate Entrance or Desk'}
+                      Scan to Validate &amp; Get Your QR Check-In Pass
                     </p>
-                    <p className="text-[11px] font-mono text-[#71717A] truncate">
-                      {qrModalMode === 'walkin'
-                        ? `/e/${selectedEvent.slug}/walkin`
-                        : `/e/${selectedEvent.slug}/checkin`}
+                    <p className="text-[11px] text-[#71717A]">
+                      Opens directly to guest validation &amp; instant check-in QR pass
                     </p>
                   </div>
                   <div className="w-full grid grid-cols-2 gap-2 text-left">
@@ -1551,46 +1480,26 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 </div>
               </div>
 
-              <div className="space-y-2 shrink-0 min-w-0">
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      downloadQrSvg(
-                        qrModalMode === 'walkin' ? walkInRegistrationUrl : checkinKioskUrl,
-                        qrModalMode === 'walkin'
-                          ? `${selectedEvent.slug}-walkin-qr.svg`
-                          : `${selectedEvent.slug}-checkin-qr.svg`
-                      )
-                    }
-                    className="h-10 sm:h-11 px-3 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
-                  >
-                    <Download className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">Download QR</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleShareCheckinUrl()}
-                    className="h-10 sm:h-11 px-3 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
-                  >
-                    <Copy className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">Copy Link</span>
-                  </button>
-                </div>
-
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 shrink-0 min-w-0">
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadQrSvg(checkinKioskUrl, `${selectedEvent.slug}-checkin-qr.svg`)
+                  }
+                  className="h-11 sm:h-12 px-4 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                >
+                  <Download className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Download QR</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => {
                     setShowCheckinModal(false);
-                    switchScreenMode(qrModalMode === 'walkin' ? 'walkin' : 'checkin');
+                    switchScreenMode('checkin');
                   }}
-                  className="w-full h-11 sm:h-12 px-4 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
+                  className="h-11 sm:h-12 px-4 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
                 >
-                  <span className="truncate">
-                    {qrModalMode === 'walkin'
-                      ? 'Open Walk-In Registration Screen'
-                      : 'Open Full-Screen Check-In Kiosk'}
-                  </span>
+                  <span className="truncate">Open Validate &amp; Check-In</span>
                   <ArrowRight className="w-4 h-4 shrink-0" />
                 </button>
               </div>
@@ -1661,23 +1570,12 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     type="button"
                     onClick={() => switchScreenMode('checkin')}
                     className={`px-3 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap transition-colors ${
-                      standaloneCheckin
+                      isStandaloneSideLayout
                         ? 'bg-[#0B0B0B] text-white'
                         : 'text-[#71717A] hover:text-[#0B0B0B]'
                     }`}
                   >
-                    Check-In
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => switchScreenMode('walkin')}
-                    className={`px-3 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap transition-colors ${
-                      standaloneWalkin
-                        ? 'bg-[#0B0B0B] text-white'
-                        : 'text-[#71717A] hover:text-[#0B0B0B]'
-                    }`}
-                  >
-                    Walk-In
+                    Validate &amp; Check-In
                   </button>
                   {giftTableAvailable && (
                     <button
@@ -1745,16 +1643,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             {!isGiftDeskPortal && (
               <button
                 type="button"
-                onClick={() => {
-                  setQrModalMode(standaloneWalkin ? 'walkin' : 'checkin');
-                  setShowCheckinModal(true);
-                }}
+                onClick={() => setShowCheckinModal(true)}
                 aria-label="Open Check-In QR"
                 title="Open Check-In QR"
                 className="h-9 w-9 sm:w-auto sm:px-3 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 hover:bg-neutral-800 transition-colors whitespace-nowrap shrink-0"
               >
                 <QrCode className="w-3.5 h-3.5 shrink-0" />
-                <span className="hidden sm:inline">{standaloneWalkin ? 'Walk-In QR' : 'Check-In QR'}</span>
+                <span className="hidden sm:inline">Check-In QR</span>
               </button>
             )}
             <button
@@ -1824,14 +1719,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       onClick={() => switchScreenMode('checkin')}
                       className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                     >
-                      Check-In
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => switchScreenMode('walkin')}
-                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
-                    >
-                      Walk-In
+                      Validate &amp; Check-In
                     </button>
                     {giftTableAvailable && (
                       <button
@@ -1876,14 +1764,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       onClick={() => switchScreenMode('checkin')}
                       className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                     >
-                      Check-In
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => switchScreenMode('walkin')}
-                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
-                    >
-                      Walk-In
+                      Validate &amp; Check-In
                     </button>
                     <button
                       type="button"
@@ -2381,20 +2262,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => switchScreenMode('checkin')}
-                      className={`min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 ${
-                        standaloneCheckin ? 'bg-[#0B0B0B] text-white' : 'text-[#71717A]'
-                      }`}
+                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white whitespace-nowrap shrink-0"
                     >
-                      Check-In
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => switchScreenMode('walkin')}
-                      className={`min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 ${
-                        standaloneWalkin ? 'bg-[#0B0B0B] text-white' : 'text-[#71717A]'
-                      }`}
-                    >
-                      Walk-In
+                      Validate &amp; Check-In
                     </button>
                     {giftTableAvailable && (
                       <button
@@ -2417,13 +2287,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   </div>
                 )}
 
-                {/* Full-Screen Side-by-Side Check-In / Walk-In Kiosk: Feathered Event Flyer + Registration / Lookup */}
+                {/* Direct Validate & Check-In QR Pass Layout: Immediate validation form (top on mobile, right on desktop) + Feathered Event Flyer */}
                 <div
                   className={`flex-1 bg-white rounded-[28px] sm:rounded-[32px] shadow-md border border-[#E5E5EA]/70 overflow-hidden grid grid-cols-1 lg:grid-cols-12 items-stretch ${
                     isFullscreen ? 'lg:min-h-[calc(100dvh-2rem)]' : 'lg:min-h-[calc(100dvh-7.25rem)]'
                   }`}
                 >
-                  <div className="lg:col-span-5 xl:col-span-4 flex flex-col bg-white">
+                  <div className="order-2 lg:order-1 lg:col-span-5 xl:col-span-4 flex flex-col bg-white">
                     <CheckInFlyerSidePanel
                       event={selectedEvent}
                       variant="full"
@@ -2437,7 +2307,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     />
                   </div>
 
-                  <div className="lg:col-span-7 xl:col-span-8 p-5 sm:p-7 lg:p-8 flex flex-col justify-center gap-5 min-w-0 bg-white relative z-10">
+                  <div className="order-1 lg:order-2 lg:col-span-7 xl:col-span-8 p-5 sm:p-7 lg:p-8 flex flex-col justify-center gap-5 min-w-0 bg-white relative z-10">
                     <div className="flex flex-wrap items-center justify-between gap-3 bg-[#F5F5F7] rounded-2xl px-4 py-3 border border-[#E5E5EA]">
                       <div className="text-xs text-[#71717A] tabular-nums">
                         {canOpenStudio ? (
@@ -2450,55 +2320,19 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           <>
                             <strong className="text-[#0B0B0B]">{selectedEvent.title}</strong> ·{' '}
                             {isQrPassPublished
-                              ? standaloneWalkin
-                                ? 'Live Walk-In Registration'
-                                : 'Instant Gate QR Check-In'
+                              ? 'Validate & Check-In QR Pass'
                               : 'Live QR Pending Creator'}
                           </>
                         )}
                       </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        {standaloneWalkin ? (
-                          <button
-                            type="button"
-                            onClick={() => void handleShareWalkInUrl()}
-                            className="px-3.5 py-1.5 rounded-full bg-[#0B0B0B] text-white hover:bg-neutral-800 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
-                          >
-                            <Share2 className="w-3.5 h-3.5" />
-                            <span>Share Walk-In Link</span>
-                          </button>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => void handleShareCheckinUrl()}
-                              className="px-3.5 py-1.5 rounded-full bg-[#0B0B0B] text-white hover:bg-neutral-800 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
-                            >
-                              <Share2 className="w-3.5 h-3.5" />
-                              <span>Share Check-In Link</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => switchScreenMode('walkin')}
-                              className="px-3.5 py-1.5 rounded-full bg-white hover:bg-[#E8E8EA] border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
-                            >
-                              <UserPlus className="w-3.5 h-3.5" />
-                              <span>Walk-In Link</span>
-                            </button>
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setQrModalMode(standaloneWalkin ? 'walkin' : 'checkin');
-                            setShowCheckinModal(true);
-                          }}
-                          className="px-3.5 py-1.5 rounded-full bg-white hover:bg-[#E8E8EA] border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
-                        >
-                          <QrCode className="w-3.5 h-3.5" />
-                          <span>{standaloneWalkin ? 'Walk-In QR Display' : 'Gate QR Display'}</span>
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowCheckinModal(true)}
+                        className="px-3.5 py-1.5 rounded-full bg-white hover:bg-[#E8E8EA] border border-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                      >
+                        <QrCode className="w-3.5 h-3.5" />
+                        <span>Gate QR Display</span>
+                      </button>
                     </div>
 
                     {registerSectionCard}
@@ -2521,14 +2355,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   onClick={() => switchScreenMode('checkin')}
                   className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
                 >
-                  Check-In
-                </button>
-                <button
-                  type="button"
-                  onClick={() => switchScreenMode('walkin')}
-                  className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
-                >
-                  Walk-In
+                  Validate &amp; Check-In
                 </button>
                 {giftTableAvailable && (
                   <button
@@ -2771,31 +2598,18 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   </div>
                 </div>
                 <div className="flex flex-col md:items-end gap-2 w-full md:w-auto shrink-0">
-                  <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2 w-full md:w-auto">
-                    <button
-                      type="button"
-                      onClick={() => switchScreenMode('checkin')}
-                      className="min-h-[42px] px-4 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
-                    >
-                      <QrCode className="w-4 h-4 shrink-0" />
-                      <span>Check-In Screen</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => switchScreenMode('walkin')}
-                      className="min-h-[42px] px-4 rounded-full bg-white/15 hover:bg-white/25 text-white border border-white/20 text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
-                    >
-                      <UserPlus className="w-4 h-4 shrink-0" />
-                      <span>Walk-In Link</span>
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('checkin')}
+                    className="min-h-[42px] px-4 rounded-full bg-white text-[#0B0B0B] hover:bg-zinc-200 text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap w-full md:w-auto"
+                  >
+                    <QrCode className="w-4 h-4 shrink-0" />
+                    <span>Validate &amp; Check-In Screen</span>
+                  </button>
                   <div className="grid grid-cols-2 md:flex items-center gap-2 w-full md:w-auto">
                     <button
                       type="button"
-                      onClick={() => {
-                        setQrModalMode('checkin');
-                        setShowCheckinModal(true);
-                      }}
+                      onClick={() => setShowCheckinModal(true)}
                       className="min-h-[40px] px-3.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
                     >
                       <QrCode className="w-3.5 h-3.5 shrink-0" />

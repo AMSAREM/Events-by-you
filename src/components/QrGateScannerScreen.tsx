@@ -11,7 +11,6 @@ import {
   Download,
   ExternalLink,
   ImageUp,
-  Link2,
   Maximize2,
   Minimize2,
   QrCode,
@@ -20,6 +19,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Trash2,
   UserPlus,
   Users,
   X,
@@ -36,7 +36,6 @@ import { buildCameraLinkForOrigin } from '../lib/eventMessages';
 import { useDocumentFullscreen } from '../lib/fullscreen';
 import {
   buildEventInvitationUrl,
-  buildWalkInRegistrationUrl,
   DeterministicQrSvg,
   downloadQrSvg,
   extractPassLookupToken,
@@ -64,6 +63,7 @@ interface QrGateScannerScreenProps {
     smsSkippedReason?: string;
   } | void> | void;
   onRegisterAttendee: (eventId: string, attendee: Attendee) => Promise<void> | void;
+  onDeleteAttendee?: (attendeeId: string) => Promise<void> | void;
   onToggleQrPassPublished?: (eventId: string, published: boolean) => Promise<void> | void;
   onManageEvent: (event: EventItem) => void;
   onNavigateSettings: () => void;
@@ -110,6 +110,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   onBackToStudio,
   onToggleCheckIn,
   onRegisterAttendee,
+  onDeleteAttendee,
   onToggleQrPassPublished,
   onManageEvent,
   onNavigateSettings,
@@ -142,13 +143,6 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
         : '',
     [selectedEvent]
   );
-  const walkInRegistrationUrl = useMemo(
-    () =>
-      selectedEvent
-        ? buildWalkInRegistrationUrl(selectedEvent.slug || selectedEvent.id)
-        : '',
-    [selectedEvent]
-  );
   const isEventCreator = profile.appRole !== 'gate_staff';
   const isQrPassPublished = selectedEvent ? selectedEvent.qrPassPublished !== false : false;
 
@@ -157,7 +151,6 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   const [rosterFilter, setRosterFilter] = useState<'pending' | 'checked' | 'all'>('pending');
   const [lastOutcome, setLastOutcome] = useState<ScanOutcome | null>(null);
   const [scanHistory, setScanHistory] = useState<ScanOutcome[]>([]);
-  const [copiedWalkInLink, setCopiedWalkInLink] = useState(false);
 
   // Real camera + BarcodeDetector + jsQR fallback state
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -206,6 +199,8 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
 
   // QR Preview Modal for an attendee
   const [previewPass, setPreviewPass] = useState<Attendee | null>(null);
+  const [confirmDeleteAttendee, setConfirmDeleteAttendee] = useState<Attendee | null>(null);
+  const [deletingAttendee, setDeletingAttendee] = useState(false);
 
   const eventAttendees = useMemo(
     () => attendees.filter((a) => !selectedEvent || a.eventId === selectedEvent.id),
@@ -277,9 +272,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
         status: 'not-found',
         query: rawTrimmed,
         message:
-          portalUrlMatch.type === 'walkin'
-            ? `Scanned the Self-Service Walk-In Registration QR (/e/${portalUrlMatch.slug}/walkin). Guests should scan this on their phones, or scan a guest's personal ticket QR pass here.`
-            : `Scanned the public ${portalUrlMatch.type === 'checkin' ? 'Gate Check-In' : 'Event Invitation'} QR (/e/${portalUrlMatch.slug}). Scan a guest's personal pass QR or pass code to admit them.`,
+          'Scanned the Event Check-In QR. Guests scan this on their phones to validate & open their pass, or scan a guest personal pass QR code here.',
         timestamp: nowTime,
       };
       setLastOutcome(outcome);
@@ -314,7 +307,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       const outcome: ScanOutcome = {
         status: 'not-found',
         query: extractedToken,
-        message: `No pass found matching "${extractedToken}". Use the Walk-In Check-In Registration panel or share /e/${selectedEvent?.slug ?? 'event'}/walkin to issue a QR pass immediately.`,
+        message: `No pass found matching "${extractedToken}". Use the Walk-In Check-In Registration panel to register the guest and issue a QR pass immediately.`,
         timestamp: nowTime,
       };
       setLastOutcome(outcome);
@@ -1090,70 +1083,6 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               </span>
             </div>
 
-            {selectedEvent && walkInRegistrationUrl && (
-              <div className="mb-4 p-3.5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="p-1.5 bg-white rounded-xl border border-[#E5E5EA] shrink-0">
-                    <DeterministicQrSvg
-                      value={walkInRegistrationUrl}
-                      size={52}
-                      label={`Walk-In Registration QR for ${selectedEvent.title}`}
-                    />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-[#71717A] flex items-center gap-1">
-                      <Link2 className="w-3 h-3 text-[#0B0B0B]" />
-                      Self-Service Walk-In Registration Link
-                    </p>
-                    <p className="text-xs font-mono font-semibold text-[#0B0B0B] truncate">
-                      {walkInRegistrationUrl}
-                    </p>
-                    <p className="text-[11px] text-[#71717A]">
-                      Share or print at venue door so walk-in guests self-register &amp; get instant QR passes.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (navigator.clipboard?.writeText) {
-                        navigator.clipboard.writeText(walkInRegistrationUrl).catch(() => {});
-                      }
-                      setCopiedWalkInLink(true);
-                      window.setTimeout(() => setCopiedWalkInLink(false), 2000);
-                    }}
-                    className="px-3 py-1.5 rounded-full bg-[#0B0B0B] text-white hover:bg-zinc-800 text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap"
-                  >
-                    {copiedWalkInLink ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedWalkInLink ? 'Copied' : 'Copy Link'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      downloadQrSvg(
-                        walkInRegistrationUrl,
-                        `${selectedEvent.slug || selectedEvent.id}-walkin-qr.svg`
-                      )
-                    }
-                    className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1 whitespace-nowrap"
-                  >
-                    <Download className="w-3 h-3" />
-                    <span>Walk-In QR</span>
-                  </button>
-                  <a
-                    href={walkInRegistrationUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1 whitespace-nowrap"
-                  >
-                    <ExternalLink className="w-3 h-3" />
-                    <span>Open</span>
-                  </a>
-                </div>
-              </div>
-            )}
-
             {!isEventCreator ? (
               <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2">
                 <p className="text-xs font-bold text-[#0B0B0B]">
@@ -1173,7 +1102,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                     <p className="text-[11px] text-[#71717A] leading-relaxed">
                       {selectedEvent.status === 'draft'
                         ? 'Launch this draft event first before activating live check-in QR passes.'
-                        : 'Activate Live Check-In QR Passes as the event creator so public RSVPs, walk-in links, and gate scans go live.'}
+                        : 'Activate Live Check-In QR Passes as the event creator so public pass validation, check-in QR passes, and gate scans go live.'}
                     </p>
                     {onToggleQrPassPublished && (
                       <button
@@ -1422,11 +1351,11 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto shrink-0">
+                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 w-full sm:w-auto shrink-0">
                     <button
                       type="button"
                       onClick={() => setPreviewPass(att)}
-                      className="min-h-[40px] px-3.5 py-1.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
+                      className="flex-1 sm:flex-initial min-h-[40px] px-3.5 py-1.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
                     >
                       <QrCode className="w-3.5 h-3.5" />
                       Pass QR
@@ -1450,7 +1379,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                           });
                         });
                       }}
-                      className={`min-h-[40px] px-4 py-1.5 rounded-full text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 whitespace-nowrap ${
+                      className={`flex-1 sm:flex-initial min-h-[40px] px-4 py-1.5 rounded-full text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 whitespace-nowrap ${
                         att.checkedIn
                           ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
                           : 'bg-[#0B0B0B] text-white hover:bg-zinc-800'
@@ -1465,6 +1394,17 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                         'Check In Now'
                       )}
                     </button>
+                    {isEventCreator && onDeleteAttendee && (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteAttendee(att)}
+                        title="Delete attendee"
+                        aria-label={`Delete ${att.name}`}
+                        className="w-10 h-10 rounded-full bg-white border border-[#E5E5EA] hover:border-[#EF4444] hover:bg-red-50 text-[#71717A] hover:text-[#EF4444] transition-colors inline-flex items-center justify-center shrink-0"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
               ))
@@ -1603,6 +1543,92 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                 className="px-4 h-11 rounded-full border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B]"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Attendee Confirmation Modal */}
+      {confirmDeleteAttendee && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="gate-delete-attendee-title"
+        >
+          <div className="bg-white w-full max-w-sm rounded-3xl p-5 sm:p-6 border border-[#E5E5EA] soft-popover-shadow space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <h3
+                  id="gate-delete-attendee-title"
+                  className="text-base font-bold text-[#0B0B0B]"
+                >
+                  Delete attendee?
+                </h3>
+                <p className="text-xs text-[#71717A] leading-relaxed">
+                  Remove <span className="font-semibold text-[#0B0B0B]">{confirmDeleteAttendee.name}</span>{' '}
+                  ({confirmDeleteAttendee.ticketCode}) from{' '}
+                  <span className="font-semibold text-[#0B0B0B]">
+                    {selectedEvent?.title ?? 'this event'}
+                  </span>
+                  {confirmDeleteAttendee.checkedIn ? ', including their check-in record' : ''}? This action cannot be undone.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !deletingAttendee && setConfirmDeleteAttendee(null)}
+                disabled={deletingAttendee}
+                aria-label="Cancel delete attendee"
+                className="w-8 h-8 rounded-full border border-[#E5E5EA] flex items-center justify-center text-[#0B0B0B] hover:bg-[#F5F5F7] shrink-0 disabled:opacity-40"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteAttendee(null)}
+                disabled={deletingAttendee}
+                className="px-4 h-10 rounded-full border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] hover:bg-[#F5F5F7] disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deletingAttendee}
+                onClick={async () => {
+                  if (!onDeleteAttendee || deletingAttendee) return;
+                  const target = confirmDeleteAttendee;
+                  setDeletingAttendee(true);
+                  try {
+                    await onDeleteAttendee(target.id);
+                    if (previewPass?.id === target.id) setPreviewPass(null);
+                    if (walkInSuccess?.id === target.id) setWalkInSuccess(null);
+                    setConfirmDeleteAttendee(null);
+                  } catch (err) {
+                    setLastOutcome({
+                      status: 'rejected',
+                      attendee: target,
+                      eventTitle: selectedEvent?.title ?? 'Event Gate',
+                      message:
+                        err instanceof Error
+                          ? err.message
+                          : `Unable to delete ${target.name}.`,
+                      timestamp: new Date().toLocaleTimeString('en-GB', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      }),
+                    });
+                    setConfirmDeleteAttendee(null);
+                  } finally {
+                    setDeletingAttendee(false);
+                  }
+                }}
+                className="px-4 h-10 rounded-full bg-[#EF4444] text-white text-xs font-semibold hover:bg-red-600 transition-colors disabled:opacity-50"
+              >
+                {deletingAttendee ? 'Deleting...' : 'Delete Attendee'}
               </button>
             </div>
           </div>
