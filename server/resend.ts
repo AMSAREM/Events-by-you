@@ -606,6 +606,78 @@ export async function sendAuthOtpEmail(params: {
   );
 }
 
+export interface EmailScheduleItem {
+  time: string;
+  title: string;
+  stage?: string;
+  lead?: string;
+}
+
+function renderEmailScheduleHtml(
+  scheduleBlocks?: EmailScheduleItem[],
+  eventUrl?: string
+): string {
+  const items = Array.isArray(scheduleBlocks) ? scheduleBlocks.slice(0, 12) : [];
+  if (items.length === 0 && !eventUrl) return '';
+
+  const rowsHtml = items
+    .map(
+      (blk) => `
+      <div style="padding:10px 12px;background:#FFFFFF;border:1px solid #E5E5EA;border-radius:12px;margin-bottom:8px;">
+        <div style="font-size:11px;font-weight:700;color:#0B0B0B;font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;">
+          ${escapeHtml(blk.time)}
+        </div>
+        <div style="font-size:13px;font-weight:700;color:#0B0B0B;margin-top:2px;">
+          ${escapeHtml(blk.title)}
+        </div>
+        ${
+          blk.stage || blk.lead
+            ? `<div style="font-size:11px;color:#71717A;margin-top:2px;">${escapeHtml(
+                [blk.stage, blk.lead].filter(Boolean).join(' · ')
+              )}</div>`
+            : ''
+        }
+      </div>`
+    )
+    .join('');
+
+  const linkHtml = eventUrl
+    ? `<div style="margin-top:${items.length > 0 ? '12px' : '0'};">
+        <a href="${escapeHtml(eventUrl)}" style="display:inline-block;padding:10px 18px;background:#0B0B0B;color:#FFFFFF;text-decoration:none;border-radius:9999px;font-size:12px;font-weight:700;">
+          View Event Page &amp; Full Program Schedule
+        </a>
+      </div>`
+    : '';
+
+  return `
+    <div style="margin:20px 0 0 0;padding:18px 20px;background:#F5F5F7;border:1px solid #E5E5EA;border-radius:16px;">
+      <p style="margin:0 0 ${items.length > 0 ? '10px' : '8px'} 0;font-size:13px;font-weight:700;color:#0B0B0B;">
+        Program Schedule &amp; Run of Show
+      </p>
+      ${rowsHtml}
+      ${linkHtml}
+    </div>`;
+}
+
+function renderEmailScheduleText(
+  scheduleBlocks?: EmailScheduleItem[],
+  eventUrl?: string
+): string[] {
+  const lines: string[] = [];
+  const items = Array.isArray(scheduleBlocks) ? scheduleBlocks.slice(0, 12) : [];
+  if (items.length > 0) {
+    lines.push('', 'Program Schedule & Run of Show:');
+    for (const blk of items) {
+      const meta = [blk.stage, blk.lead].filter(Boolean).join(' · ');
+      lines.push(`- ${blk.time}: ${blk.title}${meta ? ` (${meta})` : ''}`);
+    }
+  }
+  if (eventUrl) {
+    lines.push('', `View Event Page & Full Program Schedule: ${eventUrl}`);
+  }
+  return lines;
+}
+
 export async function sendEventPassEmail(params: {
   to: string;
   attendeeName: string;
@@ -620,6 +692,8 @@ export async function sendEventPassEmail(params: {
   replyTo?: string;
   customMessage?: string;
   cameraUrl?: string;
+  eventUrl?: string;
+  scheduleBlocks?: EmailScheduleItem[];
 }): Promise<SendResendEmailResult> {
   const subject = `Your pass for ${params.eventTitle} (${params.ticketCode})`;
   const preheaderText = `${params.tier} Pass ${params.ticketCode} for ${params.eventTitle} · ${params.eventDate}`;
@@ -631,6 +705,11 @@ export async function sendEventPassEmail(params: {
     const poweredByHtml = includeBrandUrl
       ? ` · Events By You (<a href="${escapeHtml(DEFAULT_APP_URL)}" style="color:#0B0B0B;text-decoration:underline;">${escapeHtml(appHost)}</a>)`
       : ' · Events By You';
+
+    const scheduleBlockHtml = renderEmailScheduleHtml(
+      params.scheduleBlocks,
+      includeBrandUrl ? params.eventUrl : undefined
+    );
 
     const cameraBlockHtml = params.cameraUrl
       ? `
@@ -681,6 +760,7 @@ export async function sendEventPassEmail(params: {
         <div><strong>Venue:</strong> ${escapeHtml(params.eventVenue)}, ${escapeHtml(params.eventCity)}</div>
         <div><strong>Hosted by:</strong> ${escapeHtml(params.organizerName)}</div>
       </div>
+      ${scheduleBlockHtml}
       ${cameraBlockHtml}
       <p style="margin:20px 0 0 0;padding-top:16px;border-top:1px solid #E5E5EA;font-size:12px;line-height:1.5;color:#71717A;">
         Need help? Reply directly to reach ${escapeHtml(params.organizerName)}${poweredByHtml}.
@@ -701,6 +781,7 @@ export async function sendEventPassEmail(params: {
       `Date & Time: ${params.eventDate} · ${params.eventTime}`,
       `Venue: ${params.eventVenue}, ${params.eventCity}`,
       `Hosted by: ${params.organizerName}`,
+      ...renderEmailScheduleText(params.scheduleBlocks, includeBrandUrl ? params.eventUrl : undefined),
       params.cameraUrl ? `\nDisposable Camera (5 photos + collage): ${params.cameraUrl}` : '',
       ``,
       includeBrandUrl ? `Events By You · ${DEFAULT_APP_URL}` : 'Events By You',
@@ -737,10 +818,12 @@ export async function sendCheckInWelcomeEmail(params: {
   organizerName: string;
   welcomeMessage: string;
   cameraUrl: string;
+  eventUrl?: string;
+  scheduleBlocks?: EmailScheduleItem[];
   replyTo?: string;
 }): Promise<SendResendEmailResult> {
   const subject = `Checked In: Welcome to ${params.eventTitle}`;
-  const preheaderText = `You're checked in! Open the shared disposable camera (5 shots + collage) for ${params.eventTitle}.`;
+  const preheaderText = `You're checked in! View the program schedule and open the shared disposable camera for ${params.eventTitle}.`;
 
   const cleanWelcomeMessage = stripTrailingPoweredByLine(params.welcomeMessage);
   const renderContent = (effectiveFrom: string) => {
@@ -749,6 +832,11 @@ export async function sendCheckInWelcomeEmail(params: {
     const poweredByHtml = includeBrandUrl
       ? ` · Events By You (<a href="${escapeHtml(DEFAULT_APP_URL)}" style="color:#0B0B0B;text-decoration:underline;">${escapeHtml(appHost)}</a>)`
       : ' · Events By You';
+
+    const scheduleBlockHtml = renderEmailScheduleHtml(
+      params.scheduleBlocks,
+      includeBrandUrl ? params.eventUrl : undefined
+    );
 
     const html = `
 <!doctype html>
@@ -782,7 +870,8 @@ export async function sendCheckInWelcomeEmail(params: {
           Open Disposable Camera
         </a>
       </div>
-      <div style="font-size:12px;line-height:1.7;color:#71717A;">
+      ${scheduleBlockHtml}
+      <div style="font-size:12px;line-height:1.7;color:#71717A;margin-top:16px;">
         <div><strong>Pass Code:</strong> ${escapeHtml(params.ticketCode)}</div>
         <div><strong>Venue:</strong> ${escapeHtml(params.eventVenue)}, ${escapeHtml(params.eventCity)} · ${escapeHtml(params.eventDate)}</div>
       </div>
@@ -800,6 +889,7 @@ export async function sendCheckInWelcomeEmail(params: {
       `Welcome to ${params.eventTitle}, ${params.attendeeName}!`,
       ``,
       cleanWelcomeMessage || params.welcomeMessage,
+      ...renderEmailScheduleText(params.scheduleBlocks, includeBrandUrl ? params.eventUrl : undefined),
       ``,
       `Open Disposable Camera (5 shots + collage): ${params.cameraUrl}`,
       `Pass Code: ${params.ticketCode}`,

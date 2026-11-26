@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Check, Download, Lock, Mail, Plus, QrCode, Send, UserPlus, X } from 'lucide-react';
+import { AlertCircle, Check, Copy, Download, Link2, Lock, Mail, Plus, QrCode, Send, UserPlus, X } from 'lucide-react';
 import {
   Attendee,
   AttendeeTier,
@@ -9,6 +9,7 @@ import {
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
 import { appendPoweredByLine, calculateSmsCredits, POWERED_BY_LINE } from '../lib/eventMessages';
+import { buildWalkInRegistrationUrl, downloadQrSvg } from '../lib/qr';
 import { getPlanEntitlements } from '../lib/subscriptionPlans';
 import { CheckInFlyerSidePanel } from './CheckInFlyerSidePanel';
 import { CircularGauge } from './MonochromeArtwork';
@@ -820,9 +821,58 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                 </span>
               </label>
 
+              {selectedWalkInEvent && (
+                <div className="p-3 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1">
+                      <Link2 className="w-3 h-3" />
+                      Self-Service Walk-In Link
+                    </p>
+                    <p className="text-[11px] font-mono text-[#71717A] truncate">
+                      {buildWalkInRegistrationUrl(selectedWalkInEvent.slug || selectedWalkInEvent.id)}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const url = buildWalkInRegistrationUrl(
+                          selectedWalkInEvent.slug || selectedWalkInEvent.id
+                        );
+                        if (navigator.clipboard?.writeText) {
+                          navigator.clipboard.writeText(url).catch(() => {});
+                        }
+                        showToast('Walk-in registration link copied');
+                      }}
+                      className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
+                    >
+                      <Copy className="w-3 h-3" />
+                      Copy Link
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const url = buildWalkInRegistrationUrl(
+                          selectedWalkInEvent.slug || selectedWalkInEvent.id
+                        );
+                        downloadQrSvg(
+                          url,
+                          `${selectedWalkInEvent.slug || selectedWalkInEvent.id}-walkin-qr.svg`
+                        );
+                        showToast('Walk-in QR downloaded');
+                      }}
+                      className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
+                    >
+                      <Download className="w-3 h-3" />
+                      Walk-In QR
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {!walkInQrPublished && (
                 <div className="p-3 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] text-[11px] text-[#0B0B0B]">
-                  Check-in QR passes have not been published for this event yet. Publish the Check-In QR Pass in the Event Workspace first.
+                  Live Check-In QR passes have not been activated for this event yet. Activate Live Check-In QR in the Event Workspace or Gate Scanner first.
                 </div>
               )}
 

@@ -6769,7 +6769,20 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       appType: 'spa',
     });
 
-    app.get(['/e/:slug', '/e/:slug/checkin', '/e/:slug/camera', '/camera', '/'], async (req, res, next) => {
+    app.get(
+      [
+        '/e/:slug',
+        '/e/:slug/checkin',
+        '/e/:slug/walkin',
+        '/e/:slug/walk-in',
+        '/e/:slug/gifts',
+        '/e/:slug/gift-desk',
+        '/e/:slug/polls',
+        '/e/:slug/camera',
+        '/camera',
+        '/',
+      ],
+      async (req, res, next) => {
       const slugOrId =
         req.params.slug ||
         (typeof req.query.event === 'string' ? req.query.event.trim() : '');
@@ -6848,7 +6861,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       }
 
       res.setHeader('Cache-Control', 'no-cache, must-revalidate');
-      const slugMatch = req.path.match(/^\/e\/([^/]+)(?:\/(?:checkin|camera))?$/i);
+      const slugMatch = req.path.match(
+        /^\/e\/([^/]+)(?:\/(?:checkin|walk-?in|gifts|gift-desk|polls|camera))?$/i
+      );
       const slugOrId =
         (slugMatch ? decodeURIComponent(slugMatch[1]) : '') ||
         (typeof req.query.event === 'string' ? req.query.event.trim() : '');

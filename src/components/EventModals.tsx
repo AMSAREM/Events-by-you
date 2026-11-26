@@ -5,10 +5,12 @@ import {
   BarChart3,
   Check,
   Copy,
+  Download,
   Gift,
   ImagePlus,
   Link2,
   MapPin,
+  QrCode,
   Share2,
   ShieldCheck,
   Trash2,
@@ -27,7 +29,12 @@ import { getCategoryPreset } from '../data/initialData';
 import { STUDIO_FLYER_PRESETS, compressFlyerImageFile } from '../lib/flyerUpload';
 import { appendPoweredByLine } from '../lib/eventMessages';
 import { isPollsEnabledForEvent } from '../lib/polls';
-import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
+import {
+  buildEventInvitationUrl,
+  buildEventOgImageUrl,
+  buildWalkInRegistrationUrl,
+  downloadQrSvg,
+} from '../lib/qr';
 import {
   getPlanEntitlements,
   isActiveEventStatus,
@@ -550,8 +557,10 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   const isAtCeiling = pct >= capacityThreshold;
   const eventSessions = scheduleBlocks.filter((b) => b.eventId === event.id);
   const inviteUrl = buildEventInvitationUrl(event.slug || event.id);
+  const walkInUrl = buildWalkInRegistrationUrl(event.slug || event.id);
   const ogUrl = buildEventOgImageUrl(event.slug || event.id);
   const flyerSrc = flyerDraft || preset.flyerUrl;
+  const [copiedWalkIn, setCopiedWalkIn] = useState(false);
 
   const handleStatusChange = async (newStatus: EventStatus) => {
     if (starterActiveBlocked && isActiveEventStatus(newStatus)) return;
@@ -868,6 +877,41 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
               </button>
             </div>
           </div>
+          <div className="pt-3 border-t border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold text-[#71717A] flex items-center gap-1">
+                <QrCode className="w-3 h-3 text-[#0B0B0B]" />
+                Walk-In Registration Link (Gate Self-Service)
+              </p>
+              <p className="text-xs font-mono font-semibold text-[#0B0B0B] truncate mt-0.5">
+                {walkInUrl}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  if (navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(walkInUrl).catch(() => {});
+                  }
+                  setCopiedWalkIn(true);
+                  window.setTimeout(() => setCopiedWalkIn(false), 1800);
+                }}
+                className="px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shrink-0"
+              >
+                {copiedWalkIn ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedWalkIn ? 'Walk-In Copied' : 'Copy Walk-In Link'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadQrSvg(walkInUrl, `${event.slug || event.id}-walkin-qr.svg`)}
+                className="px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shrink-0"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Walk-In QR</span>
+              </button>
+            </div>
+          </div>
           <img
             src={ogUrl}
             alt="OG social share preview"
@@ -955,11 +999,11 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
             )}
             <div className="mt-3 pt-3 border-t border-[#E5E5EA] flex items-center justify-between gap-2">
               <div>
-                <p className="text-[11px] font-semibold text-[#0B0B0B]">Check-In QR Pass</p>
+                <p className="text-[11px] font-semibold text-[#0B0B0B]">Live Gate QR Pass</p>
                 <p className="text-[10px] text-[#71717A]">
                   {event.qrPassPublished !== false
-                    ? 'Published by event creator'
-                    : 'Unpublished · creator action required'}
+                    ? 'Active for gate scans & self check-in'
+                    : 'Inactive · creator activation required'}
                 </p>
               </div>
               {canPublishQrPass && onToggleQrPassPublished && (
@@ -975,7 +1019,7 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
                       : 'bg-[#0B0B0B] text-white hover:bg-zinc-800'
                   }`}
                 >
-                  {event.qrPassPublished !== false ? 'Unpublish QR' : 'Publish QR Pass'}
+                  {event.qrPassPublished !== false ? 'Pause Live QR' : 'Activate Live QR'}
                 </button>
               )}
             </div>

@@ -44,6 +44,19 @@ export function getDefaultMessageConfig(event?: Partial<EventItem>): Required<Ev
   };
 }
 
+export function buildEventLinkForOrigin(
+  slugOrId: string,
+  originOverride?: string
+): string {
+  const clean = encodeURIComponent(slugOrId.trim() || 'event');
+  const origin =
+    originOverride?.replace(/\/+$/, '') ||
+    (typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'https://eventsbyyou.xyz');
+  return `${origin}/e/${clean}`;
+}
+
 export function buildCameraLinkForOrigin(
   slugOrId: string,
   originOverride?: string,
@@ -74,7 +87,7 @@ export function resolveEventMessage(params: {
   ticketCode?: string;
   originOverride?: string;
   includeGuestInCameraUrl?: boolean;
-}): { text: string; cameraUrl: string } {
+}): { text: string; cameraUrl: string; eventUrl: string } {
   const defaults = getDefaultMessageConfig(params.event);
   const rawTemplate =
     params.template?.trim() ||
@@ -87,6 +100,10 @@ export function resolveEventMessage(params: {
           : defaults.confirmationMessage);
 
   const shouldPersonalize = Boolean(params.includeGuestInCameraUrl || params.type === 'checkin');
+  const eventUrl = buildEventLinkForOrigin(
+    params.event.slug || params.event.id,
+    params.originOverride
+  );
   const cameraUrl = buildCameraLinkForOrigin(
     params.event.slug || params.event.id,
     params.originOverride,
@@ -107,6 +124,7 @@ export function resolveEventMessage(params: {
     .replace(/\{venue\}/gi, params.event.venue)
     .replace(/\{city\}/gi, params.event.city)
     .replace(/\{ticket_?code\}|\{code\}/gi, ticketCode)
+    .replace(/\{event_?link\}|\{schedule_?link\}/gi, eventUrl)
     .replace(/\{camera_?link\}|\{camera\}/gi, cameraUrl);
 
   const includeLink = params.type === 'checkin' || params.event.messageConfig?.includeCameraLink !== false;
@@ -114,5 +132,5 @@ export function resolveEventMessage(params: {
     rendered = `${rendered.trim()} Disposable Camera (5 shots & collage): ${cameraUrl}`;
   }
 
-  return { text: appendPoweredByLine(rendered), cameraUrl };
+  return { text: appendPoweredByLine(rendered), cameraUrl, eventUrl };
 }

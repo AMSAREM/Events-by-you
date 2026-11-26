@@ -64,6 +64,7 @@ import { compressFlyerImageFile } from '../lib/flyerUpload';
 import {
   buildEventInvitationUrl,
   buildEventOgImageUrl,
+  buildWalkInRegistrationUrl,
   DeterministicQrSvg,
   downloadQrSvg,
 } from '../lib/qr';
@@ -96,7 +97,7 @@ interface EventWorkspaceScreenProps {
   onOpenEditModal: (event: EventItem) => void;
   onUpdateEvent?: (updated: EventItem) => Promise<void> | void;
   onOpenPlans: () => void;
-  onPreviewPublicEvent: (focus?: 'top' | 'checkin' | 'gifts' | 'polls') => void;
+  onPreviewPublicEvent: (focus?: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls') => void;
   onToggleCheckIn: (attendeeId: string) => void;
   onRegisterAttendee?: (eventId: string, attendee: Attendee) => void;
   onBroadcast?: (payload: {
@@ -413,6 +414,10 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     () => buildEventInvitationUrl(event.slug || event.id, 'checkin'),
     [event.slug, event.id]
   );
+  const walkInRegistrationUrl = useMemo(
+    () => buildWalkInRegistrationUrl(event.slug || event.id),
+    [event.slug, event.id]
+  );
   const ogImageUrl = useMemo(
     () => buildEventOgImageUrl(event.slug || event.id),
     [event.slug, event.id]
@@ -672,12 +677,12 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
             <span
               className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold border ${
                 isQrPassPublished
-                  ? 'bg-white border-[#E5E5EA] text-[#0B0B0B]'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
                   : 'bg-[#0B0B0B]/5 border-[#0B0B0B]/20 text-[#0B0B0B]'
               }`}
             >
               <QrCode className="w-3 h-3" />
-              {isQrPassPublished ? 'QR Pass Published' : 'QR Pass Unpublished'}
+              {isQrPassPublished ? 'Live QR Active' : 'Live QR Inactive'}
             </span>
             <button
               type="button"
@@ -695,6 +700,19 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
               <Copy className="w-3.5 h-3.5" />
               Copy Invite Link
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (navigator.clipboard?.writeText) {
+                  navigator.clipboard.writeText(walkInRegistrationUrl).catch(() => {});
+                }
+                triggerToast('Walk-In registration link copied');
+              }}
+              className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-[11px] font-medium shadow-sm"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              Copy Walk-In Link
+            </button>
             {copiedToast && (
               <span className="text-[11px] font-semibold text-[#0B0B0B]">Copied!</span>
             )}
@@ -708,6 +726,14 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
             >
               <QrCode className="w-4 h-4" />
               Check-In &amp; QR Screen
+            </button>
+            <button
+              type="button"
+              onClick={() => onPreviewPublicEvent('walkin')}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] transition-colors text-xs font-semibold shadow-sm whitespace-nowrap shrink-0"
+            >
+              <UserPlus className="w-4 h-4" />
+              Walk-In Page
             </button>
             {onOpenDisposableCamera && (
               <button
@@ -741,7 +767,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 }`}
               >
                 <ShieldCheck className="w-4 h-4" />
-                {isQrPassPublished ? 'Unpublish QR Pass' : 'Publish QR Pass'}
+                {isQrPassPublished ? 'Pause Live QR' : 'Activate Live QR'}
               </button>
             )}
             {isEventCreator && isQrPassPublished && (
@@ -1305,7 +1331,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     {!isQrPassPublished && (
                       <div className="sm:col-span-2 p-3 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-wrap items-center justify-between gap-2 text-xs text-[#0B0B0B]">
                         <span>
-                          Check-In QR passes are currently unpublished. Publish them as the event creator before issuing guest passes.
+                          Live Check-In QR is currently inactive. Activate it as the event creator before issuing live guest passes.
                         </span>
                         {onToggleQrPassPublished && (
                           <button
@@ -1314,11 +1340,55 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                             onClick={() => void onToggleQrPassPublished(event.id, true)}
                             className="px-3 py-1 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold disabled:opacity-40"
                           >
-                            Publish QR Pass
+                            Activate Live QR
                           </button>
                         )}
                       </div>
                     )}
+                    <div className="sm:col-span-2 p-3 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold text-[#0B0B0B]">
+                          Self-Service Walk-In Registration Link
+                        </p>
+                        <p className="text-[11px] font-mono text-[#71717A] truncate">
+                          {walkInRegistrationUrl}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (navigator.clipboard?.writeText) {
+                              navigator.clipboard.writeText(walkInRegistrationUrl).catch(() => {});
+                            }
+                            triggerToast('Walk-In link copied');
+                          }}
+                          className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B] hover:border-[#0B0B0B] inline-flex items-center gap-1"
+                        >
+                          <Copy className="w-3 h-3" />
+                          Copy Link
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            downloadQrSvg(walkInRegistrationUrl, `${event.slug}-walkin-qr.svg`);
+                            triggerToast('Walk-In registration QR downloaded');
+                          }}
+                          className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B] hover:border-[#0B0B0B] inline-flex items-center gap-1"
+                        >
+                          <Download className="w-3 h-3" />
+                          Walk-In QR
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onPreviewPublicEvent('walkin')}
+                          className="px-3 py-1.5 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold inline-flex items-center gap-1"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          Open
+                        </button>
+                      </div>
+                    </div>
                     <input
                       type="text"
                       required
@@ -2012,6 +2082,63 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 </div>
               </div>
 
+              <div className="p-4 rounded-2xl bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-[#E5E5EA]">
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className="p-2 rounded-xl bg-[#F5F5F7] border border-[#E5E5EA] shrink-0">
+                    <DeterministicQrSvg
+                      value={walkInRegistrationUrl}
+                      size={72}
+                      label={`Walk-In registration QR for ${event.title}`}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-xs font-semibold text-[#0B0B0B] block">
+                      Walk-In Guest Registration Link (Gate Self-Service)
+                    </span>
+                    <span className="text-xs font-mono text-[#71717A] break-all block mt-0.5">
+                      {walkInRegistrationUrl}
+                    </span>
+                    <span className="text-[11px] text-[#71717A] block mt-1">
+                      Print at reception or share so un-registered walk-ins get an instant QR pass.
+                    </span>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (navigator.clipboard?.writeText) {
+                        navigator.clipboard.writeText(walkInRegistrationUrl).catch(() => {});
+                      }
+                      triggerToast('Walk-In registration URL copied');
+                    }}
+                    className="px-4 py-2 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    Copy Walk-In Link
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadQrSvg(walkInRegistrationUrl, `${event.slug}-walkin-qr.svg`);
+                      triggerToast('Walk-In registration SVG QR downloaded');
+                    }}
+                    className="px-4 py-2 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Walk-In QR
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onPreviewPublicEvent('walkin')}
+                    className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold inline-flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open Walk-In
+                  </button>
+                </div>
+              </div>
+
               <div className="p-4 rounded-2xl bg-white border border-[#E5E5EA] space-y-2">
                 <span className="text-xs font-semibold text-[#0B0B0B] block">
                   OpenGraph Social Share Image (/api/og/event/{event.slug})
@@ -2026,14 +2153,14 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
               <div className="p-4 rounded-2xl bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-[#E5E5EA]">
                 <div>
                   <span className="text-xs font-semibold text-[#0B0B0B] block">
-                    Check-In QR Pass Publication (Creator Only)
+                    Live Check-In QR Activation (Creator Only)
                   </span>
                   <span className="text-xs text-[#71717A]">
                     {!isEventCreator
-                      ? 'Only the event creator can publish or export check-in QR passes.'
+                      ? 'Only the event creator can activate or export live check-in QR passes.'
                       : isQrPassPublished
-                        ? 'Check-in QR passes are published for public RSVP and kiosk badges.'
-                        : 'Unpublished — guests cannot claim QR passes until published by the event creator.'}
+                        ? 'Live Check-In QR is active for gate scanning, walk-in registration, and kiosk passes.'
+                        : 'Inactive — activate live QR so guests can receive passes and scan into the venue.'}
                   </span>
                 </div>
                 {isEventCreator && onToggleQrPassPublished && (
@@ -2043,7 +2170,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     onClick={() => void onToggleQrPassPublished(event.id, !isQrPassPublished)}
                     className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors disabled:opacity-40 whitespace-nowrap shrink-0"
                   >
-                    {isQrPassPublished ? 'Unpublish Check-In QR' : 'Publish Check-In QR Pass'}
+                    {isQrPassPublished ? 'Pause Live Check-In QR' : 'Activate Live Check-In QR'}
                   </button>
                 )}
               </div>
@@ -2357,10 +2484,10 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
 
                 <div className="w-full flex flex-col gap-1">
                   <span className="text-[13px] font-semibold text-[#0B0B0B]">
-                    Kiosk &amp; Attendee Entry Pass
+                    Live Kiosk &amp; Entry QR Active
                   </span>
                   <p className="text-[11px] text-[#71717A]">
-                    Published by event creator for live check-ins and kiosk display
+                    Scannable QR ready for live venue check-in, self check-in kiosk, and printed badges
                   </p>
                 </div>
 
@@ -2370,29 +2497,43 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     onClick={handleDownloadQrSvg}
                     className="py-2 px-3 rounded-full bg-white text-[#0B0B0B] hover:bg-[#E8E8EA] transition-colors text-xs font-semibold shadow-sm"
                   >
-                    SVG Vector
+                    Check-In SVG
                   </button>
                   <button
                     type="button"
                     onClick={() => {
-                      triggerToast('Badge QR sheet prepared for printing');
+                      downloadQrSvg(walkInRegistrationUrl, `${event.slug}-walkin-qr.svg`);
+                      triggerToast('Walk-In registration SVG QR downloaded');
                     }}
                     className="py-2 px-3 rounded-full bg-[#0B0B0B] text-white hover:opacity-90 transition-all text-xs font-semibold shadow-sm inline-flex items-center justify-center gap-1.5"
                   >
-                    <Printer className="w-3.5 h-3.5" />
-                    <span>Print Badge</span>
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Walk-In SVG</span>
                   </button>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (navigator.clipboard?.writeText) {
+                      navigator.clipboard.writeText(walkInRegistrationUrl).catch(() => {});
+                    }
+                    triggerToast('Walk-In registration link copied');
+                  }}
+                  className="w-full py-2 px-3 rounded-full bg-white text-[#0B0B0B] border border-[#E5E5EA] hover:border-[#0B0B0B] transition-colors text-[11px] font-semibold inline-flex items-center justify-center gap-1.5"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                  <span>Copy Walk-In Registration Link</span>
+                </button>
               </>
             ) : isEventCreator ? (
               <div className="w-full p-5 rounded-2xl bg-white border border-[#E5E5EA] space-y-3">
                 <p className="text-xs font-semibold text-[#0B0B0B]">
-                  Check-In QR Pass Unpublished
+                  Live Check-In QR Inactive
                 </p>
                 <p className="text-[11px] text-[#71717A] leading-relaxed">
                   {event.status === 'draft'
-                    ? 'Launch this draft event first, then publish the Check-In QR Pass so guests can receive tickets.'
-                    : 'Only the event creator can publish check-in QR passes. Publish to enable public RSVPs and kiosk badge exports.'}
+                    ? 'Launch this draft event first, then activate Live Check-In QR so guests receive scannable tickets.'
+                    : 'Activate Live Check-In QR to enable public QR passes, gate camera scanning, and self-service walk-in links.'}
                 </p>
                 {onToggleQrPassPublished && (
                   <button
@@ -2401,7 +2542,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     onClick={() => void onToggleQrPassPublished(event.id, true)}
                     className="w-full py-2.5 px-4 rounded-full bg-[#0B0B0B] text-white hover:bg-zinc-800 transition-colors text-xs font-semibold disabled:opacity-40"
                   >
-                    Publish Check-In QR Pass
+                    Activate Live Check-In QR
                   </button>
                 )}
               </div>
@@ -2411,7 +2552,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   Creator-Only QR Pass Control
                 </p>
                 <p className="text-[11px] text-[#71717A] leading-relaxed">
-                  Only the event creator can publish or export check-in QR passes. Use the QR Gate Scanner to verify existing passes.
+                  Only the event creator can activate or export live check-in QR passes. Use the QR Gate Scanner to verify existing passes.
                 </p>
               </div>
             )}

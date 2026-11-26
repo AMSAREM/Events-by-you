@@ -1,108 +1,34 @@
 import React from 'react';
-
-const MATRIX_SIZE = 25;
-
-function fnv1aHash(str: string, seed = 0x811c9dc5): number {
-  let hash = seed >>> 0;
-  for (let i = 0; i < str.length; i++) {
-    hash ^= str.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash >>> 0;
-}
-
-function isFinderZone(r: number, c: number, size: number): boolean {
-  const inTopLeft = r < 8 && c < 8;
-  const inTopRight = r < 8 && c >= size - 8;
-  const inBottomLeft = r >= size - 8 && c < 8;
-  return inTopLeft || inTopRight || inBottomLeft;
-}
-
-function getFinderCell(r: number, c: number): boolean {
-  if (r === 7 || c === 7) return false;
-  if (r === 0 || r === 6 || c === 0 || c === 6) return true;
-  if (r >= 2 && r <= 4 && c >= 2 && c <= 4) return true;
-  return false;
-}
-
-function isAlignmentZone(r: number, c: number, size: number): boolean {
-  const ar = size - 9;
-  const ac = size - 9;
-  return r >= ar && r < ar + 5 && c >= ac && c < ac + 5;
-}
-
-function getAlignmentCell(r: number, c: number, size: number): boolean {
-  const dr = r - (size - 9);
-  const dc = c - (size - 9);
-  if (dr === 0 || dr === 4 || dc === 0 || dc === 4) return true;
-  if (dr === 2 && dc === 2) return true;
-  return false;
-}
+import QRCode from 'qrcode';
 
 export function generateDeterministicQrMatrix(value: string): boolean[][] {
   const normalized = value.trim() || 'EVENTSBYU-PASS';
-  const h1 = fnv1aHash(normalized, 0x811c9dc5);
-  const h2 = fnv1aHash(normalized.split('').reverse().join(''), 0x9e3779b9);
-
-  const matrix: boolean[][] = Array.from({ length: MATRIX_SIZE }, () =>
-    Array<boolean>(MATRIX_SIZE).fill(false)
-  );
-
-  let state = (h1 ^ h2) || 0xabcdef01;
-  const nextBit = (r: number, c: number): boolean => {
-    state ^= (state << 13) >>> 0;
-    state ^= state >>> 17;
-    state ^= (state << 5) >>> 0;
-    const charCode = normalized.charCodeAt((r * MATRIX_SIZE + c) % normalized.length);
-    return ((state + charCode + r * 7 + c * 13) & 1) === 1;
-  };
-
-  for (let r = 0; r < MATRIX_SIZE; r++) {
-    for (let c = 0; c < MATRIX_SIZE; c++) {
-      // Top-left finder
-      if (r < 8 && c < 8) {
-        matrix[r][c] = getFinderCell(r, c);
-        continue;
-      }
-      // Top-right finder
-      if (r < 8 && c >= MATRIX_SIZE - 8) {
-        matrix[r][c] = getFinderCell(r, MATRIX_SIZE - 1 - c);
-        continue;
-      }
-      // Bottom-left finder
-      if (r >= MATRIX_SIZE - 8 && c < 8) {
-        matrix[r][c] = getFinderCell(MATRIX_SIZE - 1 - r, c);
-        continue;
-      }
-      // Timing tracks
-      if (r === 6 && !isFinderZone(r, c, MATRIX_SIZE)) {
-        matrix[r][c] = c % 2 === 0;
-        continue;
-      }
-      if (c === 6 && !isFinderZone(r, c, MATRIX_SIZE)) {
-        matrix[r][c] = r % 2 === 0;
-        continue;
-      }
-      // Alignment square
-      if (isAlignmentZone(r, c, MATRIX_SIZE)) {
-        matrix[r][c] = getAlignmentCell(r, c, MATRIX_SIZE);
-        continue;
-      }
-      matrix[r][c] = nextBit(r, c);
-    }
+  let qr: ReturnType<typeof QRCode.create>;
+  try {
+    qr = QRCode.create(normalized, { errorCorrectionLevel: 'M' });
+  } catch {
+    qr = QRCode.create(normalized.slice(0, 1024) || 'EVENTSBYU-PASS', {
+      errorCorrectionLevel: 'L',
+    });
   }
 
+  const size = qr.modules.size;
+  const data = qr.modules.data;
+  const matrix: boolean[][] = Array.from({ length: size }, (_, r) =>
+    Array.from({ length: size }, (_, c) => Boolean(data[r * size + c]))
+  );
   return matrix;
 }
 
 export function buildQrSvgString(value: string, size = 240, fg = '#0B0B0B', bg = '#FFFFFF'): string {
   const matrix = generateDeterministicQrMatrix(value);
-  const quiet = 2;
-  const total = MATRIX_SIZE + quiet * 2;
+  const moduleCount = matrix.length;
+  const quiet = 4;
+  const total = moduleCount + quiet * 2;
   const rects: string[] = [];
 
-  for (let r = 0; r < MATRIX_SIZE; r++) {
-    for (let c = 0; c < MATRIX_SIZE; c++) {
+  for (let r = 0; r < moduleCount; r++) {
+    for (let c = 0; c < moduleCount; c++) {
       if (matrix[r][c]) {
         rects.push(`<rect x="${c + quiet}" y="${r + quiet}" width="1" height="1" />`);
       }
@@ -128,7 +54,7 @@ export function downloadQrSvg(value: string, filename = 'event-gate-pass-qr.svg'
 
 export function buildEventInvitationUrl(
   slugOrId: string,
-  tab?: 'checkin' | 'register' | 'gifts' | 'polls'
+  tab?: 'checkin' | 'walkin' | 'register' | 'gifts' | 'polls'
 ): string {
   const clean = encodeURIComponent(slugOrId.trim());
   const origin =
@@ -137,9 +63,64 @@ export function buildEventInvitationUrl(
       : 'https://eventsbyyou.xyz';
   const base = `${origin}/e/${clean}`;
   if (tab === 'checkin') return `${base}/checkin`;
+  if (tab === 'walkin') return `${base}/walkin`;
   if (tab === 'gifts') return `${base}/gifts`;
   if (tab === 'polls') return `${base}/polls`;
   return tab ? `${base}?tab=${tab}` : base;
+}
+
+export function buildWalkInRegistrationUrl(slugOrId: string): string {
+  return buildEventInvitationUrl(slugOrId, 'walkin');
+}
+
+export function extractPassLookupToken(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+
+  // Handle URLs like https://.../e/slug/checkin?pass=EV-8801 or ?code=...
+  if (/^https?:\/\//i.test(trimmed) || trimmed.includes('?')) {
+    try {
+      const parsed = new URL(trimmed, 'https://eventsbyyou.xyz');
+      const fromQuery =
+        parsed.searchParams.get('pass')?.trim() ||
+        parsed.searchParams.get('code')?.trim() ||
+        parsed.searchParams.get('ticket')?.trim();
+      if (fromQuery) return fromQuery;
+    } catch {
+      // Fall through to pipe / raw handling
+    }
+  }
+
+  // Handle attendee personal pass QR format: `${ticketCode}|${slug}|${phone}`
+  if (trimmed.includes('|')) {
+    const firstPart = trimmed.split('|')[0]?.trim();
+    if (firstPart) return firstPart;
+  }
+
+  return trimmed;
+}
+
+export function isEventInvitationOrWalkInUrl(
+  raw: string
+): { type: 'checkin' | 'walkin' | 'event'; slug?: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (!/^https?:\/\//i.test(trimmed) && !trimmed.startsWith('/e/')) return null;
+  try {
+    const parsed = new URL(trimmed, 'https://eventsbyyou.xyz');
+    if (parsed.searchParams.get('pass') || parsed.searchParams.get('code')) {
+      return null;
+    }
+    const match = parsed.pathname.match(/^\/e\/([^/]+)(?:\/(checkin|walk-?in))?\/?$/i);
+    if (!match) return null;
+    const slug = decodeURIComponent(match[1]);
+    const sub = (match[2] || '').toLowerCase();
+    if (sub === 'checkin') return { type: 'checkin', slug };
+    if (sub === 'walkin' || sub === 'walk-in') return { type: 'walkin', slug };
+    return { type: 'event', slug };
+  } catch {
+    return null;
+  }
 }
 
 export function buildGiftDeskUrl(slugOrId: string, deskToken: string): string {
@@ -191,11 +172,13 @@ export const DeterministicQrSvg: React.FC<DeterministicQrSvgProps> = ({
   label,
 }) => {
   const matrix = React.useMemo(() => generateDeterministicQrMatrix(value), [value]);
-  const quiet = 2;
-  const viewBoxSize = MATRIX_SIZE + quiet * 2;
+  const moduleCount = matrix.length;
+  const quiet = 4;
+  const viewBoxSize = moduleCount + quiet * 2;
 
   return (
     <svg
+      xmlns="http://www.w3.org/2000/svg"
       viewBox={`0 0 ${viewBoxSize} ${viewBoxSize}`}
       width={size}
       height={size}

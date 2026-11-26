@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import jsQR from 'jsqr';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -9,6 +10,8 @@ import {
   Copy,
   Download,
   ExternalLink,
+  ImageUp,
+  Link2,
   Maximize2,
   Minimize2,
   QrCode,
@@ -31,7 +34,14 @@ import {
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
 import { buildCameraLinkForOrigin } from '../lib/eventMessages';
 import { useDocumentFullscreen } from '../lib/fullscreen';
-import { buildEventInvitationUrl, DeterministicQrSvg, downloadQrSvg } from '../lib/qr';
+import {
+  buildEventInvitationUrl,
+  buildWalkInRegistrationUrl,
+  DeterministicQrSvg,
+  downloadQrSvg,
+  extractPassLookupToken,
+  isEventInvitationOrWalkInUrl,
+} from '../lib/qr';
 import { CheckInFlyerSidePanel } from './CheckInFlyerSidePanel';
 import { CircularGauge } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
@@ -132,6 +142,13 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
         : '',
     [selectedEvent]
   );
+  const walkInRegistrationUrl = useMemo(
+    () =>
+      selectedEvent
+        ? buildWalkInRegistrationUrl(selectedEvent.slug || selectedEvent.id)
+        : '',
+    [selectedEvent]
+  );
   const isEventCreator = profile.appRole !== 'gate_staff';
   const isQrPassPublished = selectedEvent ? selectedEvent.qrPassPublished !== false : false;
 
@@ -140,9 +157,13 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   const [rosterFilter, setRosterFilter] = useState<'pending' | 'checked' | 'all'>('pending');
   const [lastOutcome, setLastOutcome] = useState<ScanOutcome | null>(null);
   const [scanHistory, setScanHistory] = useState<ScanOutcome[]>([]);
+  const [copiedWalkInLink, setCopiedWalkInLink] = useState(false);
 
-  // Real camera + BarcodeDetector state
+  // Real camera + BarcodeDetector + jsQR fallback state
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const qrImageInputRef = useRef<HTMLInputElement | null>(null);
+  const lastScannedRef = useRef<{ value: string; at: number }>({ value: '', at: 0 });
   const streamRef = useRef<MediaStream | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -241,8 +262,8 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   }, []);
 
   const verifyAndProcessCode = (rawInput: string) => {
-    const cleaned = rawInput.trim().toLowerCase();
-    if (!cleaned) return;
+    const rawTrimmed = rawInput.trim();
+    if (!rawTrimmed) return;
 
     const nowTime = new Date().toLocaleTimeString('en-GB', {
       hour: '2-digit',
@@ -250,28 +271,50 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       second: '2-digit',
     });
 
+    const portalUrlMatch = isEventInvitationOrWalkInUrl(rawTrimmed);
+    if (portalUrlMatch) {
+      const outcome: ScanOutcome = {
+        status: 'not-found',
+        query: rawTrimmed,
+        message:
+          portalUrlMatch.type === 'walkin'
+            ? `Scanned the Self-Service Walk-In Registration QR (/e/${portalUrlMatch.slug}/walkin). Guests should scan this on their phones, or scan a guest's personal ticket QR pass here.`
+            : `Scanned the public ${portalUrlMatch.type === 'checkin' ? 'Gate Check-In' : 'Event Invitation'} QR (/e/${portalUrlMatch.slug}). Scan a guest's personal pass QR or pass code to admit them.`,
+        timestamp: nowTime,
+      };
+      setLastOutcome(outcome);
+      setScanHistory((prev) => [outcome, ...prev].slice(0, 8));
+      return;
+    }
+
+    const extractedToken = extractPassLookupToken(rawTrimmed);
+    const cleaned = extractedToken.trim().toLowerCase();
+    if (!cleaned) return;
+
     // Search within selected event first, then across all events
     const normalizedQuery = cleaned.replace(/^#/, '');
-    const matchInSelected = eventAttendees.find(
-      (a) =>
-        a.ticketCode.toLowerCase().replace(/^#/, '') === normalizedQuery ||
-        a.phone.replace(/\s+/g, '').toLowerCase() === cleaned.replace(/\s+/g, '') ||
-        a.name.toLowerCase() === cleaned
-    );
-
-    const matchAny =
-      matchInSelected ||
-      attendees.find(
-        (a) =>
-          a.ticketCode.toLowerCase().replace(/^#/, '') === normalizedQuery ||
-          a.phone.replace(/\s+/g, '').toLowerCase() === cleaned.replace(/\s+/g, '')
+    const digitsOnly = cleaned.replace(/\D/g, '');
+    const matchesAttendee = (a: Attendee) => {
+      const attCode = a.ticketCode.toLowerCase().replace(/^#/, '');
+      const attPhone = a.phone.replace(/\s+/g, '').toLowerCase();
+      const attDigits = a.phone.replace(/\D/g, '');
+      return (
+        attCode === normalizedQuery ||
+        attPhone === cleaned.replace(/\s+/g, '') ||
+        (digitsOnly.length >= 9 && attDigits.endsWith(digitsOnly.slice(-9))) ||
+        a.name.toLowerCase() === cleaned ||
+        a.email.toLowerCase() === cleaned
       );
+    };
+
+    const matchInSelected = eventAttendees.find(matchesAttendee);
+    const matchAny = matchInSelected || attendees.find(matchesAttendee);
 
     if (!matchAny) {
       const outcome: ScanOutcome = {
         status: 'not-found',
-        query: rawInput.trim(),
-        message: `No pass found matching "${rawInput.trim()}". Use the Check-In Registration panel to issue a walk-in QR pass immediately.`,
+        query: extractedToken,
+        message: `No pass found matching "${extractedToken}". Use the Walk-In Check-In Registration panel or share /e/${selectedEvent?.slug ?? 'event'}/walkin to issue a QR pass immediately.`,
         timestamp: nowTime,
       };
       setLastOutcome(outcome);
@@ -365,39 +408,87 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialCode]);
 
-  // BarcodeDetector loop when camera is live
+  const handleDetectedQrPayload = (detectedValue: string) => {
+    const now = Date.now();
+    if (
+      lastScannedRef.current.value === detectedValue &&
+      now - lastScannedRef.current.at < 2600
+    ) {
+      return;
+    }
+    lastScannedRef.current = { value: detectedValue, at: now };
+    const displayToken = extractPassLookupToken(detectedValue);
+    setCodeInput(displayToken);
+    verifyAndProcessCode(detectedValue);
+  };
+
+  // Universal live QR camera loop (BarcodeDetector + canvas jsQR fallback for iOS/Firefox/all browsers)
   useEffect(() => {
-    if (!cameraActive || !detectorSupported) return;
+    if (!cameraActive) return;
     let cancelled = false;
     let timerId: number | undefined;
 
+    const decodeFrameWithCanvas = (video: HTMLVideoElement): string | null => {
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      if (!vw || !vh) return null;
+      const canvas = canvasRef.current || document.createElement('canvas');
+      canvasRef.current = canvas;
+      const maxDim = 720;
+      const scale = Math.min(1, maxDim / Math.max(vw, vh));
+      const w = Math.max(1, Math.round(vw * scale));
+      const h = Math.max(1, Math.round(vh * scale));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.drawImage(video, 0, 0, w, h);
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const result = jsQR(imageData.data, w, h, { inversionAttempts: 'attemptBoth' });
+      return result?.data?.trim() || null;
+    };
+
     const scanFrame = async () => {
       if (cancelled || !videoRef.current || videoRef.current.readyState < 2) {
-        if (!cancelled) timerId = window.setTimeout(scanFrame, 350);
+        if (!cancelled) timerId = window.setTimeout(scanFrame, 280);
         return;
       }
+      let detectedValue: string | null = null;
       try {
-        // @ts-expect-error BarcodeDetector is a progressive browser API
-        const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
-        const codes = await detector.detect(videoRef.current);
-        if (codes && codes.length > 0 && codes[0].rawValue) {
-          const detectedValue = String(codes[0].rawValue).trim();
-          if (detectedValue) {
-            setCodeInput(detectedValue);
-            verifyAndProcessCode(detectedValue);
-            timerId = window.setTimeout(scanFrame, 1800);
-            return;
+        if (detectorSupported) {
+          // @ts-expect-error BarcodeDetector is a progressive browser API
+          const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+          const codes = await detector.detect(videoRef.current);
+          if (codes && codes.length > 0 && codes[0].rawValue) {
+            detectedValue = String(codes[0].rawValue).trim();
           }
         }
       } catch {
-        // Ignore single frame detection error
+        // Ignore single BarcodeDetector error and fall through to jsQR
       }
+
+      if (!detectedValue && videoRef.current) {
+        try {
+          detectedValue = decodeFrameWithCanvas(videoRef.current);
+        } catch {
+          // Ignore canvas read error
+        }
+      }
+
+      if (detectedValue) {
+        handleDetectedQrPayload(detectedValue);
+        timerId = window.setTimeout(scanFrame, 1200);
+        return;
+      }
+
       if (!cancelled) {
-        timerId = window.setTimeout(scanFrame, 350);
+        timerId = window.setTimeout(scanFrame, 240);
       }
     };
 
-    timerId = window.setTimeout(scanFrame, 400);
+    timerId = window.setTimeout(scanFrame, 320);
     return () => {
       cancelled = true;
       if (timerId) window.clearTimeout(timerId);
@@ -405,17 +496,55 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraActive, detectorSupported, selectedEventId, attendees]);
 
+  const handleScanQrImageFile = async (file: File | undefined) => {
+    if (!file) return;
+    setCameraError(null);
+    try {
+      const objectUrl = URL.createObjectURL(file);
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Unable to read QR image file.'));
+        img.src = objectUrl;
+      });
+      const maxDim = 1024;
+      const scale = Math.min(1, maxDim / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+      const w = Math.max(1, Math.round((img.naturalWidth || 512) * scale));
+      const h = Math.max(1, Math.round((img.naturalHeight || 512) * scale));
+      const canvas = canvasRef.current || document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      URL.revokeObjectURL(objectUrl);
+      if (!ctx) throw new Error('Canvas QR decoder unavailable.');
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const decoded = jsQR(imageData.data, w, h, { inversionAttempts: 'attemptBoth' });
+      if (!decoded?.data) {
+        setCameraError('No readable QR code found in the selected image. Try a clearer pass image.');
+        return;
+      }
+      handleDetectedQrPayload(decoded.data.trim());
+    } catch (err) {
+      setCameraError(
+        err instanceof Error ? err.message : 'Unable to decode the selected QR code image.'
+      );
+    }
+  };
+
   const startCamera = async () => {
     setCameraError(null);
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError(
-        'Camera access is unavailable in this browser context. Use manual QR code / pass lookup or instant guest scan below.'
+        'Live webcam access is unavailable in this browser context. Upload a QR screenshot or type the pass code below.'
       );
       return;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
       });
       streamRef.current = stream;
       setCameraActive(true);
@@ -427,7 +556,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       });
     } catch {
       setCameraError(
-        'Camera permission denied or no webcam detected. Enter a pass code or tap any pending guest below to verify immediately.'
+        'Camera permission denied or no webcam detected. Upload a QR pass image or tap any pending guest below.'
       );
     }
   };
@@ -618,11 +747,11 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               <span
                 className={`px-3 py-1.5 rounded-full text-[11px] font-semibold border whitespace-nowrap ${
                   isQrPassPublished
-                    ? 'bg-white border-[#E5E5EA] text-[#0B0B0B]'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
                     : 'bg-[#0B0B0B] border-[#0B0B0B] text-white'
                 }`}
               >
-                {isQrPassPublished ? 'QR Pass Published' : 'QR Pass Unpublished'}
+                {isQrPassPublished ? 'Live QR Active' : 'Live QR Inactive'}
               </span>
               {isEventCreator && onToggleQrPassPublished && (
                 <button
@@ -631,9 +760,13 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                   onClick={() =>
                     void onToggleQrPassPublished(selectedEvent.id, !isQrPassPublished)
                   }
-                  className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors whitespace-nowrap shrink-0 disabled:opacity-40"
+                  className={`px-4 py-2 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 ${
+                    isQrPassPublished
+                      ? 'bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B]'
+                      : 'bg-[#0B0B0B] text-white hover:bg-zinc-800'
+                  }`}
                 >
-                  {isQrPassPublished ? 'Unpublish QR' : 'Publish QR Pass'}
+                  {isQrPassPublished ? 'Pause Live QR' : 'Activate Live QR'}
                 </button>
               )}
               <button
@@ -686,28 +819,51 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={cameraActive ? stopCamera : startCamera}
-                className={`px-4 py-2 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
-                  cameraActive
-                    ? 'bg-[#EF4444] text-white hover:bg-red-600'
-                    : 'bg-white text-[#0B0B0B] hover:bg-zinc-200'
-                }`}
-              >
-                {cameraActive ? (
-                  <>
-                    <CameraOff className="w-3.5 h-3.5" />
-                    Stop Camera
-                  </>
-                ) : (
-                  <>
-                    <Camera className="w-3.5 h-3.5" />
-                    Start Camera Scanner
-                  </>
-                )}
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  ref={qrImageInputRef}
+                  type="file"
+                  accept="image/*,.svg"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    void handleScanQrImageFile(file);
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => qrImageInputRef.current?.click()}
+                  className="px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <ImageUp className="w-3.5 h-3.5" />
+                  <span>Scan Image</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={cameraActive ? stopCamera : startCamera}
+                  className={`px-4 py-2 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
+                    cameraActive
+                      ? 'bg-[#EF4444] text-white hover:bg-red-600'
+                      : 'bg-white text-[#0B0B0B] hover:bg-zinc-200'
+                  }`}
+                >
+                  {cameraActive ? (
+                    <>
+                      <CameraOff className="w-3.5 h-3.5" />
+                      Stop Camera
+                    </>
+                  ) : (
+                    <>
+                      <Camera className="w-3.5 h-3.5" />
+                      Start Camera Scanner
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
+
+            <canvas ref={canvasRef} className="hidden" aria-hidden="true" />
 
             {/* Camera Viewfinder Frame */}
             <div className="mt-5 relative rounded-2xl bg-zinc-900 border border-white/10 overflow-hidden min-h-[210px] flex items-center justify-center">
@@ -723,9 +879,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                     <div className="w-40 h-40 rounded-2xl border-2 border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)] relative">
                       <span className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-[11px] font-mono text-white whitespace-nowrap bg-[#0B0B0B]/80 px-2.5 py-0.5 rounded-full">
-                        {detectorSupported
-                          ? 'Point at guest QR pass'
-                          : 'Camera active — enter code below'}
+                        Live QR scanner active — point at pass
                       </span>
                     </div>
                   </div>
@@ -933,6 +1087,70 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               </span>
             </div>
 
+            {selectedEvent && walkInRegistrationUrl && (
+              <div className="mb-4 p-3.5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="p-1.5 bg-white rounded-xl border border-[#E5E5EA] shrink-0">
+                    <DeterministicQrSvg
+                      value={walkInRegistrationUrl}
+                      size={52}
+                      label={`Walk-In Registration QR for ${selectedEvent.title}`}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-[#71717A] flex items-center gap-1">
+                      <Link2 className="w-3 h-3 text-[#0B0B0B]" />
+                      Self-Service Walk-In Registration Link
+                    </p>
+                    <p className="text-xs font-mono font-semibold text-[#0B0B0B] truncate">
+                      {walkInRegistrationUrl}
+                    </p>
+                    <p className="text-[11px] text-[#71717A]">
+                      Share or print at venue door so walk-in guests self-register &amp; get instant QR passes.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (navigator.clipboard?.writeText) {
+                        navigator.clipboard.writeText(walkInRegistrationUrl).catch(() => {});
+                      }
+                      setCopiedWalkInLink(true);
+                      window.setTimeout(() => setCopiedWalkInLink(false), 2000);
+                    }}
+                    className="px-3 py-1.5 rounded-full bg-[#0B0B0B] text-white hover:bg-zinc-800 text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap"
+                  >
+                    {copiedWalkInLink ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedWalkInLink ? 'Copied' : 'Copy Link'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadQrSvg(
+                        walkInRegistrationUrl,
+                        `${selectedEvent.slug || selectedEvent.id}-walkin-qr.svg`
+                      )
+                    }
+                    className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>Walk-In QR</span>
+                  </button>
+                  <a
+                    href={walkInRegistrationUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>Open</span>
+                  </a>
+                </div>
+              </div>
+            )}
+
             {!isEventCreator ? (
               <div className="p-5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2">
                 <p className="text-xs font-bold text-[#0B0B0B]">
@@ -947,12 +1165,12 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                 {selectedEvent && !isQrPassPublished && (
                   <div className="mb-4 p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2.5">
                     <p className="text-xs font-semibold text-[#0B0B0B]">
-                      Check-In QR Passes Unpublished
+                      Live Gate QR Passes Inactive
                     </p>
                     <p className="text-[11px] text-[#71717A] leading-relaxed">
                       {selectedEvent.status === 'draft'
-                        ? 'Launch this draft event first before publishing check-in QR passes.'
-                        : 'Publish the Check-In QR Pass as the event creator before issuing walk-in QR passes.'}
+                        ? 'Launch this draft event first before activating live check-in QR passes.'
+                        : 'Activate Live Check-In QR Passes as the event creator so public RSVPs, walk-in links, and gate scans go live.'}
                     </p>
                     {onToggleQrPassPublished && (
                       <button
@@ -961,7 +1179,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                         onClick={() => void onToggleQrPassPublished(selectedEvent.id, true)}
                         className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors disabled:opacity-40"
                       >
-                        Publish Check-In QR Pass
+                        Activate Live Check-In QR
                       </button>
                     )}
                   </div>

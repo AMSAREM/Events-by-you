@@ -128,7 +128,7 @@ function getWalkthroughStorageKey(profile?: Pick<OrganizerProfile, 'email' | 'ph
 
 function parseInvitationFromValues(pathname: string, search: string): {
   slugOrId?: string;
-  focus?: 'top' | 'register' | 'checkin' | 'camera' | 'gifts' | 'polls';
+  focus?: 'top' | 'register' | 'checkin' | 'walkin' | 'camera' | 'gifts' | 'polls';
   guest?: string;
   pass?: string;
   desk?: string;
@@ -161,24 +161,31 @@ function parseInvitationFromValues(pathname: string, search: string): {
     return { slugOrId: decodeURIComponent(pollsMatch[1]), focus: 'polls', guest, pass };
   }
 
+  const walkinMatch = pathname.match(/^\/e\/([^/]+)\/walk-?in\/?$/i);
+  if (walkinMatch && walkinMatch[1]) {
+    return { slugOrId: decodeURIComponent(walkinMatch[1]), focus: 'walkin', guest, pass };
+  }
+
   const checkinMatch = pathname.match(/^\/e\/([^/]+)\/checkin\/?$/i);
   if (checkinMatch && checkinMatch[1]) {
     return { slugOrId: decodeURIComponent(checkinMatch[1]), focus: 'checkin' };
   }
   const match = pathname.match(/^\/e\/([^/]+)\/?$/i);
   const tab = (params.get('tab') || '').toLowerCase();
-  const focus: 'top' | 'register' | 'checkin' | 'camera' | 'gifts' | 'polls' =
+  const focus: 'top' | 'register' | 'checkin' | 'walkin' | 'camera' | 'gifts' | 'polls' =
     tab === 'camera'
       ? 'camera'
       : tab === 'gifts' || tab === 'gift' || Boolean(desk)
         ? 'gifts'
         : tab === 'polls' || tab === 'poll'
           ? 'polls'
-          : tab === 'checkin' || tab === 'qr'
-            ? 'checkin'
-            : tab === 'register'
-              ? 'register'
-              : 'top';
+          : tab === 'walkin' || tab === 'walk-in'
+            ? 'walkin'
+            : tab === 'checkin' || tab === 'qr'
+              ? 'checkin'
+              : tab === 'register'
+                ? 'register'
+                : 'top';
   if (match && match[1]) {
     return { slugOrId: decodeURIComponent(match[1]), focus, guest, pass, desk };
   }
@@ -331,10 +338,11 @@ export default function App() {
     initialInvite.focus === 'camera' ? undefined : initialInvite.slugOrId
   );
   const [publicPreviewFocus, setPublicPreviewFocus] = useState<
-    'top' | 'register' | 'checkin' | 'gifts' | 'polls'
+    'top' | 'register' | 'checkin' | 'walkin' | 'gifts' | 'polls'
   >(() =>
     initialInvite.focus === 'register' ||
     initialInvite.focus === 'checkin' ||
+    initialInvite.focus === 'walkin' ||
     initialInvite.focus === 'gifts' ||
     initialInvite.focus === 'polls'
       ? initialInvite.focus
@@ -574,7 +582,10 @@ export default function App() {
       !workspaceEventId &&
       !studioSubScreen &&
       attendeesWalkInActive) ||
-    (route === 'demo-event' && (publicPreviewFocus === 'checkin' || publicCheckinModalOpen));
+    (route === 'demo-event' &&
+      (publicPreviewFocus === 'checkin' ||
+        publicPreviewFocus === 'walkin' ||
+        publicCheckinModalOpen));
 
   const isCheckInScreenActiveRef = useRef(isCheckInScreenActive);
   useEffect(() => {
@@ -687,7 +698,7 @@ export default function App() {
   const openEventInvitation = useCallback(
     (
       evtOrSlug?: EventItem | string,
-      focus: 'top' | 'register' | 'checkin' | 'gifts' | 'polls' = 'top',
+      focus: 'top' | 'register' | 'checkin' | 'walkin' | 'gifts' | 'polls' = 'top',
       deskToken?: string
     ) => {
       const slugOrId =
@@ -703,19 +714,25 @@ export default function App() {
         const nextPath =
           focus === 'checkin'
             ? `/e/${cleanSlug}/checkin`
-            : focus === 'gifts'
-              ? deskToken
-                ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(deskToken)}`
-                : `/e/${cleanSlug}/gifts`
-              : focus === 'polls'
-                ? `/e/${cleanSlug}/polls`
-                : focus === 'register'
-                  ? `/e/${cleanSlug}?tab=register`
-                  : `/e/${cleanSlug}`;
+            : focus === 'walkin'
+              ? `/e/${cleanSlug}/walkin`
+              : focus === 'gifts'
+                ? deskToken
+                  ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(deskToken)}`
+                  : `/e/${cleanSlug}/gifts`
+                : focus === 'polls'
+                  ? `/e/${cleanSlug}/polls`
+                  : focus === 'register'
+                    ? `/e/${cleanSlug}?tab=register`
+                    : `/e/${cleanSlug}`;
         syncBrowserPath(nextPath);
       }
       if (
-        (focus === 'top' || focus === 'checkin' || focus === 'gifts' || focus === 'polls') &&
+        (focus === 'top' ||
+          focus === 'checkin' ||
+          focus === 'walkin' ||
+          focus === 'gifts' ||
+          focus === 'polls') &&
         typeof window !== 'undefined'
       ) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -744,6 +761,7 @@ export default function App() {
         setPublicPreviewFocus(
           invite.focus === 'register' ||
             invite.focus === 'checkin' ||
+            invite.focus === 'walkin' ||
             invite.focus === 'gifts' ||
             invite.focus === 'polls'
             ? invite.focus
@@ -2200,13 +2218,15 @@ export default function App() {
             syncBrowserPath(
               publicPreviewFocus === 'checkin'
                 ? `/e/${cleanSlug}/checkin`
-                : publicPreviewFocus === 'gifts'
-                  ? publicPreviewDeskToken
-                    ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(publicPreviewDeskToken)}`
-                    : `/e/${cleanSlug}/gifts`
-                  : publicPreviewFocus === 'polls'
-                    ? `/e/${cleanSlug}/polls`
-                    : `/e/${cleanSlug}`
+                : publicPreviewFocus === 'walkin'
+                  ? `/e/${cleanSlug}/walkin`
+                  : publicPreviewFocus === 'gifts'
+                    ? publicPreviewDeskToken
+                      ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(publicPreviewDeskToken)}`
+                      : `/e/${cleanSlug}/gifts`
+                    : publicPreviewFocus === 'polls'
+                      ? `/e/${cleanSlug}/polls`
+                      : `/e/${cleanSlug}`
             );
           }}
           onFocusModeChange={(mode, evt) => {
@@ -2218,13 +2238,15 @@ export default function App() {
             syncBrowserPath(
               mode === 'checkin'
                 ? `/e/${cleanSlug}/checkin`
-                : mode === 'gifts'
-                  ? publicPreviewDeskToken && mode === 'gifts'
-                    ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(publicPreviewDeskToken)}`
-                    : `/e/${cleanSlug}/gifts`
-                  : mode === 'polls'
-                    ? `/e/${cleanSlug}/polls`
-                    : `/e/${cleanSlug}`
+                : mode === 'walkin'
+                  ? `/e/${cleanSlug}/walkin`
+                  : mode === 'gifts'
+                    ? publicPreviewDeskToken && mode === 'gifts'
+                      ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(publicPreviewDeskToken)}`
+                      : `/e/${cleanSlug}/gifts`
+                    : mode === 'polls'
+                      ? `/e/${cleanSlug}/polls`
+                      : `/e/${cleanSlug}`
             );
           }}
           onGiftEventSync={(updatedEvt) => {
@@ -2309,6 +2331,9 @@ export default function App() {
             openPublicCamera(eventId, guestName, 'demo-event', passCode)
           }
           onCheckinModalChange={setPublicCheckinModalOpen}
+          onToggleQrPassPublished={
+            effectiveRole !== 'gate_staff' ? handleToggleQrPassPublished : undefined
+          }
           onOpenLegal={openLegalRoute}
         />
         </Suspense>
@@ -2613,7 +2638,9 @@ export default function App() {
               onOpenEditModal={(evt) => setSelectedEventId(evt.id)}
               onUpdateEvent={handleUpdateEvent}
               onOpenPlans={openBillingScreen}
-              onPreviewPublicEvent={(focus?: 'top' | 'checkin' | 'gifts' | 'polls') => {
+              onPreviewPublicEvent={(
+                focus?: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls'
+              ) => {
                 openEventInvitation(workspaceEvent, focus ?? 'top');
               }}
               onToggleCheckIn={handleToggleCheckIn}

@@ -123,15 +123,17 @@ export async function startGoogleOAuthPopup(options: {
 
   return await new Promise<GoogleOAuthPopupResult>((resolve) => {
     let settled = false;
-    let closeGraceTimer: number | null = null;
+    let focusCancelTimer: number | null = null;
     let pollTimer: number | null = null;
     let bc: BroadcastChannel | null = null;
 
     const cleanup = () => {
       window.removeEventListener('message', onWindowMessage);
       window.removeEventListener('storage', onStorageEvent);
+      window.removeEventListener('focus', onWindowFocus);
+      window.removeEventListener('blur', onWindowBlur);
       if (pollTimer !== null) window.clearInterval(pollTimer);
-      if (closeGraceTimer !== null) window.clearTimeout(closeGraceTimer);
+      if (focusCancelTimer !== null) window.clearTimeout(focusCancelTimer);
       if (bc) {
         try {
           bc.close();
@@ -152,7 +154,7 @@ export async function startGoogleOAuthPopup(options: {
       cleanup();
 
       try {
-        if (!popup.closed) popup.close();
+        popup.close();
       } catch {
         // Ignore close error
       }
@@ -190,6 +192,22 @@ export async function startGoogleOAuthPopup(options: {
       }
     };
 
+    const checkLocalBridge = (): boolean => {
+      try {
+        const raw = localStorage.getItem(OAUTH_STORAGE_BRIDGE_KEY);
+        if (raw) {
+          const data = JSON.parse(raw) as GoogleOAuthBridgePayload;
+          if (data?.type === 'GOOGLE_OAUTH_RESULT' && (!data.ts || data.ts >= startedAt - 2000)) {
+            void finishWithPayload(data);
+            return true;
+          }
+        }
+      } catch {
+        // Ignore storage errors
+      }
+      return false;
+    };
+
     const onWindowMessage = (event: MessageEvent) => {
       if (!isTrustedCallbackOrigin(event.origin)) return;
       const data = event.data as GoogleOAuthBridgePayload | undefined;
@@ -209,8 +227,34 @@ export async function startGoogleOAuthPopup(options: {
       }
     };
 
+    const onWindowBlur = () => {
+      if (focusCancelTimer !== null) {
+        window.clearTimeout(focusCancelTimer);
+        focusCancelTimer = null;
+      }
+    };
+
+    const onWindowFocus = () => {
+      if (settled || Date.now() - startedAt < 1200) return;
+      if (checkLocalBridge()) return;
+      if (focusCancelTimer !== null) window.clearTimeout(focusCancelTimer);
+      focusCancelTimer = window.setTimeout(() => {
+        if (settled) return;
+        if (checkLocalBridge()) return;
+        settled = true;
+        cleanup();
+        resolve({
+          ok: false,
+          cancelled: true,
+          error: 'Google sign-in window was closed before completing.',
+        });
+      }, 1500);
+    };
+
     window.addEventListener('message', onWindowMessage);
     window.addEventListener('storage', onStorageEvent);
+    window.addEventListener('focus', onWindowFocus);
+    window.addEventListener('blur', onWindowBlur);
 
     try {
       if (typeof BroadcastChannel !== 'undefined') {
@@ -247,31 +291,7 @@ export async function startGoogleOAuthPopup(options: {
 
     pollTimer = window.setInterval(() => {
       if (settled) return;
-      // Also check localStorage bridge in case storage event didn't fire in same frame context
-      try {
-        const raw = localStorage.getItem(OAUTH_STORAGE_BRIDGE_KEY);
-        if (raw) {
-          const data = JSON.parse(raw) as GoogleOAuthBridgePayload;
-          if (data?.type === 'GOOGLE_OAUTH_RESULT' && (!data.ts || data.ts >= startedAt - 2000)) {
-            void finishWithPayload(data);
-            return;
-          }
-        }
-      } catch {
-        // Ignore
-      }
-      if (popup.closed && closeGraceTimer === null) {
-        closeGraceTimer = window.setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          resolve({
-            ok: false,
-            cancelled: true,
-            error: 'Google sign-in window was closed before completing.',
-          });
-        }, 450);
-      }
-    }, 350);
+      checkLocalBridge();
+    }, 450);
   });
 }
