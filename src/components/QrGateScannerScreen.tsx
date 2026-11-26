@@ -22,6 +22,8 @@ import {
   Trash2,
   UserPlus,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import {
@@ -32,6 +34,7 @@ import {
   SystemAlert,
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
+import { playCheckInChime, primeCheckInAudio } from '../lib/audioFeedback';
 import { buildCameraLinkForOrigin } from '../lib/eventMessages';
 import { useDocumentFullscreen } from '../lib/fullscreen';
 import {
@@ -161,6 +164,32 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [detectorSupported, setDetectorSupported] = useState(false);
+  const [chimeEnabled, setChimeEnabled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    return window.localStorage.getItem('eventsbyyou_gate_chime_enabled') !== 'false';
+  });
+  const chimeEnabledRef = useRef(chimeEnabled);
+  chimeEnabledRef.current = chimeEnabled;
+
+  const toggleChime = () => {
+    setChimeEnabled((prev) => {
+      const next = !prev;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('eventsbyyou_gate_chime_enabled', String(next));
+      }
+      if (next) {
+        primeCheckInAudio();
+        playCheckInChime();
+      }
+      return next;
+    });
+  };
+
+  const triggerCheckInChime = () => {
+    if (chimeEnabledRef.current) {
+      playCheckInChime();
+    }
+  };
 
   const activeValidationCircles = useMemo<string[]>(() => {
     if (!selectedEvent) return ['Invited Guest'];
@@ -362,6 +391,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
     setLastOutcome(initialOutcome);
     setScanHistory((prev) => [initialOutcome, ...prev].slice(0, 8));
     setCodeInput('');
+    triggerCheckInChime();
 
     void Promise.resolve(onToggleCheckIn(matchAny.id))
       .then((res) => {
@@ -528,6 +558,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   };
 
   const startCamera = async () => {
+    primeCheckInAudio();
     setCameraError(null);
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError(
@@ -556,11 +587,13 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
 
   const handleScanSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    primeCheckInAudio();
     verifyAndProcessCode(codeInput);
   };
 
   const handleWalkInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    primeCheckInAudio();
     if (!selectedEvent || !walkInName.trim() || !walkInPhone.trim()) return;
 
     const normalized = normalizePhoneE164(walkInPhone);
@@ -598,6 +631,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       setWalkInOrg('');
 
       if (walkInAutoCheckIn) {
+        triggerCheckInChime();
         const walkInCameraUrl = buildCameraLinkForOrigin(
           selectedEvent.slug || selectedEvent.id,
           undefined,
@@ -651,6 +685,29 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 lg:justify-end">
+          <button
+            type="button"
+            onClick={toggleChime}
+            aria-pressed={chimeEnabled}
+            title={chimeEnabled ? 'Mute check-in chime' : 'Enable check-in chime'}
+            className={`min-h-[40px] px-3.5 py-2 rounded-full border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
+              chimeEnabled
+                ? 'bg-white border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B]'
+                : 'bg-[#F5F5F7] border-[#E5E5EA] text-[#71717A] hover:text-[#0B0B0B]'
+            }`}
+          >
+            {chimeEnabled ? (
+              <>
+                <Volume2 className="w-3.5 h-3.5" />
+                <span>Chime On</span>
+              </>
+            ) : (
+              <>
+                <VolumeX className="w-3.5 h-3.5" />
+                <span>Chime Muted</span>
+              </>
+            )}
+          </button>
           <button
             type="button"
             onClick={toggleFullscreen}
@@ -828,7 +885,10 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                 />
                 <button
                   type="button"
-                  onClick={() => qrImageInputRef.current?.click()}
+                  onClick={() => {
+                    primeCheckInAudio();
+                    qrImageInputRef.current?.click();
+                  }}
                   className="min-h-[40px] px-3.5 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
                 >
                   <ImageUp className="w-3.5 h-3.5" />
@@ -931,7 +991,10 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                     <button
                       key={att.id}
                       type="button"
-                      onClick={() => verifyAndProcessCode(att.ticketCode)}
+                      onClick={() => {
+                        primeCheckInAudio();
+                        verifyAndProcessCode(att.ticketCode);
+                      }}
                       className="px-3 py-1.5 rounded-full bg-white/10 hover:bg-white hover:text-[#0B0B0B] text-xs font-medium text-white transition-colors inline-flex items-center gap-1.5 whitespace-nowrap"
                     >
                       <QrCode className="w-3 h-3" />
@@ -1363,6 +1426,11 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => {
+                        primeCheckInAudio();
+                        const checkingInNow = !att.checkedIn;
+                        if (checkingInNow) {
+                          triggerCheckInChime();
+                        }
                         void Promise.resolve(onToggleCheckIn(att.id)).catch((err) => {
                           setLastOutcome({
                             status: 'rejected',
@@ -1516,6 +1584,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               <button
                 type="button"
                 onClick={() => {
+                  primeCheckInAudio();
                   verifyAndProcessCode(previewPass.ticketCode);
                   setPreviewPass(null);
                 }}
