@@ -34,6 +34,7 @@ import {
 import {
   Attendee,
   AttendeeTier,
+  EventCheckInPolicy,
   EventItem,
   EventPlanningConfig,
   EventPoll,
@@ -51,6 +52,17 @@ import {
   getCategoryPreset,
   normalizePhoneE164,
 } from '../data/initialData';
+import {
+  formatEventDateSpan,
+  formatEventDurationBadge,
+  getAttendeeCheckedInDaysCount,
+  getEventCheckInPolicy,
+  getEventDayOptions,
+  getTodayIsoDate,
+  isAttendeeCheckedInForDate,
+  isMultiDayEvent,
+  sanitizeIsoDate,
+} from '../lib/eventDates';
 import {
   appendPoweredByLine,
   buildCameraLinkForOrigin,
@@ -106,7 +118,10 @@ interface EventWorkspaceScreenProps {
   onSavePlanning?: (eventId: string, planningConfig: EventPlanningConfig) => Promise<void> | void;
   onOpenPlans: () => void;
   onPreviewPublicEvent: (focus?: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls') => void;
-  onToggleCheckIn: (attendeeId: string) => void;
+  onToggleCheckIn: (
+    attendeeId: string,
+    options?: { mode?: 'toggle' | 'checkin' | 'undo'; dateIso?: string }
+  ) => Promise<unknown> | void;
   onDeleteAttendee?: (attendeeId: string) => Promise<void> | void;
   onRegisterAttendee?: (eventId: string, attendee: Attendee) => void;
   onBroadcast?: (payload: {
@@ -237,12 +252,28 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const [uploadingFlyer, setUploadingFlyer] = useState(false);
   const workspaceFlyerInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Add Program Block inline state
+  // Add Program Block & Multi-Day Dates inline state
+  const [programDayFilter, setProgramDayFilter] = useState<'all' | ScheduleBlock['day']>('all');
   const [addingBlock, setAddingBlock] = useState(false);
+  const [newBlockDay, setNewBlockDay] = useState<ScheduleBlock['day']>(() =>
+    isMultiDayEvent(event) ? 'Day 1' : 'Sat'
+  );
   const [newBlockTime, setNewBlockTime] = useState('04:00 - 05:00');
   const [newBlockTitle, setNewBlockTitle] = useState('');
   const [newBlockLead, setNewBlockLead] = useState('');
   const [newBlockStage, setNewBlockStage] = useState('Main Auditorium');
+
+  const [editingDatesPolicy, setEditingDatesPolicy] = useState(false);
+  const [savingDatesPolicy, setSavingDatesPolicy] = useState(false);
+  const [startIsoDraft, setStartIsoDraft] = useState(sanitizeIsoDate(event.isoDate) ?? getTodayIsoDate());
+  const [multiDayDraft, setMultiDayDraft] = useState(() => isMultiDayEvent(event));
+  const [endIsoDraft, setEndIsoDraft] = useState(() => {
+    const start = sanitizeIsoDate(event.isoDate) ?? getTodayIsoDate();
+    const existingEnd = sanitizeIsoDate(event.endIsoDate);
+    if (existingEnd && existingEnd > start) return existingEnd;
+    return new Date(Date.parse(`${start}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+  });
+  const [policyDraft, setPolicyDraft] = useState<EventCheckInPolicy>(() => getEventCheckInPolicy(event));
 
   // Walk-in guest inline form state
   const [addingWalkIn, setAddingWalkIn] = useState(false);
@@ -277,7 +308,20 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
       inviteCode: base.inviteCode ?? '',
     });
     setCircleFilter('all');
-  }, [event.id, event.category, event.validationConfig]);
+    setProgramDayFilter('all');
+    setNewBlockDay(isMultiDayEvent(event) ? 'Day 1' : 'Sat');
+    const nextStart = sanitizeIsoDate(event.isoDate) ?? getTodayIsoDate();
+    setStartIsoDraft(nextStart);
+    setMultiDayDraft(isMultiDayEvent(event));
+    const existingEnd = sanitizeIsoDate(event.endIsoDate);
+    setEndIsoDraft(
+      existingEnd && existingEnd > nextStart
+        ? existingEnd
+        : new Date(Date.parse(`${nextStart}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10)
+    );
+    setPolicyDraft(getEventCheckInPolicy(event));
+    setEditingDatesPolicy(false);
+  }, [event.id, event.category, event.validationConfig, event.isoDate, event.endIsoDate, event.checkInPolicy]);
   useEffect(() => {
     if (workspaceCircles.length > 0 && !workspaceCircles.includes(walkInValidationGroup)) {
       setWalkInValidationGroup(workspaceCircles[0]);
@@ -414,9 +458,41 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     setTimeout(() => setActionToast(null), 2600);
   };
 
+  const todayIso = getTodayIsoDate();
+  const formattedEventDate = formatEventDateSpan(event.isoDate, event.endIsoDate, event.date);
+  const eventDurationBadge = formatEventDurationBadge(event);
+  const eventCheckInPolicy = getEventCheckInPolicy(event);
+  const eventDayOptions = useMemo(() => getEventDayOptions(event), [event]);
+
   const eventBlocks = useMemo(
     () => scheduleBlocks.filter((b) => b.eventId === event.id),
     [scheduleBlocks, event.id]
+  );
+
+  const activeProgramDays = useMemo(() => {
+    const seen = new Set<ScheduleBlock['day']>();
+    const list: ScheduleBlock['day'][] = [];
+    for (const opt of eventDayOptions) {
+      if (isMultiDayEvent(event) && opt.value.startsWith('Day ')) {
+        seen.add(opt.value);
+        list.push(opt.value);
+      }
+    }
+    for (const blk of eventBlocks) {
+      if (!seen.has(blk.day)) {
+        seen.add(blk.day);
+        list.push(blk.day);
+      }
+    }
+    return list;
+  }, [eventBlocks, eventDayOptions, event]);
+
+  const visibleProgramBlocks = useMemo(
+    () =>
+      programDayFilter === 'all'
+        ? eventBlocks
+        : eventBlocks.filter((b) => b.day === programDayFilter),
+    [eventBlocks, programDayFilter]
   );
 
   const eventAttendees = useMemo(
@@ -542,7 +618,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   };
 
   const handleExportCsv = () => {
-    const headers = ['Name', 'Email', 'Phone', 'ValidationCircle', 'Tier', 'TicketCode', 'CheckedIn'];
+    const headers = ['Name', 'Email', 'Phone', 'ValidationCircle', 'Tier', 'TicketCode', 'CheckedIn', 'CheckedInDates'];
     const rows = eventAttendees.map((a) => [
       a.name,
       a.email,
@@ -551,6 +627,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
       a.tier,
       a.ticketCode,
       a.checkedIn ? 'Yes' : 'No',
+      (a.checkedInDates ?? []).join('; '),
     ]);
     const csv = [headers.join(','), ...rows.map((r) => r.map((c) => `"${c}"`).join(','))].join(
       '\n'
@@ -646,7 +723,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           stage: newBlockStage.trim() || 'Main Hall',
           lead: newBlockLead.trim() || profile.name,
           completed: false,
-          day: 'Sat',
+          day: newBlockDay,
         })
       );
       setNewBlockTitle('');
@@ -655,6 +732,39 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
       triggerToast('Program block added');
     } catch (err) {
       triggerToast(err instanceof Error ? err.message : 'Unable to add program block.');
+    }
+  };
+
+  const handleSaveDatesPolicy = async () => {
+    if (!onUpdateEvent || savingDatesPolicy) return;
+    const nextStart = sanitizeIsoDate(startIsoDraft) ?? getTodayIsoDate();
+    const nextEnd =
+      multiDayDraft && sanitizeIsoDate(endIsoDraft) && endIsoDraft > nextStart
+        ? endIsoDraft
+        : undefined;
+    const nextDateSpan = formatEventDateSpan(nextStart, nextEnd, event.date);
+    setSavingDatesPolicy(true);
+    try {
+      await Promise.resolve(
+        onUpdateEvent({
+          ...event,
+          isoDate: nextStart,
+          endIsoDate: nextEnd,
+          date: nextDateSpan,
+          checkInPolicy: policyDraft,
+          extraDataConfig: {
+            ...(event.extraDataConfig ?? getCategoryPreset(event.category).extraDataConfig),
+            endIsoDate: nextEnd,
+            checkInPolicy: policyDraft,
+          },
+        })
+      );
+      setEditingDatesPolicy(false);
+      triggerToast('Event dates & gate check-in policy updated');
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message : 'Unable to save dates & policy.');
+    } finally {
+      setSavingDatesPolicy(false);
     }
   };
 
@@ -961,8 +1071,18 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px] text-[#71717A]">
                 <span className="inline-flex items-center gap-1.5 tabular-nums">
                   <Calendar className="w-4 h-4 text-[#0B0B0B]" />
-                  {event.date}
+                  {formattedEventDate}
                 </span>
+                {eventDurationBadge && (
+                  <span className="px-2.5 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold">
+                    {eventDurationBadge}
+                  </span>
+                )}
+                {eventCheckInPolicy === 'daily-reentry' && (
+                  <span className="px-2.5 py-0.5 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] text-[11px] font-semibold">
+                    Daily Re-Entry Pass
+                  </span>
+                )}
                 <span aria-hidden="true">·</span>
                 <span className="inline-flex items-center gap-1.5 tabular-nums">
                   <Clock className="w-4 h-4 text-[#0B0B0B]" />
@@ -1103,14 +1223,28 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   <ExternalLink className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2">
                 <div className="p-4 rounded-2xl bg-white">
                   <span className="text-[11px] text-[#71717A] block">Organizer</span>
                   <span className="text-sm font-semibold text-[#0B0B0B]">{event.organizer}</span>
                 </div>
                 <div className="p-4 rounded-2xl bg-white">
-                  <span className="text-[11px] text-[#71717A] block">SMS Dispatched</span>
+                  <span className="text-[11px] text-[#71717A] block">Event Dates</span>
                   <span className="text-sm font-semibold text-[#0B0B0B] tabular-nums">
+                    {formattedEventDate}
+                  </span>
+                  {eventDurationBadge && (
+                    <span className="block text-[11px] text-[#71717A] mt-0.5">
+                      {eventDurationBadge}
+                    </span>
+                  )}
+                </div>
+                <div className="p-4 rounded-2xl bg-white">
+                  <span className="text-[11px] text-[#71717A] block">Gate Policy &amp; SMS</span>
+                  <span className="text-sm font-semibold text-[#0B0B0B]">
+                    {eventCheckInPolicy === 'daily-reentry' ? 'Daily Re-Entry' : 'One-Time Entry'}
+                  </span>
+                  <span className="block text-[11px] text-[#71717A] tabular-nums mt-0.5">
                     {event.smsDispatched} passes sent
                   </span>
                 </div>
@@ -1127,6 +1261,129 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   </span>
                 </div>
               </div>
+
+              {isEventCreator && onUpdateEvent && (
+                <div className="p-4 rounded-2xl bg-white border border-[#E5E5EA] space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-bold text-[#0B0B0B]">
+                        Multi-Day Schedule &amp; Gate Re-Entry Policy
+                      </p>
+                      <p className="text-[11px] text-[#71717A]">
+                        {formattedEventDate}
+                        {eventDurationBadge ? ` · ${eventDurationBadge}` : ' · Single-Day'} ·{' '}
+                        {eventCheckInPolicy === 'daily-reentry'
+                          ? 'Same QR re-enters once per calendar day'
+                          : 'QR validates one-time entry'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setEditingDatesPolicy((p) => !p)}
+                      className="px-3.5 py-1.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-[11px] font-semibold text-[#0B0B0B] transition-colors"
+                    >
+                      {editingDatesPolicy ? 'Close' : 'Edit Dates & Gate Policy'}
+                    </button>
+                  </div>
+                  {editingDatesPolicy && (
+                    <div className="pt-2 border-t border-[#E5E5EA] space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                            Start Date
+                          </label>
+                          <input
+                            type="date"
+                            value={startIsoDraft}
+                            onChange={(e) => {
+                              const nextStart = e.target.value;
+                              setStartIsoDraft(nextStart);
+                              if (multiDayDraft && nextStart && (!endIsoDraft || endIsoDraft <= nextStart)) {
+                                const bumped = new Date(Date.parse(`${nextStart}T00:00:00Z`) + 86_400_000)
+                                  .toISOString()
+                                  .slice(0, 10);
+                                setEndIsoDraft(bumped);
+                              }
+                            }}
+                            className="w-full h-10 px-3 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B] tabular-nums"
+                          />
+                        </div>
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-[11px] font-semibold text-[#0B0B0B]">
+                              End Date
+                            </label>
+                            <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#0B0B0B] cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={multiDayDraft}
+                                onChange={(e) => {
+                                  const next = e.target.checked;
+                                  setMultiDayDraft(next);
+                                  if (next && (!endIsoDraft || endIsoDraft <= startIsoDraft)) {
+                                    const bumped = new Date(Date.parse(`${startIsoDraft}T00:00:00Z`) + 86_400_000)
+                                      .toISOString()
+                                      .slice(0, 10);
+                                    setEndIsoDraft(bumped);
+                                  }
+                                }}
+                                className="w-3.5 h-3.5 accent-[#0B0B0B]"
+                              />
+                              <span>Multi-Day Event</span>
+                            </label>
+                          </div>
+                          <input
+                            type="date"
+                            disabled={!multiDayDraft}
+                            min={startIsoDraft}
+                            value={multiDayDraft ? endIsoDraft : ''}
+                            onChange={(e) => setEndIsoDraft(e.target.value)}
+                            className="w-full h-10 px-3 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B] tabular-nums disabled:opacity-45"
+                          />
+                        </div>
+                      </div>
+                      <div className="p-1 bg-[#F5F5F7] rounded-xl grid grid-cols-2 gap-1">
+                        {(
+                          [
+                            { id: 'single-entry', label: 'One-Time Entry' },
+                            { id: 'daily-reentry', label: 'Daily Re-Entry (Multi-Day Pass)' },
+                          ] as const
+                        ).map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setPolicyDraft(opt.id)}
+                            className={`py-2 px-3 rounded-lg text-[11px] font-semibold transition-colors ${
+                              policyDraft === opt.id
+                                ? 'bg-white text-[#0B0B0B] shadow-sm'
+                                : 'text-[#71717A] hover:text-[#0B0B0B]'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEditingDatesPolicy(false)}
+                          className="px-4 py-2 rounded-full border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B]"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingDatesPolicy}
+                          onClick={() => void handleSaveDatesPolicy()}
+                          className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold disabled:opacity-50"
+                        >
+                          {savingDatesPolicy ? 'Saving...' : 'Save Dates & Policy'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {isEventCreator && onUpdateEvent && (
                 <div className="pt-3 border-t border-[#E5E5EA]">
@@ -1248,6 +1505,18 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     placeholder="Session title (e.g. Closing Fireside Chat)"
                     className="sm:col-span-2 h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] placeholder:text-[#71717A] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
                   />
+                  <select
+                    value={newBlockDay}
+                    onChange={(e) => setNewBlockDay(e.target.value as ScheduleBlock['day'])}
+                    aria-label="Program day"
+                    className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                  >
+                    {eventDayOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
                   <input
                     type="text"
                     value={newBlockTime}
@@ -1271,37 +1540,69 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   />
                   <button
                     type="submit"
-                    className="h-10 px-5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 transition-colors"
+                    className="sm:col-span-2 h-10 px-5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-neutral-800 transition-colors"
                   >
                     Save Program Block
                   </button>
                 </form>
               )}
 
+              {activeProgramDays.length > 1 && (
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                  <button
+                    type="button"
+                    onClick={() => setProgramDayFilter('all')}
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                      programDayFilter === 'all'
+                        ? 'bg-[#0B0B0B] text-white'
+                        : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
+                    }`}
+                  >
+                    All Days ({eventBlocks.length})
+                  </button>
+                  {activeProgramDays.map((day) => {
+                    const cnt = eventBlocks.filter((b) => b.day === day).length;
+                    return (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() => setProgramDayFilter(day)}
+                        className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                          programDayFilter === day
+                            ? 'bg-[#0B0B0B] text-white'
+                            : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
+                        }`}
+                      >
+                        {day} ({cnt})
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* Schedule Items Flow */}
               <div className="flex flex-col gap-2.5 mt-1">
-                {eventBlocks.length === 0 ? (
+                {visibleProgramBlocks.length === 0 ? (
                   <div className="p-6 rounded-2xl bg-white text-center text-xs text-[#71717A]">
-                    No sessions scheduled for this event yet. Click &ldquo;Add Item&rdquo; to
-                    create the first program block.
+                    No sessions scheduled for this day filter yet. Click &ldquo;Add Item&rdquo; to
+                    create a program block.
                   </div>
                 ) : (
-                  eventBlocks.map((block) => (
+                  visibleProgramBlocks.map((block) => (
                     <div
                       key={block.id}
                       className="group flex flex-col md:flex-row md:items-center justify-between p-4 rounded-2xl bg-white hover:shadow-md transition-all gap-3"
                     >
                       <div className="flex items-start md:items-center gap-3 min-w-0">
                         <GripVertical className="w-4.5 h-4.5 text-[#71717A] shrink-0 mt-1 md:mt-0" />
+                        <span className="px-2.5 py-1 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold shrink-0">
+                          {block.day}
+                        </span>
                         <div className="px-3 py-1 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] shrink-0 tabular-nums font-mono">
                           {block.time}
                         </div>
                         <div className="flex flex-col min-w-0">
-                          <span
-                            className={`text-sm sm:text-base font-semibold text-[#0B0B0B] ${
-                              block.completed ? '' : ''
-                            }`}
-                          >
+                          <span className="text-sm sm:text-base font-semibold text-[#0B0B0B]">
                             {block.title}
                           </span>
                           <div className="flex flex-wrap items-center gap-2 mt-0.5">
@@ -1669,6 +1970,9 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       .join('')
                       .slice(0, 2)
                       .toUpperCase();
+                    const checkedInToday = isAttendeeCheckedInForDate(att, event, todayIso);
+                    const daysCount = getAttendeeCheckedInDaysCount(att);
+                    const isDailyPolicy = eventCheckInPolicy === 'daily-reentry';
                     return (
                       <div
                         key={att.id}
@@ -1688,7 +1992,23 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                                   {att.validationGroup}
                                 </span>
                               )}
-                              {att.checkedIn ? (
+                              {isDailyPolicy ? (
+                                checkedInToday ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#E8E8EA] text-[#0B0B0B] text-[11px] font-medium tabular-nums">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-[#0B0B0B]" />
+                                    Today {att.checkedInAt || 'Checked'} · {daysCount}{' '}
+                                    {daysCount === 1 ? 'day' : 'days'}
+                                  </span>
+                                ) : daysCount > 0 ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[#0B0B0B] text-[11px] font-medium tabular-nums">
+                                    {daysCount} {daysCount === 1 ? 'day' : 'days'} prior · Ready today
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#E8E8EA] text-[#71717A] text-[11px] font-medium">
+                                    Pending Arrival
+                                  </span>
+                                )
+                              ) : att.checkedIn ? (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#E8E8EA] text-[#0B0B0B] text-[11px] font-medium tabular-nums">
                                   <span className="w-1.5 h-1.5 rounded-full bg-[#0B0B0B]" />
                                   Checked In {att.checkedInAt || 'Today'}
@@ -1709,22 +2029,29 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                         <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
                           <button
                             type="button"
-                            onClick={() => onToggleCheckIn(att.id)}
+                            onClick={() =>
+                              isDailyPolicy
+                                ? onToggleCheckIn(att.id, {
+                                    mode: checkedInToday ? 'undo' : 'checkin',
+                                    dateIso: todayIso,
+                                  })
+                                : onToggleCheckIn(att.id)
+                            }
                             className={`px-4 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all whitespace-nowrap ${
-                              att.checkedIn
+                              (isDailyPolicy ? checkedInToday : att.checkedIn)
                                 ? 'bg-[#0B0B0B] text-white'
                                 : 'bg-[#F5F5F7] hover:bg-[#0B0B0B] hover:text-white text-[#0B0B0B]'
                             }`}
                           >
-                            {att.checkedIn ? (
+                            {(isDailyPolicy ? checkedInToday : att.checkedIn) ? (
                               <>
                                 <Check className="w-3.5 h-3.5" />
-                                <span>Checked In</span>
+                                <span>{isDailyPolicy ? 'Checked In Today' : 'Checked In'}</span>
                               </>
                             ) : (
                               <>
                                 <QrCode className="w-3.5 h-3.5" />
-                                <span>Check In</span>
+                                <span>{isDailyPolicy ? 'Check In Today' : 'Check In'}</span>
                               </>
                             )}
                           </button>

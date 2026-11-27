@@ -938,7 +938,10 @@ export const api = {
         true
       ),
 
-    toggleCheckIn: (attendeeId: string) =>
+    toggleCheckIn: (
+      attendeeId: string,
+      options?: { mode?: 'toggle' | 'checkin' | 'undo'; dateIso?: string }
+    ) =>
       request<{
         attendee: Attendee;
         checkInMessageSent?: boolean;
@@ -950,7 +953,10 @@ export const api = {
         smsSkippedReason?: string;
       }>(
         `/api/studio/attendees/${encodeURIComponent(attendeeId)}/checkin`,
-        { method: 'PATCH' },
+        {
+          method: 'PATCH',
+          ...(options ? { body: JSON.stringify(options) } : {}),
+        },
         true
       ),
 

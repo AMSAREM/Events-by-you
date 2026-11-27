@@ -35,6 +35,14 @@ import {
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
 import { playCheckInChime, primeCheckInAudio } from '../lib/audioFeedback';
+import {
+  formatEventDateSpan,
+  formatEventDurationBadge,
+  getAttendeeCheckedInDaysCount,
+  getEventCheckInPolicy,
+  getTodayIsoDate,
+  isAttendeeCheckedInForDate,
+} from '../lib/eventDates';
 import { buildCameraLinkForOrigin } from '../lib/eventMessages';
 import { useDocumentFullscreen } from '../lib/fullscreen';
 import {
@@ -57,7 +65,8 @@ interface QrGateScannerScreenProps {
   initialCode?: string;
   onBackToStudio?: () => void;
   onToggleCheckIn: (
-    attendeeId: string
+    attendeeId: string,
+    options?: { mode?: 'toggle' | 'checkin' | 'undo'; dateIso?: string }
   ) => Promise<{
     checkInMessageSent?: boolean;
     checkInSmsSent?: boolean;
@@ -139,6 +148,12 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
 
   const selectedEvent =
     events.find((e) => e.id === selectedEventId) ?? activePool[0] ?? events[0];
+  const todayIso = getTodayIsoDate();
+  const selectedEventPolicy = getEventCheckInPolicy(selectedEvent);
+  const selectedEventDurationBadge = formatEventDurationBadge(selectedEvent);
+  const selectedEventDateSpan = selectedEvent
+    ? formatEventDateSpan(selectedEvent.isoDate, selectedEvent.endIsoDate, selectedEvent.date)
+    : '';
   const checkinKioskUrl = useMemo(
     () =>
       selectedEvent
@@ -237,13 +252,19 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   );
 
   const checkedInCount = useMemo(
-    () => eventAttendees.filter((a) => a.checkedIn).length,
-    [eventAttendees]
+    () =>
+      eventAttendees.filter((a) =>
+        isAttendeeCheckedInForDate(a, selectedEvent, todayIso)
+      ).length,
+    [eventAttendees, selectedEvent, todayIso]
   );
 
   const pendingAttendees = useMemo(
-    () => eventAttendees.filter((a) => !a.checkedIn),
-    [eventAttendees]
+    () =>
+      eventAttendees.filter(
+        (a) => !isAttendeeCheckedInForDate(a, selectedEvent, todayIso)
+      ),
+    [eventAttendees, selectedEvent, todayIso]
   );
 
   const turnoutPct =
@@ -252,9 +273,10 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   const filteredRoster = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return eventAttendees.filter((att) => {
+      const checkedForActivePolicy = isAttendeeCheckedInForDate(att, selectedEvent, todayIso);
       const matchesStatus =
         rosterFilter === 'all' ||
-        (rosterFilter === 'checked' ? att.checkedIn : !att.checkedIn);
+        (rosterFilter === 'checked' ? checkedForActivePolicy : !checkedForActivePolicy);
       const matchesSearch =
         !q ||
         att.name.toLowerCase().includes(q) ||
@@ -263,7 +285,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
         att.organization.toLowerCase().includes(q);
       return matchesStatus && matchesSearch;
     });
-  }, [eventAttendees, rosterFilter, searchQuery]);
+  }, [eventAttendees, rosterFilter, searchQuery, selectedEvent, todayIso]);
 
   const stopCamera = () => {
     if (streamRef.current) {
@@ -344,15 +366,21 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       return;
     }
 
-    const evtTitle =
-      events.find((e) => e.id === matchAny.eventId)?.title ?? selectedEvent?.title ?? 'Event';
+    const targetEvent = events.find((e) => e.id === matchAny.eventId) ?? selectedEvent;
+    const evtTitle = targetEvent?.title ?? 'Event';
+    const targetPolicy = getEventCheckInPolicy(targetEvent);
+    const alreadyCheckedForGate = isAttendeeCheckedInForDate(matchAny, targetEvent, todayIso);
+    const hadPriorDays = getAttendeeCheckedInDaysCount(matchAny) > 0;
 
-    if (matchAny.checkedIn) {
+    if (alreadyCheckedForGate) {
       const outcome: ScanOutcome = {
         status: 'duplicate',
         attendee: matchAny,
         eventTitle: evtTitle,
-        message: `Anti-passback alert: ${matchAny.name} (${matchAny.ticketCode}) already checked in at ${matchAny.checkedInAt ?? 'earlier'}.`,
+        message:
+          targetPolicy === 'daily-reentry'
+            ? `Anti-passback alert: ${matchAny.name} (${matchAny.ticketCode}) already checked in today (${todayIso}) at ${matchAny.checkedInAt ?? 'earlier'}.`
+            : `Anti-passback alert: ${matchAny.name} (${matchAny.ticketCode}) already checked in at ${matchAny.checkedInAt ?? 'earlier'}.`,
         timestamp: nowTime,
       };
       setLastOutcome(outcome);
@@ -360,31 +388,37 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       return;
     }
 
-    // Valid unchecked pass -> Check them in immediately & dispatch check-in SMS + camera link!
-    const fallbackEvt = events.find((e) => e.id === matchAny.eventId) ?? selectedEvent;
-    const fallbackCameraUrl = fallbackEvt
+    // Valid pass for this gate/day -> Check them in immediately
+    const fallbackCameraUrl = targetEvent
       ? buildCameraLinkForOrigin(
-          fallbackEvt.slug || fallbackEvt.id,
+          targetEvent.slug || targetEvent.id,
           undefined,
           matchAny.name,
           matchAny.ticketCode
         )
       : undefined;
 
+    const nextDates = Array.from(
+      new Set([...(matchAny.checkedInDates ?? []), todayIso])
+    ).sort();
     const updatedAttendee: Attendee = {
       ...matchAny,
       checkedIn: true,
       checkedInAt: nowTime.slice(0, 5),
+      checkedInDates: nextDates,
     };
+    const isRepeatDayReentry = targetPolicy === 'daily-reentry' && hadPriorDays;
     const initialOutcome: ScanOutcome = {
       status: 'verified',
       attendee: updatedAttendee,
       eventTitle: evtTitle,
-      message: `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in.${
-        profile.smsCredits > 0
-          ? ' Dispatching welcome SMS + Disposable Camera link...'
-          : ' Checking SMS bundle balance...'
-      }`,
+      message: isRepeatDayReentry
+        ? `Access Granted (Day Re-Entry) — ${matchAny.name} (${matchAny.tier} Pass) checked in for ${todayIso}.`
+        : `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in.${
+            profile.smsCredits > 0
+              ? ' Dispatching welcome SMS + Disposable Camera link...'
+              : ' Checking SMS bundle balance...'
+          }`,
       cameraUrl: fallbackCameraUrl,
       timestamp: nowTime,
     };
@@ -393,7 +427,9 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
     setCodeInput('');
     triggerCheckInChime();
 
-    void Promise.resolve(onToggleCheckIn(matchAny.id))
+    void Promise.resolve(
+      onToggleCheckIn(matchAny.id, { mode: 'checkin', dateIso: todayIso })
+    )
       .then((res) => {
         if (!res) return;
         const updatedMessage = res.checkInSmsSent
@@ -402,7 +438,9 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
             ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. SMS not sent: ${res.smsSkippedReason}`
             : res.checkInMessageSent
               ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. Check-in email + Disposable Camera link sent.`
-              : `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in.`;
+              : isRepeatDayReentry
+                ? `Access Granted (Daily Re-Entry) — ${matchAny.name} verified for ${todayIso} (${nextDates.length} total days).`
+                : `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in.`;
         const enriched: ScanOutcome = {
           ...initialOutcome,
           cameraUrl: res.cameraUrl || initialOutcome.cameraUrl,
@@ -626,6 +664,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       ticketCode: code,
       checkedIn: walkInAutoCheckIn,
       checkedInAt: walkInAutoCheckIn ? nowTime : undefined,
+      checkedInDates: walkInAutoCheckIn ? [todayIso] : undefined,
       paymentStatus: 'paid',
       smsStatus: 'Arkesel Sent',
       validationGroup: walkInValidationGroup || activeValidationCircles[0],
@@ -760,9 +799,21 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
               <QrCode className="w-5 h-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <label htmlFor="scanner-event-select" className="block text-[11px] font-semibold text-[#71717A]">
-                Active Gate Event ({selectedEvent.category} · {selectedEvent.city})
-              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <label htmlFor="scanner-event-select" className="block text-[11px] font-semibold text-[#71717A]">
+                  Active Gate Event ({selectedEvent.category} · {selectedEventDateSpan} · {selectedEvent.city})
+                </label>
+                {selectedEventDurationBadge && (
+                  <span className="px-2 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold">
+                    {selectedEventDurationBadge}
+                  </span>
+                )}
+                {selectedEventPolicy === 'daily-reentry' && (
+                  <span className="px-2 py-0.5 rounded-full bg-white border border-[#E5E5EA] text-[#0B0B0B] text-[10px] font-semibold">
+                    Daily Re-Entry ({todayIso})
+                  </span>
+                )}
+              </div>
               <select
                 id="scanner-event-select"
                 value={selectedEvent.id}
@@ -1097,7 +1148,14 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                   onClick={() => {
                     const targetAttendee = lastOutcome.attendee;
                     const evtTitle = lastOutcome.eventTitle;
-                    void Promise.resolve(onToggleCheckIn(targetAttendee.id))
+                    const targetEvent =
+                      events.find((e) => e.id === targetAttendee.eventId) ?? selectedEvent;
+                    const isDailyPolicy = getEventCheckInPolicy(targetEvent) === 'daily-reentry';
+                    void Promise.resolve(
+                      isDailyPolicy
+                        ? onToggleCheckIn(targetAttendee.id, { mode: 'undo', dateIso: todayIso })
+                        : onToggleCheckIn(targetAttendee.id)
+                    )
                       .then(() => {
                         setLastOutcome(null);
                       })
@@ -1400,7 +1458,12 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                 No guests match this gate filter.
               </div>
             ) : (
-              filteredRoster.map((att) => (
+              filteredRoster.map((att) => {
+                const isDailyPolicy = selectedEventPolicy === 'daily-reentry';
+                const checkedInToday = isAttendeeCheckedInForDate(att, selectedEvent, todayIso);
+                const daysCount = getAttendeeCheckedInDaysCount(att);
+                const checkedForGate = isDailyPolicy ? checkedInToday : att.checkedIn;
+                return (
                 <div
                   key={att.id}
                   className="px-5 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#F5F5F7]/50 transition-colors"
@@ -1415,6 +1478,13 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                       {att.validationGroup && (
                         <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[10px] font-semibold text-[#0B0B0B] border border-[#E5E5EA]">
                           {att.validationGroup}
+                        </span>
+                      )}
+                      {isDailyPolicy && daysCount > 0 && (
+                        <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[10px] font-semibold text-[#0B0B0B] border border-[#E5E5EA] tabular-nums">
+                          {checkedInToday
+                            ? `${daysCount} ${daysCount === 1 ? 'day' : 'days'} logged`
+                            : `${daysCount} ${daysCount === 1 ? 'day' : 'days'} prior · Ready today`}
                         </span>
                       )}
                     </div>
@@ -1436,11 +1506,18 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                       type="button"
                       onClick={() => {
                         primeCheckInAudio();
-                        const checkingInNow = !att.checkedIn;
+                        const checkingInNow = !checkedForGate;
                         if (checkingInNow) {
                           triggerCheckInChime();
                         }
-                        void Promise.resolve(onToggleCheckIn(att.id)).catch((err) => {
+                        void Promise.resolve(
+                          isDailyPolicy
+                            ? onToggleCheckIn(att.id, {
+                                mode: checkedInToday ? 'undo' : 'checkin',
+                                dateIso: todayIso,
+                              })
+                            : onToggleCheckIn(att.id)
+                        ).catch((err) => {
                           setLastOutcome({
                             status: 'rejected',
                             attendee: att,
@@ -1457,16 +1534,20 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                         });
                       }}
                       className={`flex-1 sm:flex-initial min-h-[40px] px-4 py-1.5 rounded-full text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 whitespace-nowrap ${
-                        att.checkedIn
+                        checkedForGate
                           ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
                           : 'bg-[#0B0B0B] text-white hover:bg-zinc-800'
                       }`}
                     >
-                      {att.checkedIn ? (
+                      {checkedForGate ? (
                         <>
                           <Check className="w-3.5 h-3.5" />
-                          Checked In ({att.checkedInAt ?? 'Today'})
+                          {isDailyPolicy
+                            ? `Checked Today (${att.checkedInAt ?? 'Today'})`
+                            : `Checked In (${att.checkedInAt ?? 'Today'})`}
                         </>
+                      ) : isDailyPolicy && daysCount > 0 ? (
+                        'Check In Today'
                       ) : (
                         'Check In Now'
                       )}
@@ -1484,7 +1565,8 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                     )}
                   </div>
                 </div>
-              ))
+                );
+              })
             )}
           </div>
         </section>

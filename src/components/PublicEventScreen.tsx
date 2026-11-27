@@ -46,6 +46,13 @@ import {
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
 import { api } from '../lib/api';
+import {
+  ALL_SCHEDULE_DAYS,
+  buildEventIcsContent,
+  formatEventDateSpan,
+  formatEventDurationBadge,
+  getEventCheckInPolicy,
+} from '../lib/eventDates';
 import { useDocumentFullscreen } from '../lib/fullscreen';
 import { isPollsEnabledForEvent } from '../lib/polls';
 import {
@@ -281,12 +288,29 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       (extraDataConfig.giftLedger && extraDataConfig.giftLedger.length > 0)
   );
   const pollsAvailable = isPollsEnabledForEvent(selectedEvent);
+  const formattedEventDate = selectedEvent
+    ? formatEventDateSpan(selectedEvent.isoDate, selectedEvent.endIsoDate, selectedEvent.date)
+    : '';
+  const eventDurationBadge = formatEventDurationBadge(selectedEvent);
+  const eventCheckInPolicy = getEventCheckInPolicy(selectedEvent);
+  const [scheduleDayFilter, setScheduleDayFilter] = useState<'all' | ScheduleBlock['day']>('all');
   const eventScheduleBlocks = useMemo(
     () =>
       selectedEvent
         ? scheduleBlocks.filter((b) => b.eventId === selectedEvent.id)
         : [],
     [scheduleBlocks, selectedEvent]
+  );
+  const distinctScheduleDays = useMemo(() => {
+    const present = new Set(eventScheduleBlocks.map((b) => b.day));
+    return ALL_SCHEDULE_DAYS.filter((d) => present.has(d));
+  }, [eventScheduleBlocks]);
+  const filteredScheduleBlocks = useMemo(
+    () =>
+      scheduleDayFilter === 'all'
+        ? eventScheduleBlocks
+        : eventScheduleBlocks.filter((b) => b.day === scheduleDayFilter),
+    [eventScheduleBlocks, scheduleDayFilter]
   );
 
   const [name, setName] = useState('');
@@ -351,6 +375,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     setCustomResponses({});
     setDuplicateError(null);
     setLookupError(null);
+    setScheduleDayFilter('all');
   }, [selectedEvent?.id, selectedEvent?.flyerUrl, validationConfig.enabled, validationConfig.options]);
 
   const normalizedPhone = useMemo(() => {
@@ -679,20 +704,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
   const handleDownloadIcs = () => {
     if (!selectedEvent) return;
-    const ics = [
-      'BEGIN:VCALENDAR',
-      'VERSION:2.0',
-      'PRODID:-//Events By You//Event Registration & SMS Ticketing//EN',
-      'BEGIN:VEVENT',
-      `UID:${issuedPass?.ticketCode ?? selectedEvent.slug}@eventsbyyou.xyz`,
-      `SUMMARY:${selectedEvent.title}`,
-      `LOCATION:${selectedEvent.venue}, ${selectedEvent.city}`,
-      `DESCRIPTION:Digital Gate Pass ${issuedPass?.ticketCode ?? ''} (${issuedPass?.validationGroup ?? 'Guest'}) · ${invitationUrl}`,
-      'DTSTART:20261128T090000Z',
-      'DTEND:20261128T170000Z',
-      'END:VEVENT',
-      'END:VCALENDAR',
-    ].join('\r\n');
+    const ics = buildEventIcsContent(selectedEvent, {
+      ticketCode: issuedPass?.ticketCode,
+      validationGroup: issuedPass?.validationGroup,
+      invitationUrl,
+    });
     const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1449,8 +1465,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
           <div className="pt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-100 tabular-nums">
             <span className="inline-flex items-center gap-1.5">
               <CalendarDays className="w-3.5 h-3.5 text-zinc-200 shrink-0" />
-              {selectedEvent.date} · {selectedEvent.time}
+              {formattedEventDate} · {selectedEvent.time}
             </span>
+            {eventDurationBadge && (
+              <span className="px-2 py-0.5 rounded-full bg-white/15 border border-white/25 text-[10px] font-semibold text-white">
+                {eventDurationBadge}
+              </span>
+            )}
             <span className="inline-flex items-center gap-1.5">
               <MapPin className="w-3.5 h-3.5 text-zinc-200 shrink-0" />
               {selectedEvent.venue}, {selectedEvent.city}
@@ -1520,7 +1541,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   {selectedEvent.title}
                 </h2>
                 <p className="text-[11px] sm:text-xs text-[#71717A] tabular-nums truncate">
-                  {selectedEvent.date} · {selectedEvent.time} · {selectedEvent.venue}
+                  {formattedEventDate} · {selectedEvent.time} · {selectedEvent.venue}
                 </p>
               </div>
 
@@ -2399,7 +2420,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                         <div className="inline-flex items-center gap-2 bg-black/55 backdrop-blur-md border border-white/20 px-3 py-1.5 rounded-full text-[11px] font-semibold text-white">
                           <span>{selectedEvent.category}</span>
                           <span aria-hidden="true">·</span>
-                          <span>{selectedEvent.status === 'live' ? 'Live Gate' : selectedEvent.date}</span>
+                          <span>{selectedEvent.status === 'live' ? 'Live Gate' : formattedEventDate}</span>
                         </div>
                         <button
                           type="button"
@@ -2435,8 +2456,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                         <div className="pt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-100 tabular-nums">
                           <span className="inline-flex items-center gap-1.5">
                             <CalendarDays className="w-3.5 h-3.5 text-zinc-200 shrink-0" />
-                            {selectedEvent.date} · {selectedEvent.time}
+                            {formattedEventDate} · {selectedEvent.time}
                           </span>
+                          {eventDurationBadge && (
+                            <span className="px-2 py-0.5 rounded-full bg-white/15 border border-white/25 text-[10px] font-semibold text-white">
+                              {eventDurationBadge}
+                            </span>
+                          )}
                           <span className="inline-flex items-center gap-1.5">
                             <MapPin className="w-3.5 h-3.5 text-zinc-200 shrink-0" />
                             {selectedEvent.venue}, {selectedEvent.city}
@@ -2630,9 +2656,19 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       <div className="flex items-center gap-1.5 tabular-nums">
                         <CalendarDays className="w-4 h-4 text-[#E2E2E4] shrink-0" />
                         <span>
-                          {selectedEvent.date} · {selectedEvent.time}
+                          {formattedEventDate} · {selectedEvent.time}
                         </span>
                       </div>
+                      {eventDurationBadge && (
+                        <span className="px-2.5 py-0.5 rounded-full bg-white/15 border border-white/25 text-[11px] font-semibold text-white">
+                          {eventDurationBadge}
+                        </span>
+                      )}
+                      {eventCheckInPolicy === 'daily-reentry' && (
+                        <span className="px-2.5 py-0.5 rounded-full bg-white/15 border border-white/25 text-[11px] font-semibold text-white">
+                          Daily Re-Entry Pass
+                        </span>
+                      )}
                       <div className="flex items-center gap-1.5">
                         <MapPin className="w-4 h-4 text-[#E2E2E4] shrink-0" />
                         <span>
@@ -2887,16 +2923,46 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               {/* Program Schedule Blocks (only rendered when organizer has added real schedule items) */}
               {eventScheduleBlocks.length > 0 && (
                 <section className="space-y-2.5">
-                  <div className="flex items-center justify-between px-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-1">
                     <h3 className="text-base font-semibold text-[#0B0B0B]">
                       Event Schedule &amp; Run of Show
                     </h3>
                     <span className="text-[11px] font-medium text-[#71717A]">
-                      {eventScheduleBlocks.length} Sessions
+                      {filteredScheduleBlocks.length} Sessions
                     </span>
                   </div>
 
-                  {eventScheduleBlocks.map((blk) => (
+                  {distinctScheduleDays.length > 1 && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                      <button
+                        type="button"
+                        onClick={() => setScheduleDayFilter('all')}
+                        className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                          scheduleDayFilter === 'all'
+                            ? 'bg-[#0B0B0B] text-white'
+                            : 'bg-white text-[#71717A] border border-[#E5E5EA] hover:text-[#0B0B0B]'
+                        }`}
+                      >
+                        All Days
+                      </button>
+                      {distinctScheduleDays.map((day) => (
+                        <button
+                          key={day}
+                          type="button"
+                          onClick={() => setScheduleDayFilter(day)}
+                          className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                            scheduleDayFilter === day
+                              ? 'bg-[#0B0B0B] text-white'
+                              : 'bg-white text-[#71717A] border border-[#E5E5EA] hover:text-[#0B0B0B]'
+                          }`}
+                        >
+                          {day}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {filteredScheduleBlocks.map((blk) => (
                     <div
                       key={blk.id}
                       className="bg-white rounded-[24px] p-4 shadow-sm flex items-center gap-4"
@@ -2909,9 +2975,14 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           <h4 className="text-base font-semibold text-[#0B0B0B] truncate">
                             {blk.title}
                           </h4>
-                          <span className="text-[11px] font-medium bg-[#F3F3F5] text-[#71717A] px-2.5 py-0.5 rounded-full shrink-0 tabular-nums">
-                            {blk.time}
-                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-[10px] font-semibold bg-[#0B0B0B] text-white px-2 py-0.5 rounded-full whitespace-nowrap">
+                              {blk.day}
+                            </span>
+                            <span className="text-[11px] font-medium bg-[#F3F3F5] text-[#71717A] px-2.5 py-0.5 rounded-full tabular-nums">
+                              {blk.time}
+                            </span>
+                          </div>
                         </div>
                         <p className="text-[11px] text-[#71717A] uppercase tracking-wider truncate mt-0.5">
                           {blk.lead}
@@ -3109,9 +3180,21 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     </div>
                     <div>
                       <span className="text-[11px] text-[#71717A] block">Date &amp; Time</span>
-                      <span className="text-[13px] font-medium text-[#0B0B0B] tabular-nums">
-                        {selectedEvent.date} · {selectedEvent.time}
+                      <span className="text-[13px] font-medium text-[#0B0B0B] tabular-nums block">
+                        {formattedEventDate} · {selectedEvent.time}
                       </span>
+                      {(eventDurationBadge || eventCheckInPolicy === 'daily-reentry') && (
+                        <span className="text-[11px] text-[#71717A] block mt-0.5">
+                          {[
+                            eventDurationBadge,
+                            eventCheckInPolicy === 'daily-reentry'
+                              ? 'Valid for daily gate re-entry'
+                              : undefined,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-start gap-3">

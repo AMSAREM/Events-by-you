@@ -37,6 +37,12 @@ import {
   type StoredAuthSession,
 } from './lib/api';
 import { sanitizePublicExtraDataConfig } from './lib/polls';
+import {
+  getEventCheckInPolicy,
+  getTodayIsoDate,
+  sanitizeCheckedInDates,
+  sanitizeIsoDate,
+} from './lib/eventDates';
 import { NOINDEX_ROUTE_SEO } from './lib/seoConfig';
 import { NavigationRail } from './components/NavigationRail';
 import { LandingScreen } from './components/LandingScreen';
@@ -1573,7 +1579,8 @@ export default function App() {
   };
 
   const handleToggleCheckIn = async (
-    attendeeId: string
+    attendeeId: string,
+    options?: { mode?: 'toggle' | 'checkin' | 'undo'; dateIso?: string }
   ): Promise<{
     checkInMessageSent?: boolean;
     checkInSmsSent?: boolean;
@@ -1586,32 +1593,94 @@ export default function App() {
     const previousAttendees = attendees;
     const previousEvents = events;
     const target = attendees.find((a) => a.id === attendeeId);
+    const targetEvent = target ? events.find((e) => e.id === target.eventId) : undefined;
+    const policy = getEventCheckInPolicy(targetEvent);
+    const targetDateIso = sanitizeIsoDate(options?.dateIso) ?? getTodayIsoDate();
+    const mode = options?.mode ?? 'toggle';
+    const wasCheckedIn = Boolean(target?.checkedIn);
     const nowTime = new Date().toLocaleTimeString('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
     });
+
+    let optimisticCheckedIn = !wasCheckedIn;
+    let optimisticDates: string[] = [];
+    let optimisticCheckedInAt: string | undefined = nowTime;
+
+    if (target) {
+      if (policy === 'daily-reentry') {
+        const existingDates = sanitizeCheckedInDates(target.checkedInDates) ?? [];
+        let nextDates = [...existingDates];
+        if (mode === 'checkin') {
+          if (!nextDates.includes(targetDateIso)) nextDates.push(targetDateIso);
+        } else if (mode === 'undo') {
+          nextDates = nextDates.filter((d) => d !== targetDateIso);
+        } else {
+          nextDates = existingDates.includes(targetDateIso)
+            ? existingDates.filter((d) => d !== targetDateIso)
+            : [...existingDates, targetDateIso];
+        }
+        nextDates.sort();
+        optimisticDates = nextDates;
+        optimisticCheckedIn = nextDates.length > 0;
+        const addedDay = nextDates.includes(targetDateIso) && !existingDates.includes(targetDateIso);
+        optimisticCheckedInAt = optimisticCheckedIn
+          ? addedDay
+            ? nowTime
+            : target.checkedInAt || nowTime
+          : undefined;
+      } else {
+        optimisticCheckedIn =
+          mode === 'checkin' ? true : mode === 'undo' ? false : !wasCheckedIn;
+        optimisticDates = optimisticCheckedIn ? [targetDateIso] : [];
+        optimisticCheckedInAt = optimisticCheckedIn ? nowTime : undefined;
+      }
+    }
+
     setAttendees((prev) =>
       prev.map((a) =>
         a.id === attendeeId
           ? {
               ...a,
-              checkedIn: !a.checkedIn,
-              checkedInAt: !a.checkedIn ? nowTime : undefined,
+              checkedIn: optimisticCheckedIn,
+              checkedInAt: optimisticCheckedInAt,
+              checkedInDates: optimisticDates,
             }
           : a
       )
     );
     if (target) {
-      const delta = target.checkedIn ? -1 : 1;
-      setEvents((prev) =>
-        prev.map((e) =>
-          e.id === target.eventId ? { ...e, checkedIn: Math.max(0, e.checkedIn + delta) } : e
-        )
-      );
+      const delta =
+        !wasCheckedIn && optimisticCheckedIn ? 1 : wasCheckedIn && !optimisticCheckedIn ? -1 : 0;
+      if (delta !== 0) {
+        setEvents((prev) =>
+          prev.map((e) =>
+            e.id === target.eventId ? { ...e, checkedIn: Math.max(0, e.checkedIn + delta) } : e
+          )
+        );
+      }
     }
     try {
-      const res = await api.studio.toggleCheckIn(attendeeId);
+      const res = await api.studio.toggleCheckIn(attendeeId, options);
       setAttendees((prev) => prev.map((a) => (a.id === attendeeId ? res.attendee : a)));
+      if (target) {
+        const expectedDelta =
+          !wasCheckedIn && res.attendee.checkedIn
+            ? 1
+            : wasCheckedIn && !res.attendee.checkedIn
+              ? -1
+              : 0;
+        const optimisticDelta =
+          !wasCheckedIn && optimisticCheckedIn ? 1 : wasCheckedIn && !optimisticCheckedIn ? -1 : 0;
+        const correction = expectedDelta - optimisticDelta;
+        if (correction !== 0) {
+          setEvents((prev) =>
+            prev.map((e) =>
+              e.id === target.eventId ? { ...e, checkedIn: Math.max(0, e.checkedIn + correction) } : e
+            )
+          );
+        }
+      }
       if (typeof res.smsCredits === 'number') {
         setProfile((prev) => ({ ...prev, smsCredits: res.smsCredits! }));
       }

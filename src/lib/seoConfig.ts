@@ -1,4 +1,5 @@
 import type { EventItem } from '../types/events';
+import { formatEventDateSpan, isMultiDayEvent } from './eventDates';
 
 export const CANONICAL_ORIGIN = 'https://www.eventsbyyou.xyz';
 
@@ -489,19 +490,20 @@ export function buildEventSeoPayload(
         ? 'Gift Table'
         : 'Events By You';
 
+  const displayDate = formatEventDateSpan(event.isoDate, event.endIsoDate, event.date);
   const rawTitle = `${event.title} (${event.city}) | ${suffixLabel}`;
   const title =
     rawTitle.length >= 50 && rawTitle.length <= 60
       ? rawTitle
       : clampSeoLength(
           rawTitle.length < 50
-            ? `${event.title} — ${event.date} · ${event.city} | ${suffixLabel}`
+            ? `${event.title} — ${displayDate} · ${event.city} | ${suffixLabel}`
             : rawTitle,
           60
         );
 
   const rawDesc =
-    `${event.organizer} hosts ${event.title} on ${event.date}${event.time ? ` at ${event.time}` : ''} at ${event.venue}, ${event.city}. ` +
+    `${event.organizer} hosts ${event.title} on ${displayDate}${event.time ? ` at ${event.time}` : ''} at ${event.venue}, ${event.city}. ` +
     `Tickets: ${priceGhs}. ${event.subtitle || 'Register online for instant SMS & QR passes.'}`;
   const description = clampSeoLength(rawDesc, 160);
 
@@ -542,6 +544,7 @@ export function buildEventSeoPayload(
     name: event.title,
     description: event.subtitle || description,
     startDate: event.isoDate || undefined,
+    ...(isMultiDayEvent(event) && event.endIsoDate ? { endDate: event.endIsoDate } : {}),
     eventAttendanceMode: attendanceMode,
     eventStatus,
     image: [flyerImage],

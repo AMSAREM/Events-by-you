@@ -12,6 +12,15 @@ import {
   validateStrictPhoneE164,
 } from '../data/initialData';
 import { appendPoweredByLine, calculateSmsCredits, resolveEventMessage } from './eventMessages';
+import {
+  formatEventDateSpan,
+  getEventCheckInPolicy,
+  getTodayIsoDate,
+  normalizeScheduleDay,
+  sanitizeCheckedInDates,
+  sanitizeCheckInPolicy,
+  sanitizeIsoDate,
+} from './eventDates';
 import { resolveAuthoritativeSmsBundle, validateReceiptReference } from './smsBundles';
 import {
   DEFAULT_SHARED_SENDER_ID,
@@ -1801,12 +1810,28 @@ export async function localFallbackRequest<T>(
             event.venue || 'Main Venue'
           ),
         };
+    const cleanStartIso = sanitizeIsoDate(event.isoDate) || getTodayIsoDate();
+    const rawEndIso = sanitizeIsoDate(event.endIsoDate ?? event.extraDataConfig?.endIsoDate);
+    const cleanEndIso = rawEndIso && rawEndIso > cleanStartIso ? rawEndIso : undefined;
+    const cleanPolicy = sanitizeCheckInPolicy(
+      event.checkInPolicy ?? event.extraDataConfig?.checkInPolicy
+    );
     const created: EventItem = {
       ...event,
       id: uniqueEventId,
       slug: uniqueSlug,
+      isoDate: cleanStartIso,
+      ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
+      ...(cleanPolicy ? { checkInPolicy: cleanPolicy } : {}),
+      date: cleanEndIso
+        ? formatEventDateSpan(cleanStartIso, cleanEndIso, event.date)
+        : event.date,
       capacity: getEffectiveEventCapacity(event.capacity, user.profile),
-      extraDataConfig: initialExtraDataConfig,
+      extraDataConfig: {
+        ...initialExtraDataConfig,
+        ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
+        ...(cleanPolicy ? { checkInPolicy: cleanPolicy } : {}),
+      },
       senderId: ent.allowCustomSenderId ? event.senderId : DEFAULT_SHARED_SENDER_ID,
       messageConfig: ent.allowCustomMessages ? event.messageConfig : undefined,
       qrPassPublished: event.status === 'draft' ? false : Boolean(event.qrPassPublished),
@@ -1817,6 +1842,7 @@ export async function localFallbackRequest<T>(
         ...b,
         id: `sch-${Date.now().toString(36)}-${randomHex(2)}-${idx}`,
         eventId: uniqueEventId,
+        day: normalizeScheduleDay(b.day, 'Sat'),
       };
       db.scheduleBlocks.push(blk);
       return blk;
@@ -1878,16 +1904,22 @@ export async function localFallbackRequest<T>(
       smsSkippedReason = `Insufficient SMS credits (${user.profile.smsCredits} remaining, ${smsCost} needed). Purchase an SMS bundle to deliver pass SMS.`;
     }
 
+    const todayIso = getTodayIsoDate();
+    const initialDates = payload.checkedIn
+      ? sanitizeCheckedInDates(payload.checkedInDates) ?? [todayIso]
+      : [];
     const att: Attendee = {
       ...payload,
       id: payload.id || `att-${Date.now()}-${randomHex(2)}`,
       eventId,
       phone: normalizedAttPhone,
+      ...(initialDates.length > 0 ? { checkedInDates: initialDates } : {}),
       smsStatus,
     };
     db.attendees.unshift(att);
     evt.registered += 1;
     evt.revenue += evt.ticketPrice;
+    if (att.checkedIn) evt.checkedIn += 1;
     saveDb(db);
     const { organizerId: _org, ...cleanEvent } = evt;
     return {
@@ -2162,10 +2194,29 @@ export async function localFallbackRequest<T>(
               patch.extraDataConfig.planningConfig ?? existing.extraDataConfig?.planningConfig,
           }
         : existing.extraDataConfig;
+      const nextStartIso = sanitizeIsoDate(patch.isoDate) ?? existing.isoDate;
+      const rawNextEnd =
+        'endIsoDate' in patch || (patch.extraDataConfig && 'endIsoDate' in patch.extraDataConfig)
+          ? sanitizeIsoDate(patch.endIsoDate ?? patch.extraDataConfig?.endIsoDate)
+          : existing.endIsoDate;
+      const nextEndIso = rawNextEnd && nextStartIso && rawNextEnd > nextStartIso ? rawNextEnd : undefined;
+      const nextPolicy =
+        'checkInPolicy' in patch || (patch.extraDataConfig && 'checkInPolicy' in patch.extraDataConfig)
+          ? sanitizeCheckInPolicy(patch.checkInPolicy ?? patch.extraDataConfig?.checkInPolicy)
+          : existing.checkInPolicy;
+      if (mergedExtra) {
+        if (nextEndIso) mergedExtra.endIsoDate = nextEndIso;
+        else delete mergedExtra.endIsoDate;
+        if (nextPolicy) mergedExtra.checkInPolicy = nextPolicy;
+        else delete mergedExtra.checkInPolicy;
+      }
       const updated = {
         ...existing,
         ...patch,
         id: eventId,
+        isoDate: nextStartIso,
+        endIsoDate: nextEndIso,
+        checkInPolicy: nextPolicy,
         extraDataConfig: mergedExtra,
         capacity: getEffectiveEventCapacity(nextCapRaw, user.profile),
         senderId: ent.allowCustomSenderId ? (patch.senderId ?? existing.senderId) : (existing.senderId || DEFAULT_SHARED_SENDER_ID),
@@ -2218,13 +2269,50 @@ export async function localFallbackRequest<T>(
     const attId = decodeURIComponent(checkinMatch[1]);
     const att = db.attendees.find((a) => a.id === attId);
     if (!att) throw new LocalApiError('Attendee not found.', 404);
-    const nowTime = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-    att.checkedIn = !att.checkedIn;
-    att.checkedInAt = att.checkedIn ? nowTime : undefined;
     const evt = db.events.find((e) => e.id === att.eventId);
-    if (evt) {
-      evt.checkedIn = Math.max(0, evt.checkedIn + (att.checkedIn ? 1 : -1));
+    const nowTime = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const reqBody = (body || {}) as { mode?: 'toggle' | 'checkin' | 'undo'; dateIso?: string };
+    const mode = reqBody.mode === 'checkin' || reqBody.mode === 'undo' ? reqBody.mode : 'toggle';
+    const targetDateIso = sanitizeIsoDate(reqBody.dateIso) ?? getTodayIsoDate();
+    const policy = getEventCheckInPolicy(evt);
+    const wasCheckedIn = Boolean(att.checkedIn);
+    let addedFirstTime = false;
+
+    if (policy === 'daily-reentry') {
+      const existingDates = sanitizeCheckedInDates(att.checkedInDates) ?? [];
+      let nextDates = [...existingDates];
+      if (mode === 'checkin') {
+        if (!nextDates.includes(targetDateIso)) nextDates.push(targetDateIso);
+      } else if (mode === 'undo') {
+        nextDates = nextDates.filter((d) => d !== targetDateIso);
+      } else {
+        nextDates = existingDates.includes(targetDateIso)
+          ? existingDates.filter((d) => d !== targetDateIso)
+          : [...existingDates, targetDateIso];
+      }
+      nextDates.sort();
+      const nextCheckedIn = nextDates.length > 0;
+      const addedDay = nextDates.includes(targetDateIso) && !existingDates.includes(targetDateIso);
+      addedFirstTime = !wasCheckedIn && nextCheckedIn && addedDay;
+      att.checkedIn = nextCheckedIn;
+      att.checkedInAt = nextCheckedIn ? (addedDay ? nowTime : att.checkedInAt || nowTime) : undefined;
+      att.checkedInDates = nextDates;
+      if (evt) {
+        if (!wasCheckedIn && nextCheckedIn) evt.checkedIn += 1;
+        else if (wasCheckedIn && !nextCheckedIn) evt.checkedIn = Math.max(0, evt.checkedIn - 1);
+      }
+    } else {
+      const nextCheckedIn = mode === 'checkin' ? true : mode === 'undo' ? false : !wasCheckedIn;
+      addedFirstTime = !wasCheckedIn && nextCheckedIn;
+      att.checkedIn = nextCheckedIn;
+      att.checkedInAt = nextCheckedIn ? nowTime : undefined;
+      att.checkedInDates = nextCheckedIn ? [targetDateIso] : [];
+      if (evt) {
+        if (!wasCheckedIn && nextCheckedIn) evt.checkedIn += 1;
+        else if (wasCheckedIn && !nextCheckedIn) evt.checkedIn = Math.max(0, evt.checkedIn - 1);
+      }
     }
+
     const owner = (evt && Object.values(db.users).find((u) => u.id === evt.organizerId)) || user;
     const origin =
       typeof window !== 'undefined' && window.location?.origin
@@ -2247,14 +2335,16 @@ export async function localFallbackRequest<T>(
       });
       cameraUrl = resolved.cameraUrl;
       dispatchedMessage = resolved.text;
-      const smsCost = att.phone ? Math.max(1, calculateSmsCredits(resolved.text)) : 0;
-      if (att.phone && owner.profile.smsCredits >= smsCost) {
-        owner.profile.smsCredits -= smsCost;
-        smsCreditsUsed = smsCost;
-        checkInSmsSent = true;
-        evt.smsDispatched += 1;
-      } else if (att.phone) {
-        smsSkippedReason = `No SMS credits remaining (${owner.profile.smsCredits} left, ${smsCost} needed). Purchase an SMS bundle for check-in SMS.`;
+      if (addedFirstTime) {
+        const smsCost = att.phone ? Math.max(1, calculateSmsCredits(resolved.text)) : 0;
+        if (att.phone && owner.profile.smsCredits >= smsCost) {
+          owner.profile.smsCredits -= smsCost;
+          smsCreditsUsed = smsCost;
+          checkInSmsSent = true;
+          evt.smsDispatched += 1;
+        } else if (att.phone) {
+          smsSkippedReason = `No SMS credits remaining (${owner.profile.smsCredits} left, ${smsCost} needed). Purchase an SMS bundle for check-in SMS.`;
+        }
       }
     }
     saveDb(db);
@@ -2377,6 +2467,7 @@ export async function localFallbackRequest<T>(
     requireRoles(user, ['creator', 'organizer']);
     const blk: ScheduleBlock = {
       ...(body as unknown as ScheduleBlock),
+      day: normalizeScheduleDay(body.day, 'Sat'),
       id: (body.id as string) || `sch-${Date.now()}-${randomHex(2)}`,
     };
     db.scheduleBlocks.push(blk);

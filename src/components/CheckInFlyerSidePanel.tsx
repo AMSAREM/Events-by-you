@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import type { DesignTheme, EventItem } from '../types/events';
 import { getCategoryPreset } from '../data/initialData';
+import { formatEventDateSpan, formatEventDurationBadge } from '../lib/eventDates';
 import { DeterministicQrSvg, downloadQrSvg } from '../lib/qr';
 import { getContrastTextColor, normalizeHexColor } from '../lib/themeColors';
 import { BrandMark } from './BrandLogo';
@@ -76,6 +77,8 @@ export const CheckInFlyerSidePanel: React.FC<CheckInFlyerSidePanelProps> = ({
   const capacity = Math.max(1, event.capacity || liveRegistered || 1);
   const turnoutBase = Math.max(1, liveRegistered || capacity);
   const turnoutPct = Math.min(100, Math.round((liveCheckedIn / turnoutBase) * 100));
+  const formattedEventDate = formatEventDateSpan(event.isoDate, event.endIsoDate, event.date);
+  const durationBadge = formatEventDurationBadge(event);
 
   const organizerInitials =
     (event.organizer || event.title || 'EV')
@@ -180,7 +183,7 @@ export const CheckInFlyerSidePanel: React.FC<CheckInFlyerSidePanelProps> = ({
                 className="text-[11px] font-semibold truncate text-white"
                 style={customBrand ? { color: customBrandText === '#0B0B0B' ? '#FFFFFF' : '#FFFFFF' } : undefined}
               >
-                {event.category} · {event.status === 'live' ? 'Live Gate' : event.date}
+                {event.category} · {event.status === 'live' ? 'Live Gate' : formattedEventDate}
               </p>
             </div>
           </div>
@@ -228,8 +231,13 @@ export const CheckInFlyerSidePanel: React.FC<CheckInFlyerSidePanelProps> = ({
           <div className="pt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-200 tabular-nums">
             <span className="inline-flex items-center gap-1.5">
               <CalendarDays className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
-              {event.date} · {event.time}
+              {formattedEventDate} · {event.time}
             </span>
+            {durationBadge && (
+              <span className="px-2 py-0.5 rounded-full bg-white/15 border border-white/25 text-[10px] font-semibold text-white">
+                {durationBadge}
+              </span>
+            )}
             <span className="inline-flex items-center gap-1.5 truncate max-w-full">
               <MapPin className="w-3.5 h-3.5 text-zinc-300 shrink-0" />
               {event.venue}, {event.city}

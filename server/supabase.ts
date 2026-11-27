@@ -16,6 +16,12 @@ import type {
 import { isSyntheticPhoneEmail } from './phoneAuth.ts';
 import { normalizeHexColor } from '../src/lib/themeColors.ts';
 import { sanitizeEventPlanningConfig } from '../src/lib/planningTemplates.ts';
+import {
+  normalizeScheduleDay,
+  sanitizeCheckedInDates,
+  sanitizeCheckInPolicy,
+  sanitizeIsoDate,
+} from '../src/lib/eventDates.ts';
 
 function cleanEnvValue(raw: string | undefined): string {
   if (!raw) return '';
@@ -186,7 +192,16 @@ export function mapProfileRow(row: Record<string, unknown>, fallbackEmail = ''):
 
 export function extractEventAttendeeMetaMap(
   rawExtraConfig: unknown
-): Record<string, { validationGroup?: string; inviteCodeUsed?: string; giftEntry?: Attendee['giftEntry']; customResponses?: Record<string, string> }> {
+): Record<
+  string,
+  {
+    validationGroup?: string;
+    inviteCodeUsed?: string;
+    giftEntry?: Attendee['giftEntry'];
+    customResponses?: Record<string, string>;
+    checkedInDates?: string[];
+  }
+> {
   if (!rawExtraConfig || typeof rawExtraConfig !== 'object') return {};
   const map = (rawExtraConfig as Record<string, unknown>).__attendeeMeta;
   if (!map || typeof map !== 'object') return {};
@@ -197,6 +212,7 @@ export function extractEventAttendeeMetaMap(
       inviteCodeUsed?: string;
       giftEntry?: Attendee['giftEntry'];
       customResponses?: Record<string, string>;
+      checkedInDates?: string[];
     }
   >;
 }
@@ -268,6 +284,18 @@ export function mapEventRow(
   const resolvedBrandColor = normalizeHexColor(
     row.brand_color != null ? String(row.brand_color) : mergedExtra?.brandColor
   );
+  const startIso = String(row.iso_date);
+  const rawEndIso = sanitizeIsoDate(
+    row.end_iso_date != null
+      ? String(row.end_iso_date)
+      : typeof rawExtraObj?.endIsoDate === 'string'
+        ? rawExtraObj.endIsoDate
+        : undefined
+  );
+  const resolvedEndIso = rawEndIso && rawEndIso > startIso ? rawEndIso : undefined;
+  const resolvedCheckInPolicy = sanitizeCheckInPolicy(
+    row.check_in_policy ?? rawExtraObj?.checkInPolicy
+  );
 
   return {
     id: String(row.id),
@@ -277,7 +305,9 @@ export function mapEventRow(
     category: String(row.category ?? 'Events'),
     status: (row.status as EventItem['status']) || 'upcoming',
     date: String(row.date),
-    isoDate: String(row.iso_date),
+    isoDate: startIso,
+    ...(resolvedEndIso ? { endIsoDate: resolvedEndIso } : {}),
+    ...(resolvedCheckInPolicy ? { checkInPolicy: resolvedCheckInPolicy } : {}),
     time: String(row.time),
     venue: String(row.venue),
     city: String(row.city),
@@ -313,6 +343,7 @@ export function mapEventRow(
 }
 
 export function mapAttendeeRow(row: Record<string, unknown>): Attendee {
+  const checkedInDates = sanitizeCheckedInDates(row.checked_in_dates);
   return {
     id: String(row.id),
     name: String(row.name),
@@ -323,6 +354,7 @@ export function mapAttendeeRow(row: Record<string, unknown>): Attendee {
     tier: (row.tier as Attendee['tier']) || 'General',
     checkedIn: Boolean(row.checked_in),
     checkedInAt: row.checked_in_at != null ? String(row.checked_in_at) : undefined,
+    ...(checkedInDates ? { checkedInDates } : {}),
     ticketCode: String(row.ticket_code),
     smsStatus: (row.sms_status as Attendee['smsStatus']) || 'Arkesel Sent',
     paymentStatus: (row.payment_status as Attendee['paymentStatus']) || 'paid',
@@ -349,7 +381,7 @@ export function mapScheduleRow(row: Record<string, unknown>): ScheduleBlock {
     stage: String(row.stage),
     lead: String(row.lead),
     completed: Boolean(row.completed),
-    day: (row.day as ScheduleBlock['day']) || 'Sat',
+    day: normalizeScheduleDay(row.day, 'Sat'),
   };
 }
 

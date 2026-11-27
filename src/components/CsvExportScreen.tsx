@@ -18,6 +18,7 @@ import {
   TableProperties,
 } from 'lucide-react';
 import { getPlanEntitlements } from '../lib/subscriptionPlans';
+import { getTodayIsoDate } from '../lib/eventDates';
 import { Attendee, EventItem, OrganizerProfile } from '../types/events';
 
 interface CsvExportScreenProps {
@@ -46,6 +47,7 @@ interface ExportColumn {
     | 'registered_at'
     | 'is_checked_in'
     | 'checked_in_at'
+    | 'checked_in_dates'
     | 'scanner_name'
     | 'sms_status'
     | 'ticket_nonce';
@@ -93,6 +95,13 @@ const INITIAL_COLUMNS: ExportColumn[] = [
     label: 'Scan Verification Time',
     code: 'checked_in_at',
     hint: 'Null when Unverified',
+    enabled: true,
+  },
+  {
+    key: 'checked_in_dates',
+    label: 'Check-In Dates (Multi-Day)',
+    code: 'checked_in_dates',
+    hint: 'YYYY-MM-DD List',
     enabled: true,
   },
   {
@@ -147,15 +156,24 @@ function formatEmail(email: string, maskPii: boolean): string {
   return `${parts[0].slice(0, 1)}••••@${parts[1]}`;
 }
 
+function formatIsoToDdMmYyyy(isoDate: string): string {
+  const parts = isoDate.split('-');
+  if (parts.length !== 3) return isoDate;
+  return `${parts[2]}/${parts[1]}/${parts[0]}`;
+}
+
 function formatTimestamp(baseIso: string, checkedInAt: string | undefined, fmt: TimeFormatType, isCheckIn = false): string {
   if (isCheckIn && !checkedInAt) return '';
   if (fmt === 'epoch') {
-    return isCheckIn ? '1795511111000' : '1795166062000';
+    const parsed = Date.parse(`${baseIso}T09:00:00Z`);
+    const baseMs = Number.isNaN(parsed) ? 1795511111000 : parsed;
+    return String(isCheckIn ? baseMs : baseMs - 345_000_000);
   }
   if (fmt === 'local') {
+    const ddmmyyyy = formatIsoToDdMmYyyy(baseIso);
     return isCheckIn
-      ? `28/11/2026 ${checkedInAt}`
-      : `24/11/2026 09:14 AM`;
+      ? `${ddmmyyyy} ${checkedInAt}`
+      : `${ddmmyyyy} 09:14 AM`;
   }
   return isCheckIn
     ? `${baseIso} ${checkedInAt ?? '09:00:00'}`
@@ -240,7 +258,7 @@ export const CsvExportScreen: React.FC<CsvExportScreenProps> = ({
 
   const getCellValue = (att: Attendee, key: ExportColumn['key']): string => {
     const evt = eventMap.get(att.eventId);
-    const baseIso = evt?.isoDate ?? '2026-11-28';
+    const baseIso = evt?.isoDate ?? getTodayIsoDate();
     const gateLabel =
       att.tier === 'VIP' || att.tier === 'Speaker'
         ? 'VIP Entrance'
@@ -271,6 +289,13 @@ export const CsvExportScreen: React.FC<CsvExportScreenProps> = ({
         return att.checkedIn ? 'CHECKED_IN' : 'NOT_CHECKED_IN';
       case 'checked_in_at':
         return att.checkedIn ? formatTimestamp(baseIso, att.checkedInAt || '09:12:00', timeFormat, true) : '';
+      case 'checked_in_dates':
+        return (att.checkedInDates && att.checkedInDates.length > 0
+          ? att.checkedInDates
+          : att.checkedIn
+            ? [baseIso]
+            : []
+        ).join('; ');
       case 'scanner_name':
         return att.checkedIn ? gateLabel : '—';
       case 'sms_status':
@@ -338,7 +363,7 @@ export const CsvExportScreen: React.FC<CsvExportScreenProps> = ({
       showToast('Applied Minimal Contact preset (4 columns)');
     } else if (preset === 'Full Audit') {
       setColumns((prev) => prev.map((c) => ({ ...c, enabled: true })));
-      showToast('Applied Full Audit preset (all 12 attributes)');
+      showToast('Applied Full Audit preset (all 13 attributes)');
     } else {
       setColumns((prev) =>
         prev.map((c) => ({
@@ -346,7 +371,7 @@ export const CsvExportScreen: React.FC<CsvExportScreenProps> = ({
           enabled: !['sms_status', 'ticket_nonce'].includes(c.key),
         }))
       );
-      showToast('Applied Gate Operations preset (10 core attributes)');
+      showToast('Applied Gate Operations preset (11 core attributes)');
     }
   };
 

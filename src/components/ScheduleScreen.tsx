@@ -1,6 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Clock, Plus, Trash2 } from 'lucide-react';
 import { EventItem, OrganizerProfile, ScheduleBlock, SystemAlert } from '../types/events';
+import {
+  ALL_SCHEDULE_DAYS,
+  SCHEDULE_EVENT_DAYS,
+  SCHEDULE_WEEKDAYS,
+  getEventDayOptions,
+  isMultiDayEvent,
+} from '../lib/eventDates';
 import { TopUtilityBar } from './TopUtilityBar';
 
 interface ScheduleScreenProps {
@@ -15,8 +22,6 @@ interface ScheduleScreenProps {
   onNavigateSettings: () => void;
   onResolveAlert: (id: string) => void;
 }
-
-const DAYS: ('All' | ScheduleBlock['day'])[] = ['All', 'Tue', 'Wed', 'Thu', 'Sat'];
 
 export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   events,
@@ -40,8 +45,10 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   const [newDuration, setNewDuration] = useState('45m');
   const [newStage, setNewStage] = useState('Main Stage');
   const [newLead, setNewLead] = useState(profile.name);
-  const [newDay, setNewDay] = useState<ScheduleBlock['day']>('Wed');
   const [newEventId, setNewEventId] = useState(events[0]?.id ?? '');
+  const [newDay, setNewDay] = useState<ScheduleBlock['day']>(() =>
+    isMultiDayEvent(events[0]) ? 'Day 1' : 'Sat'
+  );
 
   useEffect(() => {
     if (events.length > 0 && (!newEventId || !events.some((e) => e.id === newEventId))) {
@@ -54,6 +61,42 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
     events.forEach((e) => map.set(e.id, e));
     return map;
   }, [events]);
+
+  const filterDays = useMemo<('All' | ScheduleBlock['day'])[]>(() => {
+    const used = new Set(blocks.map((b) => b.day));
+    const selectedEvt = selectedEventId !== 'all' ? eventMap.get(selectedEventId) : undefined;
+    const base: ScheduleBlock['day'][] = [];
+    if (selectedEvt && isMultiDayEvent(selectedEvt)) {
+      for (const opt of getEventDayOptions(selectedEvt)) {
+        if (SCHEDULE_EVENT_DAYS.includes(opt.value as (typeof SCHEDULE_EVENT_DAYS)[number])) {
+          base.push(opt.value);
+        }
+      }
+    } else {
+      for (const d of SCHEDULE_EVENT_DAYS) {
+        if (used.has(d)) base.push(d);
+      }
+    }
+    for (const wd of SCHEDULE_WEEKDAYS) {
+      if (used.has(wd) || ['Tue', 'Wed', 'Thu', 'Sat', 'Sun'].includes(wd)) {
+        if (!base.includes(wd)) base.push(wd);
+      }
+    }
+    for (const d of ALL_SCHEDULE_DAYS) {
+      if (used.has(d) && !base.includes(d)) base.push(d);
+    }
+    return ['All', ...base];
+  }, [blocks, selectedEventId, eventMap]);
+
+  const cueDayOptions = useMemo(() => {
+    const targetEvt = eventMap.get(newEventId);
+    const opts = getEventDayOptions(targetEvt);
+    const present = new Set(opts.map((o) => o.value));
+    for (const d of ALL_SCHEDULE_DAYS) {
+      if (!present.has(d)) opts.push({ value: d, label: d });
+    }
+    return opts;
+  }, [eventMap, newEventId]);
 
   const filteredBlocks = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -132,13 +175,13 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
       {/* Filter Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-1 p-1 bg-[#F5F5F7] rounded-full">
-            {DAYS.map((day) => (
+          <div className="flex items-center gap-1 p-1 bg-[#F5F5F7] rounded-full overflow-x-auto max-w-full">
+            {filterDays.map((day) => (
               <button
                 key={day}
                 type="button"
                 onClick={() => setSelectedDay(day)}
-                className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
                   selectedDay === day
                     ? 'bg-[#0B0B0B] text-white'
                     : 'text-[#71717A] hover:text-[#0B0B0B]'
@@ -195,7 +238,14 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
             <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Production</label>
             <select
               value={newEventId}
-              onChange={(e) => setNewEventId(e.target.value)}
+              onChange={(e) => {
+                const nextId = e.target.value;
+                setNewEventId(nextId);
+                const nextEvt = eventMap.get(nextId);
+                if (nextEvt && isMultiDayEvent(nextEvt)) {
+                  setNewDay('Day 1');
+                }
+              }}
               className="w-full h-10 px-3 rounded-full bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
             >
               {events.map((evt) => (
@@ -222,11 +272,11 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                 onChange={(e) => setNewDay(e.target.value as ScheduleBlock['day'])}
                 className="w-full h-10 px-2.5 rounded-full bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
               >
-                <option value="Tue">Tue</option>
-                <option value="Wed">Wed</option>
-                <option value="Thu">Thu</option>
-                <option value="Fri">Fri</option>
-                <option value="Sat">Sat</option>
+                {cueDayOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
               </select>
             </div>
             <div>

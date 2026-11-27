@@ -11,6 +11,15 @@ import {
 } from '../src/data/initialData.ts';
 import { normalizeHexColor } from '../src/lib/themeColors.ts';
 import {
+  formatEventDateSpan,
+  getEventCheckInPolicy,
+  getTodayIsoDate,
+  normalizeScheduleDay,
+  sanitizeCheckedInDates,
+  sanitizeCheckInPolicy,
+  sanitizeIsoDate,
+} from '../src/lib/eventDates.ts';
+import {
   buildValidatedPollOptions,
   normalizePollStatus,
   sanitizePollForPublic,
@@ -1827,12 +1836,28 @@ export const memoryStore = {
           ),
         };
 
+    const cleanStartIso = sanitizeIsoDate(event.isoDate) || getTodayIsoDate();
+    const rawEndIso = sanitizeIsoDate(event.endIsoDate ?? event.extraDataConfig?.endIsoDate);
+    const cleanEndIso = rawEndIso && rawEndIso > cleanStartIso ? rawEndIso : undefined;
+    const cleanPolicy = sanitizeCheckInPolicy(
+      event.checkInPolicy ?? event.extraDataConfig?.checkInPolicy
+    );
     const created: EventItem = {
       ...event,
       id: uniqueEventId,
       slug: uniqueSlug,
+      isoDate: cleanStartIso,
+      ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
+      ...(cleanPolicy ? { checkInPolicy: cleanPolicy } : {}),
+      date: cleanEndIso
+        ? formatEventDateSpan(cleanStartIso, cleanEndIso, event.date)
+        : event.date,
       capacity: enforcedCapacity,
-      extraDataConfig: initialExtraDataConfig,
+      extraDataConfig: {
+        ...initialExtraDataConfig,
+        ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
+        ...(cleanPolicy ? { checkInPolicy: cleanPolicy } : {}),
+      },
       senderId: ent.allowCustomSenderId ? event.senderId : undefined,
       messageConfig: ent.allowCustomMessages
         ? event.messageConfig
@@ -1846,7 +1871,12 @@ export const memoryStore = {
 
     const createdBlocks: ScheduleBlock[] = blocks.map((b, idx) => {
       const id = `sch-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}-${idx}`;
-      const block: ScheduleBlock = { ...b, id, eventId: uniqueEventId };
+      const block: ScheduleBlock = {
+        ...b,
+        id,
+        eventId: uniqueEventId,
+        day: normalizeScheduleDay(b.day, 'Sat'),
+      };
       db.scheduleBlocks.set(id, block);
       return block;
     });
@@ -1943,13 +1973,35 @@ export const memoryStore = {
               : {}),
           };
 
+    const nextStartIso = sanitizeIsoDate(updated.isoDate) ?? existing.isoDate;
+    const rawNextEnd =
+      'endIsoDate' in updated || (incomingExtra && 'endIsoDate' in incomingExtra)
+        ? sanitizeIsoDate(updated.endIsoDate ?? incomingExtra?.endIsoDate)
+        : existing.endIsoDate;
+    const nextEndIso = rawNextEnd && nextStartIso && rawNextEnd > nextStartIso ? rawNextEnd : undefined;
+    const nextPolicy =
+      'checkInPolicy' in updated || (incomingExtra && 'checkInPolicy' in incomingExtra)
+        ? sanitizeCheckInPolicy(updated.checkInPolicy ?? incomingExtra?.checkInPolicy)
+        : existing.checkInPolicy;
+
+    const finalExtra = mergedExtra ? { ...mergedExtra } : undefined;
+    if (finalExtra) {
+      if (nextEndIso) finalExtra.endIsoDate = nextEndIso;
+      else delete finalExtra.endIsoDate;
+      if (nextPolicy) finalExtra.checkInPolicy = nextPolicy;
+      else delete finalExtra.checkInPolicy;
+    }
+
     const next = {
       ...existing,
       ...updated,
       id: eventId,
       organizerId: userId,
+      isoDate: nextStartIso,
+      endIsoDate: nextEndIso,
+      checkInPolicy: nextPolicy,
       capacity: nextCapacity,
-      extraDataConfig: mergedExtra,
+      extraDataConfig: finalExtra,
       senderId: ent.allowCustomSenderId
         ? updated.senderId !== undefined
           ? updated.senderId
@@ -2469,6 +2521,10 @@ export const memoryStore = {
       throw err;
     }
 
+    const todayIso = getTodayIsoDate();
+    const initialDates = attendee.checkedIn
+      ? sanitizeCheckedInDates(attendee.checkedInDates) ?? [todayIso]
+      : [];
     const created: Attendee = {
       ...attendee,
       eventId,
@@ -2476,6 +2532,7 @@ export const memoryStore = {
       phone: normalizedPhone,
       organization: attendee.organization || 'General Guest',
       tier: attendee.tier || 'General',
+      ...(initialDates.length > 0 ? { checkedInDates: initialDates } : {}),
       smsStatus: attendee.smsStatus || 'Pending',
       paymentStatus: attendee.paymentStatus || 'paid',
     };
@@ -2489,19 +2546,73 @@ export const memoryStore = {
     return { attendee: created, event: cleanEvent };
   },
 
-  toggleCheckIn(userId: string, attendeeId: string): Attendee {
+  toggleCheckIn(
+    userId: string,
+    attendeeId: string,
+    options?: { mode?: 'toggle' | 'checkin' | 'undo'; dateIso?: string }
+  ): Attendee {
     const att = db.attendees.get(attendeeId);
     if (!att) throw new Error('Attendee not found.');
     const evt = db.events.get(att.eventId);
     if (!evt || evt.organizerId !== userId) throw new Error('Unauthorized.');
 
-    const nextCheckedIn = !att.checkedIn;
-    const checkedInAt = nextCheckedIn
-      ? new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-      : undefined;
-    const updated: Attendee = { ...att, checkedIn: nextCheckedIn, checkedInAt };
+    const targetDateIso = sanitizeIsoDate(options?.dateIso) ?? getTodayIsoDate();
+    const mode = options?.mode ?? 'toggle';
+    const policy = getEventCheckInPolicy(evt);
+    const nowTime = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const wasCheckedIn = Boolean(att.checkedIn);
+
+    if (policy === 'daily-reentry') {
+      const existingDates = sanitizeCheckedInDates(att.checkedInDates) ?? [];
+      let nextDates = [...existingDates];
+      if (mode === 'checkin') {
+        if (!nextDates.includes(targetDateIso)) nextDates.push(targetDateIso);
+      } else if (mode === 'undo') {
+        nextDates = nextDates.filter((d) => d !== targetDateIso);
+      } else {
+        nextDates = existingDates.includes(targetDateIso)
+          ? existingDates.filter((d) => d !== targetDateIso)
+          : [...existingDates, targetDateIso];
+      }
+      nextDates.sort();
+      const nextCheckedIn = nextDates.length > 0;
+      const addedDay = nextDates.includes(targetDateIso) && !existingDates.includes(targetDateIso);
+      const checkedInAt = nextCheckedIn
+        ? addedDay
+          ? nowTime
+          : att.checkedInAt || nowTime
+        : undefined;
+      const updated: Attendee = {
+        ...att,
+        checkedIn: nextCheckedIn,
+        checkedInAt,
+        checkedInDates: nextDates,
+      };
+      db.attendees.set(attendeeId, updated);
+      if (!wasCheckedIn && nextCheckedIn) {
+        evt.checkedIn += 1;
+      } else if (wasCheckedIn && !nextCheckedIn) {
+        evt.checkedIn = Math.max(0, evt.checkedIn - 1);
+      }
+      return updated;
+    }
+
+    const nextCheckedIn =
+      mode === 'checkin' ? true : mode === 'undo' ? false : !wasCheckedIn;
+    const checkedInAt = nextCheckedIn ? nowTime : undefined;
+    const nextDates = nextCheckedIn ? [targetDateIso] : [];
+    const updated: Attendee = {
+      ...att,
+      checkedIn: nextCheckedIn,
+      checkedInAt,
+      checkedInDates: nextDates,
+    };
     db.attendees.set(attendeeId, updated);
-    evt.checkedIn = Math.max(0, evt.checkedIn + (nextCheckedIn ? 1 : -1));
+    if (!wasCheckedIn && nextCheckedIn) {
+      evt.checkedIn += 1;
+    } else if (wasCheckedIn && !nextCheckedIn) {
+      evt.checkedIn = Math.max(0, evt.checkedIn - 1);
+    }
     return updated;
   },
 
@@ -2556,8 +2667,12 @@ export const memoryStore = {
   addScheduleBlock(userId: string, block: ScheduleBlock): ScheduleBlock {
     const evt = db.events.get(block.eventId);
     if (!evt || evt.organizerId !== userId) throw new Error('Event not found.');
-    db.scheduleBlocks.set(block.id, block);
-    return block;
+    const normalized: ScheduleBlock = {
+      ...block,
+      day: normalizeScheduleDay(block.day, 'Sat'),
+    };
+    db.scheduleBlocks.set(normalized.id, normalized);
+    return normalized;
   },
 
   toggleScheduleBlock(userId: string, blockId: string): ScheduleBlock {

@@ -95,6 +95,15 @@ import {
   resolveEventMessage,
 } from './src/lib/eventMessages.ts';
 import {
+  formatEventDateSpan,
+  getEventCheckInPolicy,
+  getTodayIsoDate,
+  normalizeScheduleDay,
+  sanitizeCheckedInDates,
+  sanitizeCheckInPolicy,
+  sanitizeIsoDate,
+} from './src/lib/eventDates.ts';
+import {
   buildValidatedPollOptions,
   normalizePollStatus,
   sanitizePollForPublic,
@@ -278,6 +287,12 @@ function withEmbeddedMessageConfig(
     if ((extraDataConfig as EventItem['extraDataConfig'])?.planningConfig === undefined && existingObj.planningConfig !== undefined) {
       base.planningConfig = existingObj.planningConfig;
     }
+    if ((extraDataConfig as EventItem['extraDataConfig'])?.endIsoDate === undefined && existingObj.endIsoDate !== undefined) {
+      base.endIsoDate = existingObj.endIsoDate;
+    }
+    if ((extraDataConfig as EventItem['extraDataConfig'])?.checkInPolicy === undefined && existingObj.checkInPolicy !== undefined) {
+      base.checkInPolicy = existingObj.checkInPolicy;
+    }
   }
   if (messageConfig && typeof messageConfig === 'object') {
     base.__messageConfig = messageConfig;
@@ -301,17 +316,20 @@ function hydrateAttendeeWithEventMeta(
       inviteCodeUsed?: string;
       giftEntry?: Attendee['giftEntry'];
       customResponses?: Record<string, string>;
+      checkedInDates?: string[];
     }
   >
 ): Attendee {
   const meta = metaMap?.[attendee.id];
-  if (!meta) return attendee;
+  const normalizedDates = sanitizeCheckedInDates(attendee.checkedInDates ?? meta?.checkedInDates);
+  if (!meta && normalizedDates === undefined) return attendee;
   return {
     ...attendee,
-    validationGroup: attendee.validationGroup ?? meta.validationGroup,
-    inviteCodeUsed: attendee.inviteCodeUsed ?? meta.inviteCodeUsed,
-    giftEntry: attendee.giftEntry ?? meta.giftEntry,
-    customResponses: attendee.customResponses ?? meta.customResponses,
+    validationGroup: attendee.validationGroup ?? meta?.validationGroup,
+    inviteCodeUsed: attendee.inviteCodeUsed ?? meta?.inviteCodeUsed,
+    giftEntry: attendee.giftEntry ?? meta?.giftEntry,
+    customResponses: attendee.customResponses ?? meta?.customResponses,
+    ...(normalizedDates !== undefined ? { checkedInDates: normalizedDates } : {}),
   };
 }
 
@@ -694,13 +712,16 @@ async function mergeEventAttendeeMeta(
     inviteCodeUsed?: string;
     giftEntry?: Attendee['giftEntry'];
     customResponses?: Record<string, string>;
+    checkedInDates?: string[];
   }
 ) {
+  const hasCheckedInDatesUpdate = 'checkedInDates' in meta;
   const hasAny =
     Boolean(meta.validationGroup) ||
     Boolean(meta.inviteCodeUsed) ||
     Boolean(meta.giftEntry) ||
-    Boolean(meta.customResponses && Object.keys(meta.customResponses).length > 0);
+    Boolean(meta.customResponses && Object.keys(meta.customResponses).length > 0) ||
+    hasCheckedInDatesUpdate;
   if (!hasAny) return;
   try {
     const { data: rawRow } = await client
@@ -714,16 +735,27 @@ async function mergeEventAttendeeMeta(
         ? ({ ...((rawRow as Record<string, unknown>).extra_data_config as Record<string, unknown>) })
         : {};
     const currentMap = extractEventAttendeeMetaMap(currentExtra);
+    const prevEntry = currentMap[attendeeId] ?? {};
+    const nextEntry: Record<string, unknown> = {
+      ...prevEntry,
+      ...(meta.validationGroup ? { validationGroup: meta.validationGroup } : {}),
+      ...(meta.inviteCodeUsed ? { inviteCodeUsed: meta.inviteCodeUsed } : {}),
+      ...(meta.giftEntry ? { giftEntry: meta.giftEntry } : {}),
+      ...(meta.customResponses && Object.keys(meta.customResponses).length > 0
+        ? { customResponses: meta.customResponses }
+        : {}),
+    };
+    if (hasCheckedInDatesUpdate) {
+      const cleanDates = sanitizeCheckedInDates(meta.checkedInDates) ?? [];
+      if (cleanDates.length > 0) {
+        nextEntry.checkedInDates = cleanDates;
+      } else {
+        delete nextEntry.checkedInDates;
+      }
+    }
     currentExtra.__attendeeMeta = {
       ...currentMap,
-      [attendeeId]: {
-        ...(meta.validationGroup ? { validationGroup: meta.validationGroup } : {}),
-        ...(meta.inviteCodeUsed ? { inviteCodeUsed: meta.inviteCodeUsed } : {}),
-        ...(meta.giftEntry ? { giftEntry: meta.giftEntry } : {}),
-        ...(meta.customResponses && Object.keys(meta.customResponses).length > 0
-          ? { customResponses: meta.customResponses }
-          : {}),
-      },
+      [attendeeId]: nextEntry,
     };
     await client.from('events').update({ extra_data_config: currentExtra }).eq('id', eventId);
   } catch {
@@ -4800,6 +4832,16 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         event.category || 'Events'
       );
 
+      const cleanStartIso = sanitizeIsoDate(event.isoDate) ?? getTodayIsoDate();
+      const rawEndIso = sanitizeIsoDate(event.endIsoDate ?? event.extraDataConfig?.endIsoDate);
+      const cleanEndIso = rawEndIso && rawEndIso > cleanStartIso ? rawEndIso : undefined;
+      const cleanPolicy = sanitizeCheckInPolicy(
+        event.checkInPolicy ?? event.extraDataConfig?.checkInPolicy
+      );
+      const formattedDate = cleanEndIso
+        ? formatEventDateSpan(cleanStartIso, cleanEndIso, event.date)
+        : event.date;
+
       const eventRow: Record<string, unknown> = {
         id: uniqueEventId,
         organizer_id: req.user!.id,
@@ -4808,8 +4850,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         subtitle: event.subtitle,
         category: event.category,
         status: event.status,
-        date: event.date,
-        iso_date: event.isoDate,
+        date: formattedDate,
+        iso_date: cleanStartIso,
         time: event.time,
         venue: event.venue,
         city: event.city,
@@ -4833,6 +4875,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           {
             ...(event.extraDataConfig ?? { enableGiftTable: false, customFields: [] }),
             planningConfig: starterPlanning,
+            ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
+            ...(cleanPolicy ? { checkInPolicy: cleanPolicy } : {}),
           },
           event.messageConfig,
           event.brandColor
@@ -4872,7 +4916,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           stage: b.stage,
           lead: b.lead,
           completed: b.completed,
-          day: b.day,
+          day: normalizeScheduleDay(b.day, 'Sat'),
         }));
         const { data: insertedBlocks, error: schErr } = await client
           .from('schedule_blocks')
@@ -4897,12 +4941,16 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
     try {
       const { data: existingEvtRow } = await req
         .supabase!.from('events')
-        .select('extra_data_config, planning_config, category')
+        .select('iso_date, date, extra_data_config, planning_config, category')
         .eq('id', req.params.id)
         .eq('organizer_id', req.user!.id)
         .maybeSingle();
 
       const existingRec = existingEvtRow as Record<string, unknown> | null;
+      const existingExtraObj =
+        existingRec?.extra_data_config && typeof existingRec.extra_data_config === 'object'
+          ? (existingRec.extra_data_config as Record<string, unknown>)
+          : {};
       const incomingPlanning = updated.extraDataConfig?.planningConfig
         ? sanitizeEventPlanningConfig(
             updated.extraDataConfig.planningConfig,
@@ -4910,14 +4958,57 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           )
         : undefined;
 
+      const cleanStartIso =
+        sanitizeIsoDate(updated.isoDate) ??
+        sanitizeIsoDate(existingRec?.iso_date as string | undefined) ??
+        getTodayIsoDate();
+      const hasExplicitEndDate =
+        'endIsoDate' in updated ||
+        Boolean(updated.extraDataConfig && 'endIsoDate' in updated.extraDataConfig);
+      const rawEndIso = hasExplicitEndDate
+        ? sanitizeIsoDate(updated.endIsoDate ?? updated.extraDataConfig?.endIsoDate)
+        : sanitizeIsoDate(existingExtraObj.endIsoDate as string | undefined);
+      const cleanEndIso = rawEndIso && rawEndIso > cleanStartIso ? rawEndIso : undefined;
+
+      const hasExplicitPolicy =
+        'checkInPolicy' in updated ||
+        Boolean(updated.extraDataConfig && 'checkInPolicy' in updated.extraDataConfig);
+      const cleanPolicy = hasExplicitPolicy
+        ? sanitizeCheckInPolicy(updated.checkInPolicy ?? updated.extraDataConfig?.checkInPolicy)
+        : sanitizeCheckInPolicy(existingExtraObj.checkInPolicy);
+
+      const embeddedExtra =
+        withEmbeddedMessageConfig(
+          incomingPlanning && updated.extraDataConfig
+            ? { ...updated.extraDataConfig, planningConfig: incomingPlanning }
+            : updated.extraDataConfig,
+          updated.messageConfig,
+          updated.brandColor,
+          existingRec?.extra_data_config
+        ) ?? {};
+      if (cleanEndIso) {
+        embeddedExtra.endIsoDate = cleanEndIso;
+      } else if (hasExplicitEndDate) {
+        delete embeddedExtra.endIsoDate;
+      }
+      if (cleanPolicy) {
+        embeddedExtra.checkInPolicy = cleanPolicy;
+      } else if (hasExplicitPolicy) {
+        delete embeddedExtra.checkInPolicy;
+      }
+
+      const formattedDate = cleanEndIso
+        ? formatEventDateSpan(cleanStartIso, cleanEndIso, updated.date || String(existingRec?.date || ''))
+        : updated.date;
+
       const updatePayload: Record<string, unknown> = {
         slug: updated.slug,
         title: updated.title,
         subtitle: updated.subtitle,
         category: updated.category,
         status: updated.status,
-        date: updated.date,
-        iso_date: updated.isoDate,
+        date: formattedDate,
+        iso_date: cleanStartIso,
         time: updated.time,
         venue: updated.venue,
         city: updated.city,
@@ -4932,14 +5023,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         sender_id: updated.senderId ?? null,
         validation_config: updated.validationConfig ?? null,
         ...(incomingPlanning ? { planning_config: incomingPlanning } : {}),
-        extra_data_config: withEmbeddedMessageConfig(
-          incomingPlanning && updated.extraDataConfig
-            ? { ...updated.extraDataConfig, planningConfig: incomingPlanning }
-            : updated.extraDataConfig,
-          updated.messageConfig,
-          updated.brandColor,
-          existingRec?.extra_data_config
-        ),
+        extra_data_config: embeddedExtra,
         message_config: updated.messageConfig ?? null,
       };
       if (updated.status === 'draft') {
@@ -5846,13 +5930,21 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       }
 
       const insertedId = String((inserted as Record<string, unknown>).id);
-      if (usedLegacyAttendeeFallback) {
+      const initialCheckedInDates = attendee.checkedIn
+        ? sanitizeCheckedInDates(attendee.checkedInDates) ?? [getTodayIsoDate()]
+        : [];
+      if (usedLegacyAttendeeFallback || initialCheckedInDates.length > 0) {
         const adminOrClient = createServiceSupabaseClient() ?? client;
         await mergeEventAttendeeMeta(adminOrClient, eventId, insertedId, {
-          validationGroup: attendee.validationGroup,
-          inviteCodeUsed: attendee.inviteCodeUsed,
-          giftEntry: attendee.giftEntry,
-          customResponses: attendee.customResponses,
+          ...(usedLegacyAttendeeFallback
+            ? {
+                validationGroup: attendee.validationGroup,
+                inviteCodeUsed: attendee.inviteCodeUsed,
+                giftEntry: attendee.giftEntry,
+                customResponses: attendee.customResponses,
+              }
+            : {}),
+          ...(initialCheckedInDates.length > 0 ? { checkedInDates: initialCheckedInDates } : {}),
         });
       }
 
@@ -5880,6 +5972,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         mappedAtt.giftEntry = mappedAtt.giftEntry ?? attendee.giftEntry;
         mappedAtt.customResponses = mappedAtt.customResponses ?? attendee.customResponses;
       }
+      if (initialCheckedInDates.length > 0) {
+        mappedAtt.checkedInDates = initialCheckedInDates;
+      }
 
       return res.status(201).json({
         attendee: mappedAtt,
@@ -5899,6 +5994,10 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
   app.patch('/api/studio/attendees/:id/checkin', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const client = req.supabase!;
+      const reqBody = (req.body || {}) as { mode?: 'toggle' | 'checkin' | 'undo'; dateIso?: string };
+      const mode = reqBody.mode === 'checkin' || reqBody.mode === 'undo' ? reqBody.mode : 'toggle';
+      const targetDateIso = sanitizeIsoDate(reqBody.dateIso) ?? getTodayIsoDate();
+
       const { data: existing, error: fetchErr } = await client
         .from('attendees')
         .select('*')
@@ -5908,10 +6007,61 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         return res.status(404).json({ error: 'Attendee not found.' });
       }
       const rec = existing as Record<string, unknown>;
-      const nextCheckedIn = !Boolean(rec.checked_in);
-      const checkedInAt = nextCheckedIn
-        ? new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-        : null;
+      const eventId = String(rec.event_id);
+
+      const { data: evtRow } = await client
+        .from('events')
+        .select('*')
+        .eq('id', eventId)
+        .single();
+      if (!evtRow || String((evtRow as Record<string, unknown>).organizer_id) !== req.user!.id) {
+        return res.status(403).json({ error: 'Unauthorized to modify check-ins for this event.' });
+      }
+
+      const evtMapped = mapEventRow(evtRow as Record<string, unknown>);
+      const policy = getEventCheckInPolicy(evtMapped);
+      const prevAttMetaMap = extractEventAttendeeMetaMap((evtRow as Record<string, unknown>).extra_data_config);
+      const existingDates =
+        sanitizeCheckedInDates(
+          (rec.checked_in_dates as unknown) ?? prevAttMetaMap?.[req.params.id]?.checkedInDates
+        ) ?? [];
+      const wasCheckedIn = Boolean(rec.checked_in);
+      const nowTime = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+      let nextDates: string[] = [];
+      let nextCheckedIn = false;
+      let checkedInAt: string | null = null;
+      let addedDay = false;
+
+      if (policy === 'daily-reentry') {
+        nextDates = [...existingDates];
+        if (mode === 'checkin') {
+          if (!nextDates.includes(targetDateIso)) nextDates.push(targetDateIso);
+        } else if (mode === 'undo') {
+          nextDates = nextDates.filter((d) => d !== targetDateIso);
+        } else {
+          nextDates = existingDates.includes(targetDateIso)
+            ? existingDates.filter((d) => d !== targetDateIso)
+            : [...existingDates, targetDateIso];
+        }
+        nextDates.sort();
+        nextCheckedIn = nextDates.length > 0;
+        addedDay = nextDates.includes(targetDateIso) && !existingDates.includes(targetDateIso);
+        checkedInAt = nextCheckedIn
+          ? addedDay
+            ? nowTime
+            : typeof rec.checked_in_at === 'string' && rec.checked_in_at
+              ? rec.checked_in_at
+              : nowTime
+          : null;
+      } else {
+        nextCheckedIn = mode === 'checkin' ? true : mode === 'undo' ? false : !wasCheckedIn;
+        addedDay = !wasCheckedIn && nextCheckedIn;
+        nextDates = nextCheckedIn ? [targetDateIso] : [];
+        checkedInAt = nextCheckedIn ? nowTime : null;
+      }
+
+      const addedFirstTime = !wasCheckedIn && nextCheckedIn;
 
       const { data: updatedAtt, error: updErr } = await client
         .from('attendees')
@@ -5921,26 +6071,31 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .single();
       if (updErr) return res.status(400).json({ error: updErr.message });
 
-      const eventId = String(rec.event_id);
-      const { data: evtRow } = await client
-        .from('events')
-        .select('*')
-        .eq('id', eventId)
-        .single();
+      const adminOrClient = createServiceSupabaseClient() ?? client;
+      await mergeEventAttendeeMeta(adminOrClient, eventId, req.params.id, {
+        checkedInDates: nextDates,
+      });
 
-      if (evtRow) {
+      if (!wasCheckedIn && nextCheckedIn) {
         const currentChecked = Number((evtRow as Record<string, unknown>).checked_in ?? 0);
-        const nextTotal = Math.max(0, currentChecked + (nextCheckedIn ? 1 : -1));
-        await client.from('events').update({ checked_in: nextTotal }).eq('id', eventId);
+        await client.from('events').update({ checked_in: currentChecked + 1 }).eq('id', eventId);
+      } else if (wasCheckedIn && !nextCheckedIn) {
+        const currentChecked = Number((evtRow as Record<string, unknown>).checked_in ?? 0);
+        await client.from('events').update({ checked_in: Math.max(0, currentChecked - 1) }).eq('id', eventId);
       }
 
-      const attMetaMap = evtRow
-        ? extractEventAttendeeMetaMap((evtRow as Record<string, unknown>).extra_data_config)
-        : undefined;
       const mappedAttendee = hydrateAttendeeWithEventMeta(
         mapAttendeeRow(updatedAtt as Record<string, unknown>),
-        attMetaMap
+        {
+          ...prevAttMetaMap,
+          [req.params.id]: {
+            ...(prevAttMetaMap?.[req.params.id] ?? {}),
+            checkedInDates: nextDates,
+          },
+        }
       );
+      mappedAttendee.checkedInDates = nextDates;
+
       let checkInMessageSent = false;
       let checkInSmsSent = false;
       let cameraUrl: string | undefined;
@@ -5949,8 +6104,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       let smsCreditsUsed = 0;
       let smsSkippedReason: string | undefined;
 
-      if (nextCheckedIn && evtRow) {
-        const evtMapped = mapEventRow(evtRow as Record<string, unknown>);
+      if (addedDay) {
         const resolved = resolveEventMessage({
           type: 'checkin',
           event: evtMapped,
@@ -5962,75 +6116,76 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         cameraUrl = resolved.cameraUrl;
         dispatchedMessage = resolved.text;
 
-        const orgId = String((evtRow as Record<string, unknown>).organizer_id || req.user!.id);
-        const adminOrClient = createServiceSupabaseClient() ?? client;
-        let replyTo: string | undefined;
-        let orgSenderId: string | undefined;
-        const { data: orgProf } = await adminOrClient
-          .from('profiles')
-          .select('reply_to_email, sender_id, sms_credits')
-          .eq('id', orgId)
-          .maybeSingle();
-        const orgProfRec = orgProf as Record<string, unknown> | null;
-        if (orgProfRec && typeof orgProfRec.reply_to_email === 'string') {
-          replyTo = orgProfRec.reply_to_email;
-        }
-        if (orgProfRec && typeof orgProfRec.sender_id === 'string' && orgProfRec.sender_id.trim()) {
-          orgSenderId = orgProfRec.sender_id.trim();
-        }
-        smsCredits = Number(orgProfRec?.sms_credits ?? 0);
-
-        const smsCost = Math.max(1, calculateSmsCredits(resolved.text));
-        let debitReserved = false;
-        if (mappedAttendee.phone) {
-          const debit = await consumeSupabaseSmsCredits(client, orgId, smsCost);
-          debitReserved = debit.ok;
-          smsCredits = debit.remaining;
-          if (!debitReserved) {
-            smsSkippedReason = `No SMS credits remaining (${smsCredits} left, ${smsCost} needed). Purchase an SMS bundle for check-in SMS.`;
+        if (addedFirstTime) {
+          const orgId = String((evtRow as Record<string, unknown>).organizer_id || req.user!.id);
+          let replyTo: string | undefined;
+          let orgSenderId: string | undefined;
+          const { data: orgProf } = await adminOrClient
+            .from('profiles')
+            .select('reply_to_email, sender_id, sms_credits')
+            .eq('id', orgId)
+            .maybeSingle();
+          const orgProfRec = orgProf as Record<string, unknown> | null;
+          if (orgProfRec && typeof orgProfRec.reply_to_email === 'string') {
+            replyTo = orgProfRec.reply_to_email;
           }
-        }
+          if (orgProfRec && typeof orgProfRec.sender_id === 'string' && orgProfRec.sender_id.trim()) {
+            orgSenderId = orgProfRec.sender_id.trim();
+          }
+          smsCredits = Number(orgProfRec?.sms_credits ?? 0);
 
-        const [smsRes, emailRes] = await Promise.all([
-          debitReserved && mappedAttendee.phone
-            ? dispatchOptionalArkeselSms(
-                normalizePhoneE164(mappedAttendee.phone),
-                evtMapped.title,
-                mappedAttendee.ticketCode,
-                evtMapped.senderId || orgSenderId,
-                resolved.text
-              )
-            : Promise.resolve('Pending' as const),
-          isResendConfigured() && mappedAttendee.email?.includes('@')
-            ? sendCheckInWelcomeEmail({
-                to: mappedAttendee.email.trim(),
-                attendeeName: mappedAttendee.name,
-                eventTitle: evtMapped.title,
-                eventDate: evtMapped.date,
-                eventVenue: evtMapped.venue,
-                eventCity: evtMapped.city,
-                ticketCode: mappedAttendee.ticketCode,
-                organizerName: evtMapped.organizer,
-                welcomeMessage: resolved.text,
-                cameraUrl: resolved.cameraUrl,
-                replyTo,
-              })
-            : Promise.resolve({ ok: false, skipped: true }),
-        ]);
+          const smsCost = Math.max(1, calculateSmsCredits(resolved.text));
+          let debitReserved = false;
+          if (mappedAttendee.phone) {
+            const debit = await consumeSupabaseSmsCredits(client, orgId, smsCost);
+            debitReserved = debit.ok;
+            smsCredits = debit.remaining;
+            if (!debitReserved) {
+              smsSkippedReason = `No SMS credits remaining (${smsCredits} left, ${smsCost} needed). Purchase an SMS bundle for check-in SMS.`;
+            }
+          }
 
-        const hasLiveArkesel = Boolean((process.env.ARKESEL_API_KEY || '').trim()) && platformRuntime.flags.smsMode !== 'sandbox';
-        if (debitReserved && smsRes === 'Pending' && hasLiveArkesel) {
-          smsCredits = await refundSupabaseSmsCredits(client, orgId, smsCost);
-        } else if (debitReserved && smsRes === 'Arkesel Sent') {
-          smsCreditsUsed = smsCost;
-          checkInSmsSent = true;
-          const prevDispatched = Number((evtRow as Record<string, unknown>).sms_dispatched ?? 0);
-          await adminOrClient
-            .from('events')
-            .update({ sms_dispatched: prevDispatched + 1 })
-            .eq('id', eventId);
+          const [smsRes, emailRes] = await Promise.all([
+            debitReserved && mappedAttendee.phone
+              ? dispatchOptionalArkeselSms(
+                  normalizePhoneE164(mappedAttendee.phone),
+                  evtMapped.title,
+                  mappedAttendee.ticketCode,
+                  evtMapped.senderId || orgSenderId,
+                  resolved.text
+                )
+              : Promise.resolve('Pending' as const),
+            isResendConfigured() && mappedAttendee.email?.includes('@')
+              ? sendCheckInWelcomeEmail({
+                  to: mappedAttendee.email.trim(),
+                  attendeeName: mappedAttendee.name,
+                  eventTitle: evtMapped.title,
+                  eventDate: evtMapped.date,
+                  eventVenue: evtMapped.venue,
+                  eventCity: evtMapped.city,
+                  ticketCode: mappedAttendee.ticketCode,
+                  organizerName: evtMapped.organizer,
+                  welcomeMessage: resolved.text,
+                  cameraUrl: resolved.cameraUrl,
+                  replyTo,
+                })
+              : Promise.resolve({ ok: false, skipped: true }),
+          ]);
+
+          const hasLiveArkesel = Boolean((process.env.ARKESEL_API_KEY || '').trim()) && platformRuntime.flags.smsMode !== 'sandbox';
+          if (debitReserved && smsRes === 'Pending' && hasLiveArkesel) {
+            smsCredits = await refundSupabaseSmsCredits(client, orgId, smsCost);
+          } else if (debitReserved && smsRes === 'Arkesel Sent') {
+            smsCreditsUsed = smsCost;
+            checkInSmsSent = true;
+            const prevDispatched = Number((evtRow as Record<string, unknown>).sms_dispatched ?? 0);
+            await adminOrClient
+              .from('events')
+              .update({ sms_dispatched: prevDispatched + 1 })
+              .eq('id', eventId);
+          }
+          checkInMessageSent = checkInSmsSent || Boolean(emailRes.ok);
         }
-        checkInMessageSent = checkInSmsSent || Boolean(emailRes.ok);
       }
 
       return res.json({
@@ -6333,6 +6488,14 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
   app.post('/api/studio/schedule', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const block = req.body as ScheduleBlock;
     try {
+      const { data: evtCheck } = await req
+        .supabase!.from('events')
+        .select('id, organizer_id')
+        .eq('id', block.eventId)
+        .maybeSingle();
+      if (!evtCheck || String((evtCheck as Record<string, unknown>).organizer_id) !== req.user!.id) {
+        return res.status(403).json({ error: 'Only the event organizer can add schedule blocks.' });
+      }
       const { data, error } = await req
         .supabase!.from('schedule_blocks')
         .insert({
@@ -6344,7 +6507,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           stage: block.stage,
           lead: block.lead,
           completed: Boolean(block.completed),
-          day: block.day,
+          day: normalizeScheduleDay(block.day, 'Sat'),
         })
         .select('*')
         .single();

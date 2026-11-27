@@ -25,12 +25,20 @@ import {
   ArtworkVariant,
   CustomFormField,
   DesignTheme,
+  EventCheckInPolicy,
   EventItem,
   EventValidationConfig,
   OrganizerProfile,
   ScheduleBlock,
 } from '../types/events';
 import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
+import {
+  formatEventDateSpan,
+  formatEventDurationBadge,
+  getEventDayCount,
+  getEventDayOptions,
+  sanitizeIsoDate,
+} from '../lib/eventDates';
 import {
   appendPoweredByLine,
   buildCameraLinkForOrigin,
@@ -96,7 +104,11 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const [addingTag, setAddingTag] = useState(false);
 
   const [venueFormat, setVenueFormat] = useState<'in-person' | 'virtual' | 'hybrid'>('in-person');
-  const [dateLabel, setDateLabel] = useState('');
+  const [startIsoDate, setStartIsoDate] = useState('2026-12-18');
+  const [isMultiDay, setIsMultiDay] = useState(false);
+  const [endIsoDate, setEndIsoDate] = useState('2026-12-20');
+  const [checkInPolicy, setCheckInPolicy] = useState<EventCheckInPolicy>('single-entry');
+  const [policyTouched, setPolicyTouched] = useState(false);
   const [timeLabel, setTimeLabel] = useState('09:00 AM - 05:00 PM');
   const [venue, setVenue] = useState('');
   const [city, setCity] = useState('');
@@ -131,8 +143,9 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
 
   // Step 2: Schedule blocks (organiser-defined run of show)
   const [draftBlocks, setDraftBlocks] = useState<
-    { id: string; time: string; title: string; lead: string; stage: string }[]
+    { id: string; day: ScheduleBlock['day']; time: string; title: string; lead: string; stage: string }[]
   >([]);
+  const [newBlockDay, setNewBlockDay] = useState<ScheduleBlock['day']>('Day 1');
   const [newBlockTime, setNewBlockTime] = useState('10:00 - 11:00');
   const [newBlockTitle, setNewBlockTitle] = useState('');
   const [newBlockLead, setNewBlockLead] = useState('');
@@ -224,6 +237,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
       ...prev,
       {
         id: `wiz-blk-${Date.now()}`,
+        day: newBlockDay,
         time: newBlockTime.trim() || '14:00 - 15:00',
         title: newBlockTitle.trim(),
         lead: newBlockLead.trim() || profile.name,
@@ -290,11 +304,12 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
         .filter(Boolean);
       const preset = getCategoryPreset(category || 'Events');
 
-      const rawDateLabel = dateLabel.trim() || 'Dec 18, 2026';
-      const parsedWizardDate = new Date(rawDateLabel);
-      const resolvedIsoDate = !Number.isNaN(parsedWizardDate.getTime())
-        ? parsedWizardDate.toISOString().slice(0, 10)
-        : new Date().toISOString().slice(0, 10);
+      const cleanStartIso = sanitizeIsoDate(startIsoDate) ?? '2026-12-18';
+      const cleanEndIso =
+        isMultiDay && sanitizeIsoDate(endIsoDate) && endIsoDate > cleanStartIso
+          ? endIsoDate
+          : undefined;
+      const formattedSpan = formatEventDateSpan(cleanStartIso, cleanEndIso);
 
       const createdEvent: EventItem = {
         id: eventId,
@@ -303,8 +318,10 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
         subtitle: overview.trim(),
         category: category || tags[0] || 'Events',
         status: publishStatus,
-        date: rawDateLabel,
-        isoDate: resolvedIsoDate,
+        date: formattedSpan,
+        isoDate: cleanStartIso,
+        ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
+        checkInPolicy,
         time: timeLabel.trim() || '09:00 GMT',
         venue: venueFormat === 'virtual' ? 'Livestream Stage' : venue.trim() || 'Main Auditorium',
         city: city.trim() || 'Accra',
@@ -340,6 +357,8 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
             profile.name || profile.studio || 'Organiser',
             venueFormat === 'virtual' ? 'Livestream Stage' : venue.trim() || 'Main Auditorium'
           ),
+          ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
+          checkInPolicy,
           brandColor,
           customFields,
         },
@@ -374,7 +393,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
         stage: blk.stage,
         lead: blk.lead,
         completed: false,
-        day: 'Sat',
+        day: blk.day,
       }));
 
       await onCreateEvent(createdEvent, createdBlocks);
@@ -388,6 +407,21 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     }
   };
 
+  const effectiveStartIso = sanitizeIsoDate(startIsoDate) ?? '2026-12-18';
+  const effectiveEndIso =
+    isMultiDay && sanitizeIsoDate(endIsoDate) && endIsoDate > effectiveStartIso
+      ? endIsoDate
+      : undefined;
+  const formattedDatePreview = formatEventDateSpan(effectiveStartIso, effectiveEndIso);
+  const durationBadgePreview = formatEventDurationBadge({
+    isoDate: effectiveStartIso,
+    endIsoDate: effectiveEndIso,
+  });
+  const wizardDayOptions = getEventDayOptions({
+    isoDate: effectiveStartIso,
+    endIsoDate: effectiveEndIso,
+  });
+
   const previewEventDraft: EventItem = {
     id: 'preview-draft',
     slug: slug || 'new-event',
@@ -395,8 +429,10 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     subtitle: overview,
     category: category || 'Events',
     status: 'upcoming',
-    date: dateLabel,
-    isoDate: '2026-12-18',
+    date: formattedDatePreview,
+    isoDate: effectiveStartIso,
+    ...(effectiveEndIso ? { endIsoDate: effectiveEndIso } : {}),
+    checkInPolicy,
     time: timeLabel,
     venue: venue || 'Main Hall',
     city: city || 'Accra',
@@ -420,6 +456,8 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     },
     extraDataConfig: {
       enableGiftTable,
+      ...(effectiveEndIso ? { endIsoDate: effectiveEndIso } : {}),
+      checkInPolicy,
       brandColor,
       customFields,
     },
@@ -736,13 +774,22 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5">
-                      Event Date
+                      Start Date
                     </label>
                     <input
-                      type="text"
-                      value={dateLabel}
-                      onChange={(e) => setDateLabel(e.target.value)}
-                      className="w-full h-11 px-4 rounded-2xl bg-white text-xs sm:text-sm text-[#0B0B0B] shadow-sm focus:outline-none"
+                      type="date"
+                      value={startIsoDate}
+                      onChange={(e) => {
+                        const nextStart = e.target.value;
+                        setStartIsoDate(nextStart);
+                        if (isMultiDay && nextStart && (!endIsoDate || endIsoDate <= nextStart)) {
+                          const bumped = new Date(Date.parse(`${nextStart}T00:00:00Z`) + 86_400_000)
+                            .toISOString()
+                            .slice(0, 10);
+                          setEndIsoDate(bumped);
+                        }
+                      }}
+                      className="w-full h-11 px-4 rounded-2xl bg-white text-xs sm:text-sm text-[#0B0B0B] shadow-sm focus:outline-none tabular-nums"
                     />
                   </div>
                   <div>
@@ -755,6 +802,104 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                       onChange={(e) => setTimeLabel(e.target.value)}
                       className="w-full h-11 px-4 rounded-2xl bg-white text-xs sm:text-sm text-[#0B0B0B] shadow-sm focus:outline-none"
                     />
+                  </div>
+                </div>
+
+                {/* Multi-Day Event Span & Gate Check-In Policy */}
+                <div className="p-4 rounded-2xl bg-white border border-[#E5E5EA] space-y-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold text-[#0B0B0B]">
+                        Multi-Day Event Span
+                      </p>
+                      <p className="text-[11px] text-[#71717A]">
+                        Enable for conferences, revivals, festivals, or weekend weddings spanning multiple days.
+                      </p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={isMultiDay}
+                        onChange={(e) => {
+                          const next = e.target.checked;
+                          setIsMultiDay(next);
+                          if (next && (!endIsoDate || endIsoDate <= startIsoDate)) {
+                            const bumped = new Date(Date.parse(`${startIsoDate}T00:00:00Z`) + 86_400_000)
+                              .toISOString()
+                              .slice(0, 10);
+                            setEndIsoDate(bumped);
+                          }
+                          if (!policyTouched) {
+                            setCheckInPolicy(next ? 'daily-reentry' : 'single-entry');
+                          }
+                        }}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-[#E5E5EA] rounded-full peer peer-checked:bg-[#0B0B0B] after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full" />
+                    </label>
+                  </div>
+
+                  {isMultiDay && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                          End Date
+                        </label>
+                        <input
+                          type="date"
+                          min={startIsoDate}
+                          value={endIsoDate}
+                          onChange={(e) => setEndIsoDate(e.target.value)}
+                          className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B] tabular-nums focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex flex-col justify-center rounded-xl bg-[#F5F5F7] px-3.5 py-2">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-[#71717A]">
+                          Public Date Display
+                        </span>
+                        <span className="text-xs font-bold text-[#0B0B0B] mt-0.5 tabular-nums">
+                          {formattedDatePreview}
+                          {durationBadgePreview ? ` · ${durationBadgePreview}` : ''}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pt-2 border-t border-[#E5E5EA] space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-[#0B0B0B]">
+                        Gate QR Check-In Policy
+                      </span>
+                      <span className="text-[10px] text-[#71717A]">
+                        {checkInPolicy === 'daily-reentry'
+                          ? 'Same QR re-enters each calendar day (1 scan/day)'
+                          : 'QR admits guest once for the entire event'}
+                      </span>
+                    </div>
+                    <div className="p-1 bg-[#F5F5F7] rounded-xl grid grid-cols-2 gap-1">
+                      {(
+                        [
+                          { id: 'single-entry', label: 'One-Time Entry' },
+                          { id: 'daily-reentry', label: 'Daily Re-Entry (Multi-Day Pass)' },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => {
+                            setPolicyTouched(true);
+                            setCheckInPolicy(opt.id);
+                          }}
+                          className={`py-2 px-3 rounded-lg text-[11px] font-semibold transition-colors ${
+                            checkInPolicy === opt.id
+                              ? 'bg-white text-[#0B0B0B] shadow-sm'
+                              : 'text-[#71717A] hover:text-[#0B0B0B]'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
@@ -1100,6 +1245,18 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                   placeholder="Session Title (e.g. Fireside Chat)"
                   className="sm:col-span-2 h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none"
                 />
+                <select
+                  value={newBlockDay}
+                  onChange={(e) => setNewBlockDay(e.target.value as ScheduleBlock['day'])}
+                  aria-label="Program day"
+                  className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] focus:outline-none"
+                >
+                  {wizardDayOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
                 <input
                   type="text"
                   value={newBlockTime}
@@ -1123,7 +1280,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 />
                 <button
                   type="submit"
-                  className="h-10 px-5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
+                  className="sm:col-span-2 h-10 px-5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
                 >
                   + Add Program Block
                 </button>
@@ -1135,7 +1292,10 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                     key={blk.id}
                     className="p-4 rounded-2xl bg-white flex items-center justify-between gap-3"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="px-2.5 py-1 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold shrink-0">
+                        {blk.day}
+                      </span>
                       <span className="px-3 py-1 rounded-full bg-[#F5F5F7] font-mono text-xs font-semibold text-[#0B0B0B] tabular-nums shrink-0">
                         {blk.time}
                       </span>
@@ -1450,9 +1610,13 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 </div>
                 <div className="p-4 rounded-2xl bg-white space-y-1">
                   <span className="text-[11px] text-[#71717A]">Schedule &amp; Venue</span>
-                  <p className="text-sm font-bold text-[#0B0B0B]">{dateLabel}</p>
+                  <p className="text-sm font-bold text-[#0B0B0B]">
+                    {formattedDatePreview}
+                    {effectiveEndIso ? ` (${getEventDayCount({ isoDate: effectiveStartIso, endIsoDate: effectiveEndIso })} Days)` : ''}
+                  </p>
                   <p className="text-xs text-[#71717A]">
-                    {venue} · {city}
+                    {venue || 'Main Auditorium'} · {city || 'Accra'} ·{' '}
+                    {checkInPolicy === 'daily-reentry' ? 'Daily Re-Entry Pass' : 'One-Time Entry'}
                   </p>
                 </div>
                 <div className="p-4 rounded-2xl bg-white space-y-1">

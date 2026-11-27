@@ -8,6 +8,12 @@ import {
   SystemAlert,
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
+import {
+  getAttendeeCheckedInDaysCount,
+  getEventCheckInPolicy,
+  getTodayIsoDate,
+  isAttendeeCheckedInForDate,
+} from '../lib/eventDates';
 import { appendPoweredByLine, calculateSmsCredits, POWERED_BY_LINE } from '../lib/eventMessages';
 import { getPlanEntitlements } from '../lib/subscriptionPlans';
 import { CheckInFlyerSidePanel } from './CheckInFlyerSidePanel';
@@ -21,7 +27,8 @@ interface AttendeesScreenProps {
   profile: OrganizerProfile;
   initialEventFilter?: string;
   onToggleCheckIn: (
-    attendeeId: string
+    attendeeId: string,
+    options?: { mode?: 'toggle' | 'checkin' | 'undo'; dateIso?: string }
   ) =>
     | Promise<{
         checkInMessageSent?: boolean;
@@ -177,7 +184,10 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
     });
   }, [attendees, eventFilter, tierFilter, searchQuery]);
 
-  const checkedCount = filtered.filter((a) => a.checkedIn).length;
+  const todayIso = getTodayIsoDate();
+  const checkedCount = filtered.filter((a) =>
+    isAttendeeCheckedInForDate(a, eventMap.get(a.eventId), todayIso)
+  ).length;
   const checkInPct = filtered.length > 0 ? Math.round((checkedCount / filtered.length) * 100) : 0;
 
   const effectiveBroadcastChannel = entitlements.allowSmsBroadcast ? broadcastChannel : 'email';
@@ -266,6 +276,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
           ticketCode: code,
           checkedIn: walkInCheckedIn,
           checkedInAt: walkInCheckedIn ? nowTime : undefined,
+          checkedInDates: walkInCheckedIn ? [todayIso] : undefined,
           paymentStatus: 'paid',
           smsStatus: 'Arkesel Sent',
           validationGroup: walkInValidationGroup || walkInCircles[0],
@@ -300,6 +311,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
       'PassCode',
       'CustomData',
       'CheckedIn',
+      'CheckedInDates',
     ];
     const rows = filtered.map((a) => [
       a.name,
@@ -316,6 +328,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
             .join('; ')
         : '',
       a.checkedIn ? `Yes (${a.checkedInAt ?? 'Today'})` : 'No',
+      (a.checkedInDates ?? []).join('; '),
     ]);
     const csv = [headers.join(','), ...rows.map((r) => r.map((c) => `"${c}"`).join(','))].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -538,6 +551,10 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
               ) : (
                 filtered.map((att) => {
                   const evt = eventMap.get(att.eventId);
+                  const isDailyPolicy = getEventCheckInPolicy(evt) === 'daily-reentry';
+                  const checkedInToday = isAttendeeCheckedInForDate(att, evt, todayIso);
+                  const daysCount = getAttendeeCheckedInDaysCount(att);
+                  const activeChecked = isDailyPolicy ? checkedInToday : att.checkedIn;
                   return (
                     <tr
                       key={att.id}
@@ -552,11 +569,18 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                         <p className="text-[11px] font-mono text-[#0B0B0B] mt-0.5 tabular-nums">
                           {att.phone}
                         </p>
-                        {(att.validationGroup || (att.customResponses && Object.keys(att.customResponses).length > 0)) && (
+                        {(att.validationGroup || (isDailyPolicy && daysCount > 0) || (att.customResponses && Object.keys(att.customResponses).length > 0)) && (
                           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                             {att.validationGroup && (
                               <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[10px] font-semibold text-[#0B0B0B]">
                                 {att.validationGroup}
+                              </span>
+                            )}
+                            {isDailyPolicy && daysCount > 0 && (
+                              <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[10px] font-semibold text-[#0B0B0B] tabular-nums">
+                                {checkedInToday
+                                  ? `Today · ${daysCount} ${daysCount === 1 ? 'day' : 'days'}`
+                                  : `${daysCount} ${daysCount === 1 ? 'day' : 'days'} prior · Ready today`}
                               </span>
                             )}
                             {att.customResponses &&
@@ -629,7 +653,14 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                             type="button"
                             onClick={async () => {
                               try {
-                                const res = await Promise.resolve(onToggleCheckIn(att.id));
+                                const res = await Promise.resolve(
+                                  isDailyPolicy
+                                    ? onToggleCheckIn(att.id, {
+                                        mode: checkedInToday ? 'undo' : 'checkin',
+                                        dateIso: todayIso,
+                                      })
+                                    : onToggleCheckIn(att.id)
+                                );
                                 if (res && res.checkInSmsSent) {
                                   showToast(
                                     `Checked in ${att.name} — SMS + Disposable Camera link sent!`
@@ -650,16 +681,20 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                               }
                             }}
                             className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                              att.checkedIn
+                              activeChecked
                                 ? 'bg-[#F5F5F7] text-[#0B0B0B] border border-[#E5E5EA] hover:border-[#0B0B0B]'
                                 : 'bg-[#0B0B0B] text-white hover:bg-zinc-800'
                             }`}
                           >
-                            {att.checkedIn ? (
+                            {activeChecked ? (
                               <>
                                 <Check className="w-3.5 h-3.5" />
-                                Checked In ({att.checkedInAt})
+                                {isDailyPolicy
+                                  ? `Checked Today (${att.checkedInAt ?? 'Today'})`
+                                  : `Checked In (${att.checkedInAt})`}
                               </>
+                            ) : isDailyPolicy && daysCount > 0 ? (
+                              'Check In Today'
                             ) : (
                               'Check In'
                             )}

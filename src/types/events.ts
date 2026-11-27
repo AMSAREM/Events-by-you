@@ -69,7 +69,21 @@ export interface ScheduleBlock {
   stage: string;
   lead: string;
   completed: boolean;
-  day: 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat';
+  day:
+    | 'Mon'
+    | 'Tue'
+    | 'Wed'
+    | 'Thu'
+    | 'Fri'
+    | 'Sat'
+    | 'Sun'
+    | 'Day 1'
+    | 'Day 2'
+    | 'Day 3'
+    | 'Day 4'
+    | 'Day 5'
+    | 'Day 6'
+    | 'Day 7';
 }
 
 export type DesignTheme =
@@ -230,6 +244,8 @@ export interface EventPlanningConfig {
   updatedAt?: string;
 }
 
+export type EventCheckInPolicy = 'single-entry' | 'daily-reentry';
+
 export interface EventExtraDataConfig {
   enableGiftTable: boolean;
   giftTitle?: string;
@@ -243,6 +259,8 @@ export interface EventExtraDataConfig {
   polls?: EventPoll[];
   planningConfig?: EventPlanningConfig;
   brandColor?: string;
+  endIsoDate?: string;
+  checkInPolicy?: EventCheckInPolicy;
   customFields: CustomFormField[];
 }
 
@@ -272,6 +290,8 @@ export interface EventItem {
   status: EventStatus;
   date: string;
   isoDate: string;
+  endIsoDate?: string;
+  checkInPolicy?: EventCheckInPolicy;
   time: string;
   venue: string;
   city: string;
@@ -308,6 +328,7 @@ export interface Attendee {
   tier: AttendeeTier;
   checkedIn: boolean;
   checkedInAt?: string;
+  checkedInDates?: string[];
   ticketCode: string;
   smsStatus: 'Arkesel Sent' | 'Resend Delivered' | 'Pending';
   paymentStatus: 'paid' | 'failed';

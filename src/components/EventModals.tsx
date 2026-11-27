@@ -20,6 +20,7 @@ import {
 import {
   ArtworkVariant,
   DesignTheme,
+  EventCheckInPolicy,
   EventItem,
   EventStatus,
   EventValidationConfig,
@@ -27,6 +28,13 @@ import {
   ScheduleBlock,
 } from '../types/events';
 import { getCategoryPreset } from '../data/initialData';
+import {
+  formatEventDateSpan,
+  formatEventDurationBadge,
+  getEventCheckInPolicy,
+  isMultiDayEvent,
+  sanitizeIsoDate,
+} from '../lib/eventDates';
 import { STUDIO_FLYER_PRESETS, compressFlyerImageFile } from '../lib/flyerUpload';
 import { appendPoweredByLine } from '../lib/eventMessages';
 import { isPollsEnabledForEvent } from '../lib/polls';
@@ -81,6 +89,10 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const [subtitle, setSubtitle] = useState('');
   const [category, setCategory] = useState('Events');
   const [date, setDate] = useState('2026-12-18');
+  const [isMultiDay, setIsMultiDay] = useState(false);
+  const [endDate, setEndDate] = useState('2026-12-20');
+  const [checkInPolicy, setCheckInPolicy] = useState<EventCheckInPolicy>('single-entry');
+  const [policyTouched, setPolicyTouched] = useState(false);
   const [time, setTime] = useState('09:00 GMT');
   const [venue, setVenue] = useState('');
   const [city, setCity] = useState('Accra');
@@ -98,16 +110,22 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const [modalError, setModalError] = useState<string | null>(null);
   const createFlyerInputRef = useRef<HTMLInputElement | null>(null);
 
+  const cleanStartIso = sanitizeIsoDate(date) ?? '2026-12-18';
+  const cleanEndIso =
+    isMultiDay && sanitizeIsoDate(endDate) && endDate > cleanStartIso ? endDate : undefined;
+  const formattedSpanPreview = formatEventDateSpan(cleanStartIso, cleanEndIso);
+  const durationBadgePreview = formatEventDurationBadge({
+    isoDate: cleanStartIso,
+    endIsoDate: cleanEndIso,
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !venue.trim() || submitting) return;
     setModalError(null);
     setSubmitting(true);
 
-    const parsedDate = new Date(date + 'T00:00:00');
-    const formattedDate = isNaN(parsedDate.getTime())
-      ? date
-      : parsedDate.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+    const formattedDate = formatEventDateSpan(cleanStartIso, cleanEndIso);
 
     const slug =
       title
@@ -133,7 +151,9 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       category,
       status: effectiveStatus,
       date: formattedDate,
-      isoDate: date,
+      isoDate: cleanStartIso,
+      ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
+      checkInPolicy,
       time,
       venue: venue.trim(),
       city: city.trim() || 'Accra',
@@ -151,6 +171,8 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
       validationConfig: preset.validationConfig,
       extraDataConfig: {
         ...preset.extraDataConfig,
+        ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
+        checkInPolicy,
         brandColor,
       },
       qrPassPublished: status === 'draft' ? false : publishQrPass,
@@ -255,11 +277,20 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="col-span-2 sm:col-span-1">
-              <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5">Date</label>
+              <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5">Start Date</label>
               <input
                 type="date"
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setDate(next);
+                  if (isMultiDay && next && (!endDate || endDate <= next)) {
+                    const bumped = new Date(Date.parse(`${next}T00:00:00Z`) + 86_400_000)
+                      .toISOString()
+                      .slice(0, 10);
+                    setEndDate(bumped);
+                  }
+                }}
                 className="w-full h-11 px-3 rounded-2xl bg-[#F5F5F7] text-xs text-[#0B0B0B] border border-transparent focus:bg-white focus:border-[#0B0B0B] focus:outline-none tabular-nums"
               />
             </div>
@@ -301,6 +332,77 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
                 onChange={(e) => setTicketPrice(Number(e.target.value))}
                 className="w-full h-11 px-3 rounded-2xl bg-[#F5F5F7] text-xs text-[#0B0B0B] border border-transparent focus:bg-white focus:border-[#0B0B0B] focus:outline-none tabular-nums"
               />
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-[#F5F5F7] space-y-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-[#0B0B0B]">Multi-day event</p>
+                <p className="text-[11px] text-[#71717A]">
+                  {formattedSpanPreview}
+                  {durationBadgePreview ? ` · ${durationBadgePreview}` : ''}
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={isMultiDay}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setIsMultiDay(next);
+                    if (next && (!endDate || endDate <= date)) {
+                      const bumped = new Date(Date.parse(`${date}T00:00:00Z`) + 86_400_000)
+                        .toISOString()
+                        .slice(0, 10);
+                      setEndDate(bumped);
+                    }
+                    if (!policyTouched) {
+                      setCheckInPolicy(next ? 'daily-reentry' : 'single-entry');
+                    }
+                  }}
+                  className="sr-only peer"
+                />
+                <div className="w-10 h-5 bg-[#E5E5EA] rounded-full peer peer-checked:bg-[#0B0B0B] after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-5" />
+              </label>
+            </div>
+            {isMultiDay && (
+              <div>
+                <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                  End Date
+                </label>
+                <input
+                  type="date"
+                  min={date}
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="w-full h-10 px-3 rounded-xl bg-white text-xs text-[#0B0B0B] border border-[#E5E5EA] tabular-nums focus:outline-none"
+                />
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-1 p-1 bg-white rounded-xl border border-[#E5E5EA]">
+              {(
+                [
+                  { id: 'single-entry', label: 'One-Time Entry' },
+                  { id: 'daily-reentry', label: 'Daily Re-Entry Pass' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => {
+                    setPolicyTouched(true);
+                    setCheckInPolicy(opt.id);
+                  }}
+                  className={`py-1.5 rounded-lg text-[11px] font-semibold transition-colors ${
+                    checkInPolicy === opt.id
+                      ? 'bg-[#0B0B0B] text-white'
+                      : 'text-[#71717A] hover:text-[#0B0B0B]'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -524,6 +626,15 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     otherActiveCount >= entitlements.maxActiveEvents;
 
   const [capacityDraft, setCapacityDraft] = useState(event.capacity);
+  const [startIsoDraft, setStartIsoDraft] = useState(sanitizeIsoDate(event.isoDate) ?? '2026-12-18');
+  const [multiDayDraft, setMultiDayDraft] = useState(() => isMultiDayEvent(event));
+  const [endIsoDraft, setEndIsoDraft] = useState(() => {
+    const start = sanitizeIsoDate(event.isoDate) ?? '2026-12-18';
+    const existingEnd = sanitizeIsoDate(event.endIsoDate);
+    if (existingEnd && existingEnd > start) return existingEnd;
+    return new Date(Date.parse(`${start}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+  });
+  const [policyDraft, setPolicyDraft] = useState<EventCheckInPolicy>(() => getEventCheckInPolicy(event));
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
@@ -558,6 +669,16 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     setDesignDraft(event.designTheme ?? preset.designTheme);
     setBrandColorDraft(event.brandColor ?? event.extraDataConfig?.brandColor);
     setCapacityDraft(event.capacity);
+    const nextStart = sanitizeIsoDate(event.isoDate) ?? '2026-12-18';
+    setStartIsoDraft(nextStart);
+    setMultiDayDraft(isMultiDayEvent(event));
+    const existingEnd = sanitizeIsoDate(event.endIsoDate);
+    setEndIsoDraft(
+      existingEnd && existingEnd > nextStart
+        ? existingEnd
+        : new Date(Date.parse(`${nextStart}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10)
+    );
+    setPolicyDraft(getEventCheckInPolicy(event));
     setPollsEnabledDraft(isPollsEnabledForEvent(event));
     const base = event.validationConfig ?? preset.validationConfig;
     setValidationDraft({
@@ -686,10 +807,20 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     const parsedOptions = validationDraft.options
       .map((s) => s.trim())
       .filter(Boolean);
+    const nextStart = sanitizeIsoDate(startIsoDraft) ?? sanitizeIsoDate(event.isoDate) ?? '2026-12-18';
+    const nextEnd =
+      multiDayDraft && sanitizeIsoDate(endIsoDraft) && endIsoDraft > nextStart
+        ? endIsoDraft
+        : undefined;
+    const nextDateSpan = formatEventDateSpan(nextStart, nextEnd, event.date);
     try {
       await Promise.resolve(
         onUpdateEvent({
           ...event,
+          isoDate: nextStart,
+          endIsoDate: nextEnd,
+          date: nextDateSpan,
+          checkInPolicy: policyDraft,
           designTheme: designDraft,
           brandColor: brandColorDraft,
           flyerUrl: flyerSrc,
@@ -705,6 +836,8 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
           },
           extraDataConfig: {
             ...(event.extraDataConfig ?? preset.extraDataConfig),
+            endIsoDate: nextEnd,
+            checkInPolicy: policyDraft,
             enablePolls: pollsEnabledDraft,
             momoNumber: momoDraft.trim() || undefined,
             brandColor: brandColorDraft,
@@ -717,6 +850,9 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
       // Error surfaced cleanly via top-level banner
     }
   };
+
+  const formattedEventDate = formatEventDateSpan(event.isoDate, event.endIsoDate, event.date);
+  const eventDurationBadge = formatEventDurationBadge(event);
 
   return (
     <div
@@ -748,12 +884,17 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
               </span>
             </button>
             <div>
-              <div className="flex items-center gap-2 text-xs text-[#71717A]">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-[#71717A]">
                 <span>{event.category}</span>
                 <span aria-hidden="true">·</span>
                 <span className="capitalize">{event.status}</span>
                 <span aria-hidden="true">·</span>
-                <span className="tabular-nums">{event.date}</span>
+                <span className="tabular-nums">{formattedEventDate}</span>
+                {eventDurationBadge && (
+                  <span className="px-2 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold">
+                    {eventDurationBadge}
+                  </span>
+                )}
               </div>
               <h2 id="event-detail-title" className="text-xl sm:text-2xl font-bold tracking-tight text-[#0B0B0B] mt-1">
                 {event.title}
@@ -1064,12 +1205,12 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
           </div>
         </div>
 
-        {/* Poster Theme, Validation Form Circles & Standalone Gift Table Editor */}
+        {/* Poster Theme, Dates, Check-In Policy & Validation Circles */}
         <div className="mt-4 p-4 rounded-2xl bg-[#F5F5F7] space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5">
               <ShieldCheck className="w-3.5 h-3.5" />
-              Poster Style, Validation Circles &amp; Gift Table
+              Dates, Gate Policy, Theme &amp; Validation Circles
             </span>
             <button
               type="button"
@@ -1078,6 +1219,84 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
             >
               Save Theme &amp; Config
             </button>
+          </div>
+          <div className="p-3 rounded-xl bg-white border border-[#E5E5EA] space-y-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider text-[#71717A] mb-1">
+                  Start Date
+                </label>
+                <input
+                  type="date"
+                  value={startIsoDraft}
+                  onChange={(e) => {
+                    const nextStart = e.target.value;
+                    setStartIsoDraft(nextStart);
+                    if (multiDayDraft && nextStart && (!endIsoDraft || endIsoDraft <= nextStart)) {
+                      const bumped = new Date(Date.parse(`${nextStart}T00:00:00Z`) + 86_400_000)
+                        .toISOString()
+                        .slice(0, 10);
+                      setEndIsoDraft(bumped);
+                    }
+                  }}
+                  className="w-full h-9 px-3 rounded-lg bg-[#F5F5F7] text-xs text-[#0B0B0B] tabular-nums"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-[#71717A]">
+                    Multi-Day End Date
+                  </label>
+                  <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#0B0B0B] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={multiDayDraft}
+                      onChange={(e) => {
+                        const next = e.target.checked;
+                        setMultiDayDraft(next);
+                        if (next && (!endIsoDraft || endIsoDraft <= startIsoDraft)) {
+                          const bumped = new Date(Date.parse(`${startIsoDraft}T00:00:00Z`) + 86_400_000)
+                            .toISOString()
+                            .slice(0, 10);
+                          setEndIsoDraft(bumped);
+                        }
+                      }}
+                      className="w-3.5 h-3.5 accent-[#0B0B0B]"
+                    />
+                    <span>Multi-Day</span>
+                  </label>
+                </div>
+                <input
+                  type="date"
+                  disabled={!multiDayDraft}
+                  min={startIsoDraft}
+                  value={multiDayDraft ? endIsoDraft : ''}
+                  onChange={(e) => setEndIsoDraft(e.target.value)}
+                  className="w-full h-9 px-3 rounded-lg bg-[#F5F5F7] text-xs text-[#0B0B0B] tabular-nums disabled:opacity-45"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-1 p-1 bg-[#F5F5F7] rounded-lg">
+              {(
+                [
+                  { id: 'single-entry', label: 'One-Time Entry' },
+                  { id: 'daily-reentry', label: 'Daily Re-Entry (Multi-Day)' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setPolicyDraft(opt.id)}
+                  className={`py-1.5 rounded-md text-[11px] font-semibold transition-colors ${
+                    policyDraft === opt.id
+                      ? 'bg-white text-[#0B0B0B] shadow-sm'
+                      : 'text-[#71717A] hover:text-[#0B0B0B]'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
           <ThemeColorPicker
             compact
@@ -1146,7 +1365,10 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
                   key={block.id}
                   className="px-4 py-3 rounded-2xl bg-[#F5F5F7] flex items-center justify-between gap-3"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="px-2 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold shrink-0">
+                      {block.day}
+                    </span>
                     <span className="font-mono text-xs font-medium text-[#0B0B0B] tabular-nums shrink-0">
                       {block.time}
                     </span>

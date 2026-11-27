@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Calendar, Check, Copy, ExternalLink, MapPin, QrCode, ShieldCheck, Gift } from 'lucide-react';
 import type { DesignTheme, EventItem } from '../types/events';
 import { getCategoryPreset } from '../data/initialData';
+import { formatEventDateSpan, formatEventDurationBadge } from '../lib/eventDates';
 import { buildEventInvitationUrl } from '../lib/qr';
 import { getContrastTextColor, hexWithAlpha, normalizeHexColor } from '../lib/themeColors';
 import { MonochromePoster } from './MonochromeArtwork';
@@ -80,6 +81,8 @@ export const EventFlyerCard: React.FC<EventFlyerCardProps> = ({
   const customBrand = normalizeHexColor(event.brandColor ?? event.extraDataConfig?.brandColor);
   const customBrandText = customBrand ? getContrastTextColor(customBrand) : undefined;
   const inviteUrl = buildEventInvitationUrl(event.slug || event.id);
+  const formattedEventDate = formatEventDateSpan(event.isoDate, event.endIsoDate, event.date);
+  const durationBadge = formatEventDurationBadge(event);
 
   useEffect(() => {
     setImgError(false);
@@ -156,6 +159,11 @@ export const EventFlyerCard: React.FC<EventFlyerCardProps> = ({
                 Gift Table
               </span>
             )}
+            {durationBadge && (
+              <span className="px-2.5 py-1 rounded-full bg-black/65 backdrop-blur-md text-white border border-white/20 text-[10px] font-semibold whitespace-nowrap">
+                {durationBadge}
+              </span>
+            )}
           </div>
 
           <span
@@ -165,7 +173,7 @@ export const EventFlyerCard: React.FC<EventFlyerCardProps> = ({
               ? 'LIVE GATE'
               : event.status === 'draft'
                 ? 'DRAFT'
-                : event.date}
+                : formattedEventDate}
           </span>
         </div>
 
@@ -184,7 +192,7 @@ export const EventFlyerCard: React.FC<EventFlyerCardProps> = ({
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-white/85">
               <span className="inline-flex items-center gap-1 font-mono tabular-nums">
                 <Calendar className="w-3 h-3 shrink-0" />
-                {event.date}
+                {formattedEventDate}
               </span>
               <span className="inline-flex items-center gap-1 truncate max-w-[200px]">
                 <MapPin className="w-3 h-3 shrink-0" />

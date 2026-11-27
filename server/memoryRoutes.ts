@@ -41,6 +41,12 @@ import {
   resolveEventMessage,
 } from '../src/lib/eventMessages.ts';
 import {
+  getEventCheckInPolicy,
+  getTodayIsoDate,
+  sanitizeCheckedInDates,
+  sanitizeIsoDate,
+} from '../src/lib/eventDates.ts';
+import {
   resolveAuthoritativeSmsBundle,
   validateReceiptReference,
 } from '../src/lib/smsBundles.ts';
@@ -1833,7 +1839,30 @@ export function createMemoryRouter() {
 
   router.patch('/studio/attendees/:id/checkin', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
-      const attendee = memoryStore.toggleCheckIn(req.user!.id, req.params.id);
+      const reqBody = (req.body || {}) as { mode?: 'toggle' | 'checkin' | 'undo'; dateIso?: string };
+      const mode = reqBody.mode === 'checkin' || reqBody.mode === 'undo' ? reqBody.mode : 'toggle';
+      const targetDateIso = sanitizeIsoDate(reqBody.dateIso) ?? getTodayIsoDate();
+
+      const beforeAtt = memoryStore
+        .loadWorkspace(req.user!.id)
+        .attendees.find((a) => a.id === req.params.id);
+      const wasCheckedIn = Boolean(beforeAtt?.checkedIn);
+      const beforeDates = sanitizeCheckedInDates(beforeAtt?.checkedInDates) ?? [];
+
+      const attendee = memoryStore.toggleCheckIn(req.user!.id, req.params.id, {
+        mode,
+        dateIso: targetDateIso,
+      });
+
+      const evt = memoryStore.getAnyEventBySlugOrId(attendee.eventId);
+      const policy = getEventCheckInPolicy(evt);
+      const afterDates = sanitizeCheckedInDates(attendee.checkedInDates) ?? [];
+      const addedFirstTime = !wasCheckedIn && Boolean(attendee.checkedIn);
+      const addedDay =
+        policy === 'daily-reentry'
+          ? !beforeDates.includes(targetDateIso) && afterDates.includes(targetDateIso)
+          : addedFirstTime;
+
       let checkInMessageSent = false;
       let checkInSmsSent = false;
       let cameraUrl: string | undefined;
@@ -1842,24 +1871,24 @@ export function createMemoryRouter() {
       let smsCreditsUsed = 0;
       let smsSkippedReason: string | undefined;
 
-      if (attendee.checkedIn) {
-        const evt = memoryStore.getAnyEventBySlugOrId(attendee.eventId);
-        if (evt) {
-          const orgDefaults = memoryStore.getEventOrganizerDefaults(evt.id);
-          const orgId = orgDefaults.organizerId || req.user!.id;
-          smsCredits = orgDefaults.organizerId ? orgDefaults.smsCredits : smsCredits;
-          const requestOrigin = (process.env.APP_URL || '').trim().replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
-          const resolved = resolveEventMessage({
-            type: 'checkin',
-            event: evt,
-            attendeeName: attendee.name,
-            ticketCode: attendee.ticketCode,
-            originOverride: requestOrigin,
-            includeGuestInCameraUrl: true,
-          });
-          cameraUrl = resolved.cameraUrl;
-          dispatchedMessage = resolved.text;
+      if (addedDay && evt) {
+        const orgDefaults = memoryStore.getEventOrganizerDefaults(evt.id);
+        const orgId = orgDefaults.organizerId || req.user!.id;
+        smsCredits = orgDefaults.organizerId ? orgDefaults.smsCredits : smsCredits;
+        const requestOrigin = (process.env.APP_URL || '').trim().replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
+        const resolved = resolveEventMessage({
+          type: 'checkin',
+          event: evt,
+          attendeeName: attendee.name,
+          ticketCode: attendee.ticketCode,
+          originOverride: requestOrigin,
+          includeGuestInCameraUrl: true,
+        });
+        cameraUrl = resolved.cameraUrl;
+        dispatchedMessage = resolved.text;
 
+        // Only debit & send check-in SMS/welcome email on first entry so Day 2+ scans never double-bill
+        if (addedFirstTime) {
           const smsCost = Math.max(1, calculateSmsCredits(resolved.text));
           const canSendSms = Boolean(attendee.phone && smsCredits >= smsCost);
           const [smsRes, emailRes] = await Promise.all([

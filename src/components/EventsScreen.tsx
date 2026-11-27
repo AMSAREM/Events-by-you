@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Check, Copy, ExternalLink, LayoutGrid, List, Plus, QrCode } from 'lucide-react';
 import { EventItem, EventStatus, OrganizerProfile, SystemAlert } from '../types/events';
 import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
+import { formatEventDateSpan, formatEventDurationBadge } from '../lib/eventDates';
 import { buildEventInvitationUrl } from '../lib/qr';
 import { EventFlyerCard } from './EventFlyerCard';
 import { MonochromePoster } from './MonochromeArtwork';
@@ -230,6 +231,8 @@ export const EventsScreen: React.FC<EventsScreenProps> = ({
             const isCeiling = pct >= profile.capacityAlertThreshold;
             const flyerSrc = evt.flyerUrl || getCategoryPreset(evt.category).flyerUrl;
             const inviteUrl = buildEventInvitationUrl(evt.slug || evt.id);
+            const formattedDate = formatEventDateSpan(evt.isoDate, evt.endIsoDate, evt.date);
+            const durationBadge = formatEventDurationBadge(evt);
             return (
               <div
                 key={evt.id}
@@ -246,10 +249,17 @@ export const EventsScreen: React.FC<EventsScreenProps> = ({
                     <MonochromePoster variant={evt.artwork} className="w-14 h-14 rounded-xl" />
                   )}
                   <div className="min-w-0">
-                    <h2 className="text-sm font-bold text-[#0B0B0B] truncate">{evt.title}</h2>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-sm font-bold text-[#0B0B0B] truncate">{evt.title}</h2>
+                      {durationBadge && (
+                        <span className="px-2 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold whitespace-nowrap">
+                          {durationBadge}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-[#71717A] mt-0.5 truncate">
                       <span className="capitalize text-[#0B0B0B] font-medium">{evt.status}</span> ·{' '}
-                      {evt.category} · {evt.date} · {evt.venue}, {evt.city}
+                      {evt.category} · {formattedDate} · {evt.venue}, {evt.city}
                     </p>
                   </div>
                 </div>

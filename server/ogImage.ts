@@ -7,6 +7,7 @@ import {
   isPublicIndexableEvent,
   NOINDEX_ROUTE_SEO,
 } from '../src/lib/seoConfig.ts';
+import { formatEventDateSpan, formatEventDurationBadge } from '../src/lib/eventDates.ts';
 
 export function escapeXml(str: string): string {
   return String(str)
@@ -224,7 +225,7 @@ export function buildEventOgSvg(event: EventItem, baseUrl: string): string {
   <line x1="84" y1="490" x2="1116" y2="490" stroke="${palette.border}" stroke-opacity="0.4" stroke-width="1" />
 
   <text x="84" y="524" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="600" letter-spacing="1.5" fill="${palette.textMuted}">DATE &amp; TIME</text>
-  <text x="84" y="550" font-family="'Plus Jakarta Sans', Arial, sans-serif" font-size="18" font-weight="700" fill="${palette.textPrimary}">${escapeXml(`${event.date} · ${event.time}`)}</text>
+  <text x="84" y="550" font-family="'Plus Jakarta Sans', Arial, sans-serif" font-size="18" font-weight="700" fill="${palette.textPrimary}">${escapeXml(`${formatEventDateSpan(event.isoDate, event.endIsoDate, event.date)} · ${event.time}`)}</text>
 
   <text x="470" y="524" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="600" letter-spacing="1.5" fill="${palette.textMuted}">VENUE</text>
   <text x="470" y="550" font-family="'Plus Jakarta Sans', Arial, sans-serif" font-size="18" font-weight="700" fill="${palette.textPrimary}">${escapeXml(`${event.venue}, ${event.city}`)}</text>
@@ -359,7 +360,7 @@ export function injectEventMetaTags(
       : '',
     `<dl style="display:grid;gap:10px;background:#F5F5F7;padding:16px 20px;border-radius:16px;margin:0 0 20px;">`,
     `<div><dt style="font-size:12px;color:#71717A;">Hosted By</dt><dd style="margin:2px 0 0;font-weight:600;">${escapeHtml(event.organizer || 'Events By You Organiser')}</dd></div>`,
-    `<div><dt style="font-size:12px;color:#71717A;">Date &amp; Time</dt><dd style="margin:2px 0 0;font-weight:600;">${escapeHtml([event.date, event.time].filter(Boolean).join(' · ') || 'Upcoming')}</dd></div>`,
+    `<div><dt style="font-size:12px;color:#71717A;">Date &amp; Time</dt><dd style="margin:2px 0 0;font-weight:600;">${escapeHtml([formatEventDateSpan(event.isoDate, event.endIsoDate, event.date), event.time, formatEventDurationBadge(event)].filter(Boolean).join(' · ') || 'Upcoming')}</dd></div>`,
     `<div><dt style="font-size:12px;color:#71717A;">Venue</dt><dd style="margin:2px 0 0;font-weight:600;">${escapeHtml(venueDisplay || 'TBA')}</dd></div>`,
     `<div><dt style="font-size:12px;color:#71717A;">Ticket Price</dt><dd style="margin:2px 0 0;font-weight:600;">${escapeHtml(priceGhs)}</dd></div>`,
     `</dl>`,
