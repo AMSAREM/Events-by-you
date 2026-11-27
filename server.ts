@@ -28,7 +28,9 @@ import {
   mapRollSettingsRow,
   mapScheduleRow,
   mapShotRow,
+  resolveProfilePlanAttendeeCapacity,
   resolveSupabaseUserContacts,
+  syncAuthAppMetadataPlanCapacity,
 } from './server/supabase.ts';
 import {
   buildGoogleAuthorizeUrl,
@@ -126,7 +128,11 @@ import {
 import {
   DEFAULT_SHARED_SENDER_ID,
   computePlanExpiresAtIso,
+  getEffectiveEventCapacity,
+  getPlanEntitlements,
+  isActiveEventStatus,
   resolveAuthoritativeSubscriptionQuote,
+  resolvePlanAttendeeCapacityValue,
 } from './src/lib/subscriptionPlans.ts';
 import {
   initializePaystackTransaction,
@@ -607,10 +613,16 @@ async function atomicActivateSupabaseSubscription(
         plan: fallbackItem.planName,
         plan_billing_cycle: fallbackItem.billingCycle,
         plan_expires_at: expiresIso,
+        plan_attendee_capacity: null,
         updated_at: nowIso,
       })
       .eq('id', fallbackItem.organizerId);
-    if (updErr && (updErr.message?.includes('plan_billing_cycle') || updErr.message?.includes('schema cache'))) {
+    if (
+      updErr &&
+      (updErr.message?.includes('plan_billing_cycle') ||
+        updErr.message?.includes('plan_attendee_capacity') ||
+        updErr.message?.includes('schema cache'))
+    ) {
       const retry = await adminClient
         .from('profiles')
         .update({ plan: fallbackItem.planName, updated_at: nowIso })
@@ -618,6 +630,8 @@ async function atomicActivateSupabaseSubscription(
       updErr = retry.error;
     }
     if (updErr) throw new Error(updErr.message);
+    platformRuntime.planAttendeeCapacityOverrides.set(fallbackItem.organizerId, null);
+    await syncAuthAppMetadataPlanCapacity(adminClient, fallbackItem.organizerId, null);
 
     const activated: SubscriptionPayment = {
       ...fallbackItem,
@@ -643,9 +657,17 @@ async function atomicActivateSupabaseSubscription(
       payment?: Record<string, unknown>;
     };
     if (payload.payment) {
+      const mappedPay = mapSubscriptionPaymentRow(payload.payment);
+      platformRuntime.planAttendeeCapacityOverrides.set(mappedPay.organizerId, null);
+      await adminClient
+        .from('profiles')
+        .update({ plan_attendee_capacity: null })
+        .eq('id', mappedPay.organizerId)
+        .then(() => undefined, () => undefined);
+      await syncAuthAppMetadataPlanCapacity(adminClient, mappedPay.organizerId, null);
       return {
         alreadyActivated: Boolean(payload.alreadyActivated),
-        payment: mapSubscriptionPaymentRow(payload.payment),
+        payment: mappedPay,
       };
     }
   }
@@ -691,10 +713,16 @@ async function atomicActivateSupabaseSubscription(
       plan: existing.planName,
       plan_billing_cycle: existing.billingCycle,
       plan_expires_at: expiresIso,
+      plan_attendee_capacity: null,
       updated_at: nowIso,
     })
     .eq('id', existing.organizerId);
-  if (profUpdErr && (profUpdErr.message?.includes('plan_billing_cycle') || profUpdErr.message?.includes('schema cache'))) {
+  if (
+    profUpdErr &&
+    (profUpdErr.message?.includes('plan_billing_cycle') ||
+      profUpdErr.message?.includes('plan_attendee_capacity') ||
+      profUpdErr.message?.includes('schema cache'))
+  ) {
     const retry = await adminClient
       .from('profiles')
       .update({ plan: existing.planName, updated_at: nowIso })
@@ -702,10 +730,49 @@ async function atomicActivateSupabaseSubscription(
     profUpdErr = retry.error;
   }
   if (profUpdErr) throw new Error(profUpdErr.message);
+  platformRuntime.planAttendeeCapacityOverrides.set(existing.organizerId, null);
+  await syncAuthAppMetadataPlanCapacity(adminClient, existing.organizerId, null);
 
   return {
     alreadyActivated: false,
     payment: mapSubscriptionPaymentRow(claimed as Record<string, unknown>),
+  };
+}
+
+async function resolveOwnerEntitlementProfile(
+  client: SupabaseClient,
+  organizerId: string,
+  userHint?: User
+): Promise<Pick<OrganizerProfile, 'plan' | 'planExpiresAt' | 'planAttendeeCapacity'>> {
+  const { data: prof } = await client
+    .from('profiles')
+    .select('*')
+    .eq('id', organizerId)
+    .maybeSingle();
+  const rec = (prof ?? {}) as Record<string, unknown>;
+  let fallbackCap = platformRuntime.planAttendeeCapacityOverrides.get(organizerId);
+  if (fallbackCap === undefined && userHint?.app_metadata?.plan_attendee_capacity !== undefined) {
+    fallbackCap = resolvePlanAttendeeCapacityValue(userHint.app_metadata.plan_attendee_capacity);
+  }
+  if (fallbackCap === undefined) {
+    const svc = createServiceSupabaseClient();
+    if (svc) {
+      try {
+        const { data: uRes } = await svc.auth.admin.getUserById(organizerId);
+        const metaCap = resolvePlanAttendeeCapacityValue(
+          uRes?.user?.app_metadata?.plan_attendee_capacity
+        );
+        if (metaCap !== undefined) fallbackCap = metaCap;
+      } catch {
+        // Non-fatal fallback
+      }
+    }
+  }
+  const planAttendeeCapacity = resolveProfilePlanAttendeeCapacity(rec, fallbackCap);
+  return {
+    plan: (rec.plan as OrganizerProfile['plan']) || 'Starter',
+    planExpiresAt: rec.plan_expires_at != null ? String(rec.plan_expires_at) : undefined,
+    ...(planAttendeeCapacity !== undefined ? { planAttendeeCapacity } : {}),
   };
 }
 
@@ -1046,6 +1113,10 @@ async function syncEventPlanningRow(
 
 async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
   const profile = await ensureProfileRow(client, user);
+  const runtimeCap = platformRuntime.planAttendeeCapacityOverrides.get(user.id);
+  if (profile.planAttendeeCapacity === undefined && runtimeCap !== undefined && runtimeCap !== null) {
+    profile.planAttendeeCapacity = runtimeCap;
+  }
 
   const { data: eventRows, error: eventsErr } = await client
     .from('events')
@@ -3021,19 +3092,40 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       try {
         const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
 
-        // Enforce invite code if configured on event
+        // Enforce invite code & organizer plan capacity if configured on event
         const { data: evtMeta } = await supabase
           .from('events')
-          .select('validation_config')
+          .select('id, title, status, organizer_id, capacity, registered, ticket_price, qr_pass_published, validation_config')
           .eq('id', eventId)
           .maybeSingle();
-        const valCfg = (evtMeta as Record<string, unknown> | null)?.validation_config as
-          | EventItem['validationConfig']
-          | undefined;
+        const evtMetaRec = evtMeta as Record<string, unknown> | null;
+        if (!evtMetaRec || !['live', 'upcoming'].includes(String(evtMetaRec.status || ''))) {
+          return res.status(404).json({ error: 'Event not found or not open for registration.' });
+        }
+        if (evtMetaRec.qr_pass_published === false) {
+          return res.status(403).json({
+            error: 'Check-in QR passes have not been published by the event creator yet.',
+          });
+        }
+        const valCfg = evtMetaRec.validation_config as EventItem['validationConfig'] | undefined;
         if (valCfg?.requireInviteCode && valCfg.inviteCode?.trim()) {
           if ((inviteCodeUsed || '').trim().toLowerCase() !== valCfg.inviteCode.trim().toLowerCase()) {
             return res.status(403).json({ error: 'Invalid invitation passcode for this event.' });
           }
+        }
+
+        const evtOrganizerId = evtMetaRec.organizer_id ? String(evtMetaRec.organizer_id) : '';
+        const ownerEntProfile = evtOrganizerId
+          ? await resolveOwnerEntitlementProfile(supabase, evtOrganizerId)
+          : { plan: 'Starter' as const };
+        const effectiveCap = getEffectiveEventCapacity(
+          Number(evtMetaRec.capacity ?? 50),
+          ownerEntProfile
+        );
+        if (Number(evtMetaRec.registered ?? 0) >= effectiveCap) {
+          return res.status(409).json({
+            error: `${String(evtMetaRec.title || 'This event')} has reached its attendee limit (${effectiveCap.toLocaleString()} seats).`,
+          });
         }
 
         let normalizedValidationGroup: string | null = null;
@@ -3079,6 +3171,71 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           rpcErr = fallbackRpc.error;
         }
 
+        // If remote SQL RPC still enforces legacy 50-seat limit despite creator capacity boost, complete registration safely in TypeScript
+        if (
+          rpcErr &&
+          rpcErr.message.includes('CAPACITY_REACHED:') &&
+          ownerEntProfile.planAttendeeCapacity !== undefined &&
+          Number(evtMetaRec.registered ?? 0) < effectiveCap
+        ) {
+          const { data: dupCheck } = await supabase
+            .from('attendees')
+            .select('id')
+            .eq('event_id', eventId)
+            .eq('phone', normalizedPhone)
+            .maybeSingle();
+          if (dupCheck) {
+            platformRuntime.recordDuplicateBlock(eventId);
+            return res.status(409).json({
+              error: `Duplicate shield: ${normalizedPhone} already holds a pass for ${String(evtMetaRec.title || 'this event')}`,
+            });
+          }
+
+          const { data: directAtt, error: directAttErr } = await supabase
+            .from('attendees')
+            .insert({
+              id: attendeeId,
+              event_id: eventId,
+              name: name.trim(),
+              email: cleanEmail,
+              phone: normalizedPhone,
+              organization: organization?.trim() || 'Fast Pass Attendee',
+              tier: tier || 'General',
+              checked_in: false,
+              ticket_code: finalCode,
+              sms_status: 'Arkesel Sent',
+              payment_status: 'paid',
+              validation_group: normalizedValidationGroup,
+              invite_code_used: inviteCodeUsed ?? null,
+              gift_entry: giftEntry ?? null,
+              custom_responses: customResponses ?? null,
+            })
+            .select('*')
+            .single();
+
+          if (!directAttErr && directAtt) {
+            const nextReg = Number(evtMetaRec.registered ?? 0) + 1;
+            const nextRev = Number(evtMetaRec.revenue ?? 0) + Number(evtMetaRec.ticket_price ?? 0);
+            const { data: updatedEvt } = await supabase
+              .from('events')
+              .update({
+                registered: nextReg,
+                sms_dispatched: Number(evtMetaRec.sms_dispatched ?? 0) + 1,
+                revenue: nextRev,
+              })
+              .eq('id', eventId)
+              .select('*')
+              .single();
+            rpcData = {
+              attendee: directAtt,
+              event: updatedEvt ?? { ...evtMetaRec, registered: nextReg },
+            };
+            rpcErr = null;
+          } else if (directAttErr) {
+            rpcErr = directAttErr;
+          }
+        }
+
         if (rpcErr) {
           if (rpcErr.message.includes('QR_PASS_NOT_PUBLISHED:')) {
             return res.status(403).json({
@@ -3089,6 +3246,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
             platformRuntime.recordDuplicateBlock(eventId);
             return res.status(409).json({
               error: `Duplicate shield: ${rpcErr.message.split('DUPLICATE_PHONE:')[1]}`,
+            });
+          }
+          if (rpcErr.message.includes('CAPACITY_REACHED:')) {
+            return res.status(409).json({
+              error: rpcErr.message.split('CAPACITY_REACHED:')[1],
             });
           }
           platformRuntime.recordError('public/register', rpcErr.message);
@@ -3822,7 +3984,14 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         }
       }
 
-      const mapped = mapProfileRow(data as Record<string, unknown>, req.user!.email ?? '');
+      const runtimeProfileCap = platformRuntime.planAttendeeCapacityOverrides.get(req.user!.id);
+      const mapped = mapProfileRow(
+        data as Record<string, unknown>,
+        req.user!.email ?? '',
+        runtimeProfileCap !== undefined
+          ? runtimeProfileCap
+          : req.user?.app_metadata?.plan_attendee_capacity
+      );
       if (nextPhoneNormalized === null) {
         mapped.phone = undefined;
         mapped.phoneVerified = false;
@@ -4213,7 +4382,12 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           .select('*')
           .eq('id', purchase.organizerId)
           .single();
-        const mappedProfile = mapProfileRow(prof as Record<string, unknown>, req.user!.email || '');
+        const runtimeCap = platformRuntime.planAttendeeCapacityOverrides.get(purchase.organizerId);
+        const mappedProfile = mapProfileRow(
+          prof as Record<string, unknown>,
+          req.user!.email || '',
+          runtimeCap !== undefined ? runtimeCap : req.user?.app_metadata?.plan_attendee_capacity
+        );
         const senderInfo = platformRuntime.getEffectiveArkeselSenderId(mappedProfile.senderId);
         const bal = await fetchArkeselGatewayBalance();
         return res.json({
@@ -4289,9 +4463,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .select('*')
         .eq('id', purchase.organizerId)
         .single();
+      const runtimeCap = platformRuntime.planAttendeeCapacityOverrides.get(purchase.organizerId);
       const mappedProfile = mapProfileRow(
         updatedProf as Record<string, unknown>,
-        req.user!.email || ''
+        req.user!.email || '',
+        runtimeCap !== undefined ? runtimeCap : req.user?.app_metadata?.plan_attendee_capacity
       );
       const senderInfo = platformRuntime.getEffectiveArkeselSenderId(mappedProfile.senderId);
       const bal = await fetchArkeselGatewayBalance();
@@ -4450,9 +4626,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .select('*')
         .eq('id', req.user!.id)
         .single();
+      const runtimeCap = platformRuntime.planAttendeeCapacityOverrides.get(req.user!.id);
       const mappedProfile = mapProfileRow(
         (latestProf ?? prof) as Record<string, unknown>,
-        req.user!.email || ''
+        req.user!.email || '',
+        runtimeCap !== undefined ? runtimeCap : req.user?.app_metadata?.plan_attendee_capacity
       );
       mappedProfile.smsCredits = latestCredits;
 
@@ -4736,10 +4914,15 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
             req.user!.email ||
             ''
         );
+        const runtimeCap = platformRuntime.planAttendeeCapacityOverrides.get(existing.organizerId);
         return res.json({
           ok: true,
           alreadyActivated: true,
-          profile: mapProfileRow(prof as Record<string, unknown>, profEmail),
+          profile: mapProfileRow(
+            prof as Record<string, unknown>,
+            profEmail,
+            runtimeCap !== undefined ? runtimeCap : req.user?.app_metadata?.plan_attendee_capacity
+          ),
           payment: existing,
           message: `Subscription ${reference} is already active on ${existing.planName}.`,
         });
@@ -4937,9 +5120,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .select('*')
         .eq('id', req.user!.id)
         .single();
+      const runtimeCap = platformRuntime.planAttendeeCapacityOverrides.get(req.user!.id);
       const mappedProfile = mapProfileRow(
         (latestProf ?? prof) as Record<string, unknown>,
-        req.user!.email || ''
+        req.user!.email || '',
+        runtimeCap !== undefined ? runtimeCap : req.user?.app_metadata?.plan_attendee_capacity
       );
       const pendingVerification = !isSandbox;
 
@@ -4969,12 +5154,19 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           plan: 'Starter',
           plan_billing_cycle: 'monthly',
           plan_expires_at: null,
+          plan_attendee_capacity: null,
           sender_id: DEFAULT_SHARED_SENDER_ID,
           updated_at: nowIso,
         })
         .eq('id', req.user!.id);
 
-      if (error && (error.message?.includes('plan_billing_cycle') || error.message?.includes('plan_expires_at') || error.message?.includes('schema cache'))) {
+      if (
+        error &&
+        (error.message?.includes('plan_billing_cycle') ||
+          error.message?.includes('plan_expires_at') ||
+          error.message?.includes('plan_attendee_capacity') ||
+          error.message?.includes('schema cache'))
+      ) {
         const retry = await adminClient
           .from('profiles')
           .update({
@@ -4988,6 +5180,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       if (error) {
         return res.status(400).json({ error: error.message });
       }
+      platformRuntime.planAttendeeCapacityOverrides.set(req.user!.id, null);
+      await syncAuthAppMetadataPlanCapacity(adminClient, req.user!.id, null);
 
       const { data: latestProf } = await adminClient
         .from('profiles')
@@ -5013,6 +5207,30 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
     try {
       const client = req.supabase!;
       const adminOrUserClient = createServiceSupabaseClient() ?? client;
+      const ownerEntProfile = await resolveOwnerEntitlementProfile(
+        adminOrUserClient,
+        req.user!.id,
+        req.user
+      );
+      const ent = getPlanEntitlements(ownerEntProfile);
+      if (ent.maxActiveEvents != null && isActiveEventStatus(event.status)) {
+        const { count: activeCount } = await client
+          .from('events')
+          .select('id', { count: 'exact', head: true })
+          .eq('organizer_id', req.user!.id)
+          .in('status', ['live', 'upcoming']);
+        if ((activeCount ?? 0) >= ent.maxActiveEvents) {
+          return res.status(403).json({
+            error: `Starter plan allows at most ${ent.maxActiveEvents} active (live or upcoming) event. Save as draft or upgrade to Pro Organizer for unlimited concurrent events.`,
+          });
+        }
+      }
+      if (ent.maxAttendeesPerEvent != null && Number(event.capacity || 0) > ent.maxAttendeesPerEvent) {
+        return res.status(403).json({
+          error: `${ent.plan} plan limits event capacity to ${ent.maxAttendeesPerEvent.toLocaleString()} attendees per event. Upgrade or request a creator capacity boost for higher venue capacities.`,
+        });
+      }
+      const enforcedCapacity = getEffectiveEventCapacity(event.capacity, ownerEntProfile);
 
       const baseSlug =
         (event.slug || event.title)
@@ -5069,7 +5287,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         time: event.time,
         venue: event.venue,
         city: event.city,
-        capacity: event.capacity,
+        capacity: enforcedCapacity,
         registered: event.registered,
         checked_in: event.checkedIn,
         sms_dispatched: event.smsDispatched,
@@ -5183,9 +5401,26 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
   app.patch('/api/studio/events/:id', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const updated = req.body as EventItem;
     try {
+      const adminOrUserClient = createServiceSupabaseClient() ?? req.supabase!;
+      const ownerEntProfile = await resolveOwnerEntitlementProfile(
+        adminOrUserClient,
+        req.user!.id,
+        req.user
+      );
+      const ent = getPlanEntitlements(ownerEntProfile);
+      if (
+        ent.maxAttendeesPerEvent != null &&
+        updated.capacity !== undefined &&
+        Number(updated.capacity) > ent.maxAttendeesPerEvent
+      ) {
+        return res.status(403).json({
+          error: `${ent.plan} plan limits event capacity to ${ent.maxAttendeesPerEvent.toLocaleString()} attendees per event. Upgrade or request a creator capacity boost to raise venue capacity.`,
+        });
+      }
+
       const { data: existingEvtRow } = await req
         .supabase!.from('events')
-        .select('iso_date, date, extra_data_config, planning_config, category')
+        .select('iso_date, date, extra_data_config, planning_config, category, capacity')
         .eq('id', req.params.id)
         .eq('organizer_id', req.user!.id)
         .maybeSingle();
@@ -5268,7 +5503,10 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         time: updated.time,
         venue: updated.venue,
         city: updated.city,
-        capacity: updated.capacity,
+        capacity: getEffectiveEventCapacity(
+          updated.capacity ?? Number(existingRec?.capacity ?? 50),
+          ownerEntProfile
+        ),
         ticket_price: updated.ticketPrice,
         organizer: updated.organizer,
         artwork: updated.artwork,
@@ -6033,6 +6271,17 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       }
       const normalizedPhone = normalizePhoneE164(attendee.phone);
       const evtMapped = mapEventRow(evtCheckRec);
+      const ownerEntProfile = await resolveOwnerEntitlementProfile(
+        createServiceSupabaseClient() ?? client,
+        req.user!.id,
+        req.user
+      );
+      const effectiveCap = getEffectiveEventCapacity(evtMapped.capacity, ownerEntProfile);
+      if (evtMapped.registered >= effectiveCap) {
+        return res.status(409).json({
+          error: `${evtMapped.title} has reached its attendee capacity (${effectiveCap.toLocaleString()} seats). Upgrade plan or increase venue capacity to add more attendees.`,
+        });
+      }
       let normalizedStudioValidationGroup: string | null = null;
       if (typeof attendee.validationGroup === 'string' && attendee.validationGroup.trim()) {
         const trimmedGroup = attendee.validationGroup.trim().slice(0, 120);

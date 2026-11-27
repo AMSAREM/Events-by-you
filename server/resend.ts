@@ -828,7 +828,7 @@ export async function sendCheckInWelcomeEmail(params: {
   scheduleBlocks?: EmailScheduleItem[];
   replyTo?: string;
 }): Promise<SendResendEmailResult> {
-  const subject = `Checked In: Welcome to ${params.eventTitle}`;
+  const subject = `Checked In: ${params.eventTitle} — Thank You for Being a Part of the Celebration`;
 
   const cleanWelcomeMessage = stripTrailingPoweredByLine(params.welcomeMessage);
   const renderContent = (effectiveFrom: string) => {
@@ -858,7 +858,7 @@ export async function sendCheckInWelcomeEmail(params: {
         <span style="margin-left:8px;font-weight:700;font-size:15px;vertical-align:middle;color:#0D3822;">Events By You · Gate Check-In</span>
       </div>
       <h1 style="margin:0 0 10px 0;font-size:22px;line-height:1.25;font-weight:700;color:#0B0B0B;">
-        Welcome to ${escapeHtml(params.eventTitle)}, ${escapeHtml(params.attendeeName)}!
+        Thank you for being a part of the celebration at ${escapeHtml(params.eventTitle)}, ${escapeHtml(params.attendeeName)}!
       </h1>
       <p style="margin:0 0 20px 0;font-size:14px;line-height:1.65;color:#1A1C1D;background:#F5F5F7;padding:16px 18px;border-radius:16px;">
         ${escapeHtml(cleanWelcomeMessage || params.welcomeMessage)}
@@ -892,7 +892,7 @@ export async function sendCheckInWelcomeEmail(params: {
 </html>`.trim();
 
     const text = [
-      `Welcome to ${params.eventTitle}, ${params.attendeeName}!`,
+      `Thank you for being a part of the celebration at ${params.eventTitle}, ${params.attendeeName}!`,
       ``,
       cleanWelcomeMessage || params.welcomeMessage,
       ...renderEmailScheduleText(params.scheduleBlocks, includeBrandUrl ? params.eventUrl : undefined),

@@ -1176,7 +1176,7 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
             <p className="text-xs font-semibold text-[#0B0B0B] mb-2">
               Adjust Venue Capacity{' '}
               {entitlements.maxAttendeesPerEvent !== null
-                ? `(Starter Cap: ${entitlements.maxAttendeesPerEvent})`
+                ? `(${entitlements.plan} Cap: ${entitlements.maxAttendeesPerEvent.toLocaleString()})`
                 : ''}
             </p>
             <div className="flex items-center gap-2">
@@ -1198,7 +1198,7 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
             </div>
             {entitlements.maxAttendeesPerEvent !== null && (
               <p className="text-[11px] text-[#71717A] mt-2">
-                Starter seats cap at {STARTER_MAX_ATTENDEES_PER_EVENT}.{' '}
+                {entitlements.plan} seats cap at {entitlements.maxAttendeesPerEvent.toLocaleString()}.{' '}
                 {onOpenBilling && (
                   <button type="button" onClick={onOpenBilling} className="underline font-semibold text-[#0B0B0B]">
                     Upgrade for unlimited seats

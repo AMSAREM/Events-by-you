@@ -16,8 +16,13 @@ import type {
 } from '../src/types/events.ts';
 import {
   DEFAULT_SHARED_SENDER_ID,
+  MAX_CUSTOM_ATTENDEE_CAPACITY,
   PLAN_MRR_USD,
+  computeNextPlanAttendeeCapacity,
   computePlanExpiresAtIso,
+  getPlanEntitlements,
+  resolvePlanAttendeeCapacityValue,
+  toDbPlanAttendeeCapacity,
 } from '../src/lib/subscriptionPlans.ts';
 import {
   dispatchOptionalArkeselSms,
@@ -35,9 +40,12 @@ import {
   createPublicSupabaseClient,
   createServiceSupabaseClient,
   createUserSupabaseClient,
+  fetchAuthAppMetadataPlanCapacities,
   isSupabaseConfigured,
   mapAttendeeRow,
   mapEventRow,
+  resolveProfilePlanAttendeeCapacity,
+  syncAuthAppMetadataPlanCapacity,
 } from './supabase.ts';
 
 function isMissingPurchaseTableError(err: { message?: string; code?: string } | null | undefined): boolean {
@@ -220,8 +228,20 @@ export function createBuilderRouter() {
 
     const started = Date.now();
     try {
-      const client = createServiceSupabaseClient() ?? req.supabase!;
-      const [profRes, evtRes, attRes, shotRes, appRes, purchaseRes, subPayRes, , emailDiagnostics] = await Promise.all([
+      const svcClient = createServiceSupabaseClient();
+      const client = svcClient ?? req.supabase!;
+      const [
+        profRes,
+        evtRes,
+        attRes,
+        shotRes,
+        appRes,
+        purchaseRes,
+        subPayRes,
+        ,
+        emailDiagnostics,
+        authCapacityOverrides,
+      ] = await Promise.all([
         client.from('profiles').select('*'),
         client.from('events').select('*'),
         client.from('attendees').select('*'),
@@ -239,6 +259,7 @@ export function createBuilderRouter() {
           .limit(50),
         fetchArkeselGatewayBalance(),
         getEmailDeliverabilityDiagnostics(),
+        fetchAuthAppMetadataPlanCapacities(svcClient),
       ]);
 
       const dbLatencyMs = Math.max(1, Date.now() - started);
@@ -343,6 +364,10 @@ export function createBuilderRouter() {
           : rawRole === 'gate_staff'
             ? 'gate_staff'
             : 'organizer';
+        const runtimeOverride = platformRuntime.planAttendeeCapacityOverrides.get(uid);
+        const fallbackCap =
+          runtimeOverride !== undefined ? runtimeOverride : authCapacityOverrides.get(uid);
+        const planAttendeeCapacity = resolveProfilePlanAttendeeCapacity(p, fallbackCap);
         return {
           id: uid,
           name: String(p.name ?? 'Organiser'),
@@ -350,6 +375,7 @@ export function createBuilderRouter() {
           studio: String(p.studio ?? 'Events Studio'),
           appRole,
           plan: (p.plan as OrganizerProfile['plan']) || 'Starter',
+          ...(planAttendeeCapacity !== undefined ? { planAttendeeCapacity } : {}),
           smsCredits: Number(p.sms_credits ?? 0),
           eventsCount: uEvts.length,
           attendeesCount: uAtts.length,
@@ -579,9 +605,11 @@ export function createBuilderRouter() {
       }
     }
     try {
-      const client = createServiceSupabaseClient() ?? req.supabase!;
+      const svc = createServiceSupabaseClient();
+      const client = svc ?? req.supabase!;
       const updatePayload: Record<string, unknown> = {
         plan,
+        plan_attendee_capacity: null,
         updated_at: new Date().toISOString(),
       };
       if (plan === 'Starter') {
@@ -596,7 +624,13 @@ export function createBuilderRouter() {
         .from('profiles')
         .update(updatePayload)
         .eq('id', req.params.userId);
-      if (error && (error.message?.includes('plan_billing_cycle') || error.message?.includes('plan_expires_at') || error.message?.includes('schema cache'))) {
+      if (
+        error &&
+        (error.message?.includes('plan_billing_cycle') ||
+          error.message?.includes('plan_expires_at') ||
+          error.message?.includes('plan_attendee_capacity') ||
+          error.message?.includes('schema cache'))
+      ) {
         const retry = await client
           .from('profiles')
           .update({ plan, updated_at: new Date().toISOString() })
@@ -604,9 +638,139 @@ export function createBuilderRouter() {
         error = retry.error;
       }
       if (error) return res.status(400).json({ error: error.message });
+      platformRuntime.planAttendeeCapacityOverrides.set(req.params.userId, null);
+      await syncAuthAppMetadataPlanCapacity(svc, req.params.userId, null);
       return res.json({ ok: true, plan });
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : 'Plan update failed.' });
+    }
+  });
+
+  router.post('/tenants/:userId/attendee-capacity', async (req: AuthedRequest, res) => {
+    const { delta, capacity } = req.body as {
+      delta?: number;
+      capacity?: number | 'unlimited' | 'default' | null;
+    };
+    if (!isSupabaseConfigured()) {
+      try {
+        const result = memoryStore.updateTenantAttendeeCapacity(req.params.userId, {
+          delta,
+          capacity,
+        });
+        return res.json({ ok: true, ...result });
+      } catch (err) {
+        const status = (err as { status?: number })?.status || 400;
+        return res
+          .status(status)
+          .json({ error: err instanceof Error ? err.message : 'Unable to update attendee capacity.' });
+      }
+    }
+
+    try {
+      const svc = createServiceSupabaseClient();
+      const client = svc ?? req.supabase!;
+      const { data: existing, error: fetchErr } = await client
+        .from('profiles')
+        .select('*')
+        .eq('id', req.params.userId)
+        .single();
+      if (fetchErr || !existing) {
+        return res.status(404).json({ error: 'Organiser not found.' });
+      }
+
+      const rowRec = existing as Record<string, unknown>;
+      let fallbackOverride = platformRuntime.planAttendeeCapacityOverrides.get(req.params.userId);
+      if (fallbackOverride === undefined && svc) {
+        try {
+          const { data: userRes } = await svc.auth.admin.getUserById(req.params.userId);
+          const metaOverride = resolvePlanAttendeeCapacityValue(
+            userRes?.user?.app_metadata?.plan_attendee_capacity
+          );
+          if (metaOverride !== undefined) fallbackOverride = metaOverride;
+        } catch {
+          // Best-effort lookup
+        }
+      }
+
+      const currentPlan = (rowRec.plan as OrganizerProfile['plan']) || 'Starter';
+      const currentExpiresAt =
+        rowRec.plan_expires_at != null ? String(rowRec.plan_expires_at) : undefined;
+      const currentOverride = resolveProfilePlanAttendeeCapacity(rowRec, fallbackOverride);
+
+      let nextValue: number | 'unlimited' | undefined;
+      if (capacity === 'default' || capacity === null) {
+        nextValue = undefined;
+      } else if (capacity === 'unlimited') {
+        nextValue = 'unlimited';
+      } else if (capacity !== undefined) {
+        const parsed = resolvePlanAttendeeCapacityValue(capacity);
+        if (parsed === undefined) {
+          return res.status(400).json({
+            error: `Attendee capacity must be between 1 and ${MAX_CUSTOM_ATTENDEE_CAPACITY.toLocaleString()}, "unlimited", or "default".`,
+          });
+        }
+        nextValue = parsed;
+      } else if (delta !== undefined) {
+        try {
+          nextValue = computeNextPlanAttendeeCapacity(
+            {
+              plan: currentPlan,
+              planExpiresAt: currentExpiresAt,
+              planAttendeeCapacity: currentOverride,
+            },
+            delta
+          );
+        } catch (err) {
+          return res.status(400).json({
+            error: err instanceof Error ? err.message : 'Invalid attendee capacity delta.',
+          });
+        }
+      } else {
+        return res.status(400).json({ error: 'Provide a capacity value or delta.' });
+      }
+
+      const dbValue = toDbPlanAttendeeCapacity(nextValue ?? null);
+      const { error: updErr } = await client
+        .from('profiles')
+        .update({
+          plan_attendee_capacity: dbValue,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', req.params.userId);
+
+      const isMissingCol = Boolean(
+        updErr &&
+          (updErr.message?.includes('plan_attendee_capacity') ||
+            updErr.message?.includes('schema cache') ||
+            updErr.code === '42703' ||
+            updErr.code === 'PGRST204')
+      );
+
+      if (updErr && !isMissingCol) {
+        return res.status(400).json({ error: updErr.message });
+      }
+
+      platformRuntime.planAttendeeCapacityOverrides.set(
+        req.params.userId,
+        nextValue ?? null
+      );
+      await syncAuthAppMetadataPlanCapacity(svc, req.params.userId, nextValue ?? null);
+
+      const effectiveMaxAttendeesPerEvent = getPlanEntitlements({
+        plan: currentPlan,
+        planExpiresAt: currentExpiresAt,
+        planAttendeeCapacity: nextValue,
+      }).maxAttendeesPerEvent;
+
+      return res.json({
+        ok: true,
+        planAttendeeCapacity: nextValue,
+        effectiveMaxAttendeesPerEvent,
+      });
+    } catch (err) {
+      return res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : 'Failed to update attendee capacity.' });
     }
   });
 
@@ -725,6 +889,20 @@ export function createBuilderRouter() {
           : { data: [] };
       const attendees = (attRows ?? []).map((r) => mapAttendeeRow(r as Record<string, unknown>));
       const p = prof as Record<string, unknown>;
+      const svc = createServiceSupabaseClient();
+      let inspectFallbackCap = platformRuntime.planAttendeeCapacityOverrides.get(req.params.userId);
+      if (inspectFallbackCap === undefined && svc) {
+        try {
+          const { data: uRes } = await svc.auth.admin.getUserById(req.params.userId);
+          const metaOverride = resolvePlanAttendeeCapacityValue(
+            uRes?.user?.app_metadata?.plan_attendee_capacity
+          );
+          if (metaOverride !== undefined) inspectFallbackCap = metaOverride;
+        } catch {
+          // Best-effort lookup
+        }
+      }
+      const planAttendeeCapacity = resolveProfilePlanAttendeeCapacity(p, inspectFallbackCap);
       const inspection: BuilderTenantInspection = {
         tenant: {
           id: String(p.id),
@@ -740,6 +918,7 @@ export function createBuilderRouter() {
               ? 'gate_staff'
               : 'organizer',
           plan: (p.plan as OrganizerProfile['plan']) || 'Starter',
+          ...(planAttendeeCapacity !== undefined ? { planAttendeeCapacity } : {}),
           smsCredits: Number(p.sms_credits ?? 0),
           eventsCount: events.length,
           attendeesCount: attendees.length,

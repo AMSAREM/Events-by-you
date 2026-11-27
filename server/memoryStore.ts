@@ -35,14 +35,17 @@ import {
 import {
   PLAN_MRR_USD,
   DEFAULT_SHARED_SENDER_ID,
+  MAX_CUSTOM_ATTENDEE_CAPACITY,
   STARTER_MAX_ACTIVE_EVENTS,
   STARTER_MAX_ATTENDEES_PER_EVENT,
+  computeNextPlanAttendeeCapacity,
   computePlanExpiresAtIso,
   getEffectiveEventCapacity,
   getPlanEntitlements,
   hasCustomMessageOverrides,
   hasCustomSenderIdValue,
   isActiveEventStatus,
+  resolvePlanAttendeeCapacityValue,
 } from '../src/lib/subscriptionPlans.ts';
 import type {
   AppRole,
@@ -146,6 +149,7 @@ export const platformRuntime = {
   smsDispatches: [] as SmsDispatchLogEntry[],
   fallbackSmsPurchases: new Map<string, SmsBundlePurchase>(),
   fallbackSubscriptionPayments: new Map<string, SubscriptionPayment>(),
+  planAttendeeCapacityOverrides: new Map<string, number | 'unlimited' | null>(),
 
   getEffectiveArkeselSenderId(explicit?: string): {
     senderId: string;
@@ -546,6 +550,9 @@ function buildTenantSummary(user: MemoryUser): BuilderTenantSummary {
         ? 'gate_staff'
         : 'organizer',
     plan: user.profile.plan,
+    ...(user.profile.planAttendeeCapacity !== undefined
+      ? { planAttendeeCapacity: user.profile.planAttendeeCapacity }
+      : {}),
     smsCredits: user.profile.smsCredits,
     eventsCount: userEvents.length,
     attendeesCount,
@@ -1152,6 +1159,7 @@ export const memoryStore = {
       plan: updated.planName,
       planBillingCycle: updated.billingCycle,
       planExpiresAt: expiresIso,
+      planAttendeeCapacity: undefined,
     };
     return { alreadyActivated: false, payment: updated, profile: user.profile };
   },
@@ -1228,6 +1236,7 @@ export const memoryStore = {
         plan: payload.planName,
         planBillingCycle: payload.billingCycle,
         planExpiresAt: expiresIso,
+        planAttendeeCapacity: undefined,
       };
     }
 
@@ -1282,6 +1291,7 @@ export const memoryStore = {
       plan: approved.planName,
       planBillingCycle: approved.billingCycle,
       planExpiresAt: expiresIso,
+      planAttendeeCapacity: undefined,
     };
     return { payment: approved, profile: user.profile, alreadyActivated: false };
   },
@@ -1294,6 +1304,7 @@ export const memoryStore = {
       plan: 'Starter',
       planBillingCycle: 'monthly',
       planExpiresAt: undefined,
+      planAttendeeCapacity: undefined,
       senderId: DEFAULT_SHARED_SENDER_ID,
     };
     return user.profile;
@@ -1817,7 +1828,7 @@ export const memoryStore = {
     if (ent.maxAttendeesPerEvent != null && Number(event.capacity || 0) > ent.maxAttendeesPerEvent) {
       throw Object.assign(
         new Error(
-          `Starter plan limits event capacity to ${STARTER_MAX_ATTENDEES_PER_EVENT} attendees per event. Upgrade to Pro Organizer for higher venue capacities.`
+          `${ent.plan} plan limits event capacity to ${ent.maxAttendeesPerEvent.toLocaleString()} attendees per event. Upgrade or request a creator capacity boost for higher venue capacities.`
         ),
         { status: 403 }
       );
@@ -1970,7 +1981,7 @@ export const memoryStore = {
     ) {
       throw Object.assign(
         new Error(
-          `Starter plan limits event capacity to ${STARTER_MAX_ATTENDEES_PER_EVENT} attendees per event. Upgrade to Pro Organizer to raise venue capacity.`
+          `${ent.plan} plan limits event capacity to ${ent.maxAttendeesPerEvent.toLocaleString()} attendees per event. Upgrade or request a creator capacity boost to raise venue capacity.`
         ),
         { status: 403 }
       );
@@ -3531,7 +3542,11 @@ export const memoryStore = {
   updateTenantPlan(userId: string, plan: OrganizerProfile['plan']): BuilderTenantSummary {
     const user = db.users.get(userId);
     if (!user) throw new Error('Organiser account not found.');
+    const previousPlan = user.profile.plan;
     user.profile.plan = plan;
+    if (previousPlan !== plan) {
+      user.profile.planAttendeeCapacity = undefined;
+    }
     if (plan === 'Starter') {
       user.profile.planBillingCycle = 'monthly';
       user.profile.planExpiresAt = undefined;
@@ -3541,6 +3556,53 @@ export const memoryStore = {
       user.profile.planExpiresAt = computePlanExpiresAtIso(user.profile.planBillingCycle);
     }
     return buildTenantSummary(user);
+  },
+
+  updateTenantAttendeeCapacity(
+    userId: string,
+    payload: { delta?: number; capacity?: number | 'unlimited' | 'default' | null }
+  ): {
+    tenant: BuilderTenantSummary;
+    planAttendeeCapacity?: number | 'unlimited';
+    effectiveMaxAttendeesPerEvent: number | null;
+  } {
+    const user = db.users.get(userId);
+    if (!user) throw Object.assign(new Error('Organiser account not found.'), { status: 404 });
+
+    let nextValue: number | 'unlimited' | undefined;
+    if (payload.capacity === 'default' || payload.capacity === null) {
+      nextValue = undefined;
+    } else if (payload.capacity === 'unlimited') {
+      nextValue = 'unlimited';
+    } else if (payload.capacity !== undefined) {
+      const parsed = resolvePlanAttendeeCapacityValue(payload.capacity);
+      if (parsed === undefined) {
+        throw Object.assign(
+          new Error(`Attendee capacity must be between 1 and ${MAX_CUSTOM_ATTENDEE_CAPACITY.toLocaleString()}, "unlimited", or "default".`),
+          { status: 400 }
+        );
+      }
+      nextValue = parsed;
+    } else if (payload.delta !== undefined) {
+      try {
+        nextValue = computeNextPlanAttendeeCapacity(user.profile, payload.delta);
+      } catch (err) {
+        throw Object.assign(
+          new Error(err instanceof Error ? err.message : 'Invalid attendee capacity delta.'),
+          { status: 400 }
+        );
+      }
+    } else {
+      throw Object.assign(new Error('Provide a capacity value or delta.'), { status: 400 });
+    }
+
+    user.profile.planAttendeeCapacity = nextValue;
+    const ent = getPlanEntitlements(user.profile);
+    return {
+      tenant: buildTenantSummary(user),
+      planAttendeeCapacity: user.profile.planAttendeeCapacity,
+      effectiveMaxAttendeesPerEvent: ent.maxAttendeesPerEvent,
+    };
   },
 
   updateTenantRole(userId: string, appRole: AppRole): BuilderTenantSummary {

@@ -588,13 +588,22 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             </span>
             <div className="flex items-baseline gap-1.5 mt-1">
               <span className="font-display text-[28px] leading-9 font-bold text-[#0B0B0B] tabular-nums">
-                {isPro ? '∞' : topRegistered}
+                {entitlements.maxAttendeesPerEvent === null ? '∞' : topRegistered}
               </span>
               <span className="text-xs text-[#71717A] tabular-nums">
-                {isPro ? 'uncapped' : `/ ${topEffectiveCap} limit`}
+                {entitlements.maxAttendeesPerEvent === null
+                  ? 'uncapped'
+                  : `/ ${topEffectiveCap.toLocaleString()} limit`}
               </span>
             </div>
             <span className="text-[11px] text-[#71717A] mt-2 truncate tabular-nums">
+              {profile.planAttendeeCapacity !== undefined && (
+                <span className="font-semibold text-[#0B0B0B]">
+                  {entitlements.maxAttendeesPerEvent === null
+                    ? 'Creator Unlimited · '
+                    : `Creator Cap (${entitlements.maxAttendeesPerEvent.toLocaleString()}) · `}
+                </span>
+              )}
               {topEvent ? `${topEvent.title}: ${topFillPct}% full` : 'Ready'}
             </span>
           </div>
@@ -723,21 +732,42 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                       </div>
 
                       <div className="bg-white rounded-2xl p-3.5 space-y-1.5">
-                        <div className="flex justify-between text-xs font-semibold">
-                          <span>Top Event Seat Cap</span>
-                          <span className="tabular-nums">
-                            {Math.min(topRegistered, STARTER_MAX_ATTENDEES_PER_EVENT)} /{' '}
-                            {STARTER_MAX_ATTENDEES_PER_EVENT} ({topFillPct}%)
-                          </span>
-                        </div>
-                        <div className="w-full bg-[#E8E8EA] h-1.5 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all ${
-                              topFillPct >= 85 ? 'bg-[#EF4444]' : 'bg-[#0B0B0B]'
-                            }`}
-                            style={{ width: `${topFillPct}%` }}
-                          />
-                        </div>
+                        {(() => {
+                          const tierSeatCap = isCurrent
+                            ? entitlements.maxAttendeesPerEvent
+                            : STARTER_MAX_ATTENDEES_PER_EVENT;
+                          const starterSeatPct =
+                            tierSeatCap === null
+                              ? 0
+                              : Math.min(
+                                  100,
+                                  Math.round((topRegistered / Math.max(1, tierSeatCap)) * 100)
+                                );
+                          return (
+                            <>
+                              <div className="flex justify-between text-xs font-semibold">
+                                <span>Top Event Seat Cap</span>
+                                <span className="tabular-nums">
+                                  {tierSeatCap === null
+                                    ? 'Unlimited (Creator Boost)'
+                                    : `${Math.min(topRegistered, tierSeatCap)} / ${tierSeatCap.toLocaleString()} (${starterSeatPct}%)`}
+                                </span>
+                              </div>
+                              <div className="w-full bg-[#E8E8EA] h-1.5 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all ${
+                                    tierSeatCap !== null && starterSeatPct >= 85
+                                      ? 'bg-[#EF4444]'
+                                      : 'bg-[#0B0B0B]'
+                                  }`}
+                                  style={{
+                                    width: tierSeatCap === null ? '100%' : `${starterSeatPct}%`,
+                                  }}
+                                />
+                              </div>
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
                   ) : (

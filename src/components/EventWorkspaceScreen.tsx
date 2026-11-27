@@ -2829,8 +2829,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   {spotsLeft} Spots Remaining
                 </h3>
                 <p className="text-[13px] text-[#71717A] mt-1 leading-relaxed">
-                  {entitlements.plan === 'Starter'
-                    ? `Your Starter tier limit is capped at ${STARTER_MAX_ATTENDEES_PER_EVENT} attendees per event. Once full, public RSVP pauses automatically.`
+                  {entitlements.maxAttendeesPerEvent !== null
+                    ? `Your ${entitlements.plan} plan attendee cap is ${entitlements.maxAttendeesPerEvent.toLocaleString()} attendees per event. Once full, public RSVP pauses automatically.`
                     : `Capacity at ${capacityPct}% (${totalRegistered}/${event.capacity}) on ${entitlements.plan}.`}
                 </p>
               </div>

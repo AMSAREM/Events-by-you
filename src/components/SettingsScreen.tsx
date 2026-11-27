@@ -302,9 +302,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const liveEventCount = events.filter((e) => e.status === 'live' || e.status === 'upcoming').length;
   const primaryEvent = events.find((e) => e.status === 'live' || e.status === 'upcoming') ?? events[0];
   const primaryRegistered = primaryEvent?.registered ?? 0;
-  const primaryCap = isFree
-    ? Math.min(primaryEvent?.capacity ?? STARTER_MAX_ATTENDEES_PER_EVENT, STARTER_MAX_ATTENDEES_PER_EVENT)
-    : primaryEvent?.capacity ?? 100;
+  const primaryCap =
+    entitlements.maxAttendeesPerEvent !== null
+      ? Math.min(
+          primaryEvent?.capacity ?? entitlements.maxAttendeesPerEvent,
+          entitlements.maxAttendeesPerEvent
+        )
+      : primaryEvent?.capacity ?? 100;
   const attendeeCapPct = Math.min(100, Math.round((primaryRegistered / Math.max(1, primaryCap)) * 100));
 
   const handleConfirmDeleteAccount = async (e: React.FormEvent) => {

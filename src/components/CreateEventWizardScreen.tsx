@@ -1514,8 +1514,8 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 <div>
                   <label className="block text-xs font-semibold text-[#0B0B0B] mb-1.5">
                     Capacity Ceiling (
-                    {entitlements.maxAttendeesPerEvent
-                      ? `Max ${STARTER_MAX_ATTENDEES_PER_EVENT} on Starter`
+                    {entitlements.maxAttendeesPerEvent !== null
+                      ? `Max ${entitlements.maxAttendeesPerEvent.toLocaleString()} on ${entitlements.plan}`
                       : `Unlimited on ${entitlements.plan}`}
                     )
                   </label>

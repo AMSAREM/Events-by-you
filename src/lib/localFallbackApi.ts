@@ -27,7 +27,9 @@ import {
 import { resolveAuthoritativeSmsBundle, validateReceiptReference } from './smsBundles';
 import {
   DEFAULT_SHARED_SENDER_ID,
+  MAX_CUSTOM_ATTENDEE_CAPACITY,
   PLAN_MRR_USD,
+  computeNextPlanAttendeeCapacity,
   computePlanExpiresAtIso,
   getEffectiveEventCapacity,
   getPlanEntitlements,
@@ -35,6 +37,7 @@ import {
   hasCustomSenderIdValue,
   isActiveEventStatus,
   resolveAuthoritativeSubscriptionQuote,
+  resolvePlanAttendeeCapacityValue,
 } from './subscriptionPlans';
 import {
   buildValidatedPollOptions,
@@ -416,6 +419,9 @@ function buildTenantSummary(db: LocalDatabase, u: LocalUser): BuilderTenantSumma
     studio: u.profile.studio,
     appRole: getEffectiveRole(u),
     plan: u.profile.plan,
+    ...(u.profile.planAttendeeCapacity !== undefined
+      ? { planAttendeeCapacity: u.profile.planAttendeeCapacity }
+      : {}),
     smsCredits: u.profile.smsCredits,
     eventsCount: uEvts.length,
     attendeesCount: uAtts.length,
@@ -1648,6 +1654,7 @@ export async function localFallbackRequest<T>(
         plan: quote.planName,
         planBillingCycle: quote.billingCycle,
         planExpiresAt: expiresIso,
+        planAttendeeCapacity: undefined,
       };
     }
     saveDb(db);
@@ -1671,6 +1678,7 @@ export async function localFallbackRequest<T>(
       plan: 'Starter',
       planBillingCycle: 'monthly',
       planExpiresAt: undefined,
+      planAttendeeCapacity: undefined,
       senderId: DEFAULT_SHARED_SENDER_ID,
     };
     saveDb(db);
@@ -1779,7 +1787,7 @@ export async function localFallbackRequest<T>(
     }
     if (ent.maxAttendeesPerEvent != null && Number(event.capacity) > ent.maxAttendeesPerEvent) {
       throw new LocalApiError(
-        `Starter plan caps event capacity at ${ent.maxAttendeesPerEvent} attendees per event. Upgrade to Pro Organizer for unlimited capacity.`,
+        `${ent.plan} plan caps event capacity at ${ent.maxAttendeesPerEvent.toLocaleString()} attendees per event. Upgrade or ask the creator to increase your attendee capacity.`,
         403
       );
     }
@@ -2194,7 +2202,7 @@ export async function localFallbackRequest<T>(
       const nextCapRaw = patch.capacity ?? existing.capacity;
       if (ent.maxAttendeesPerEvent != null && Number(nextCapRaw) > ent.maxAttendeesPerEvent) {
         throw new LocalApiError(
-          `Starter plan caps event capacity at ${ent.maxAttendeesPerEvent} attendees per event. Upgrade to Pro Organizer for unlimited capacity.`,
+          `${ent.plan} plan caps event capacity at ${ent.maxAttendeesPerEvent.toLocaleString()} attendees per event. Upgrade or ask the creator to increase your attendee capacity.`,
           403
         );
       }
@@ -3147,6 +3155,7 @@ export async function localFallbackRequest<T>(
       if (action === 'plan' && method === 'POST') {
         const nextPlan = body.plan as OrganizerProfile['plan'];
         targetUser.profile.plan = nextPlan;
+        targetUser.profile.planAttendeeCapacity = undefined;
         if (nextPlan === 'Starter') {
           targetUser.profile.planBillingCycle = 'monthly';
           targetUser.profile.planExpiresAt = undefined;
@@ -3157,6 +3166,52 @@ export async function localFallbackRequest<T>(
         }
         saveDb(db);
         return { tenant: buildTenantSummary(db, targetUser) } as T;
+      }
+      if (action === 'attendee-capacity' && method === 'POST') {
+        const { delta, capacity } = body as {
+          delta?: number;
+          capacity?: number | 'unlimited' | 'default' | null;
+        };
+        let nextValue: number | 'unlimited' | undefined;
+        if (delta !== undefined && delta !== null && Number(delta) !== 0) {
+          try {
+            nextValue = computeNextPlanAttendeeCapacity(targetUser.profile, Number(delta));
+          } catch (err) {
+            throw new LocalApiError(
+              err instanceof Error ? err.message : 'Invalid attendee capacity adjustment.',
+              400
+            );
+          }
+        } else if (capacity !== undefined) {
+          if (capacity === null || capacity === 'default') {
+            nextValue = undefined;
+          } else if (capacity === 'unlimited') {
+            nextValue = 'unlimited';
+          } else {
+            const parsed = Number(capacity);
+            if (!Number.isFinite(parsed) || parsed < 1 || parsed > MAX_CUSTOM_ATTENDEE_CAPACITY) {
+              throw new LocalApiError(
+                `Attendee capacity must be between 1 and ${MAX_CUSTOM_ATTENDEE_CAPACITY.toLocaleString()}, or "unlimited".`,
+                400
+              );
+            }
+            nextValue = resolvePlanAttendeeCapacityValue(parsed);
+          }
+        } else {
+          throw new LocalApiError(
+            'Provide either an attendee capacity delta (e.g. +50) or explicit capacity.',
+            400
+          );
+        }
+        targetUser.profile.planAttendeeCapacity = nextValue;
+        saveDb(db);
+        const nextEnt = getPlanEntitlements(targetUser.profile);
+        return {
+          ok: true,
+          tenant: buildTenantSummary(db, targetUser),
+          planAttendeeCapacity: targetUser.profile.planAttendeeCapacity,
+          effectiveMaxAttendeesPerEvent: nextEnt.maxAttendeesPerEvent,
+        } as T;
       }
       if (action === 'role' && method === 'POST') {
         const nextRole = body.appRole as AppRole;
@@ -3323,6 +3378,7 @@ export async function localFallbackRequest<T>(
       targetUser.profile.plan = approved.planName;
       targetUser.profile.planBillingCycle = approved.billingCycle;
       targetUser.profile.planExpiresAt = expiresIso;
+      targetUser.profile.planAttendeeCapacity = undefined;
       saveDb(db);
       return {
         ok: true,

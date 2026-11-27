@@ -50,6 +50,7 @@ import type {
   WebhookTriggerEvent,
 } from '../types/events';
 import { api } from '../lib/api';
+import { formatPlanAttendeeCapacityLabel, getPlanEntitlements } from '../lib/subscriptionPlans';
 import { TopUtilityBar } from './TopUtilityBar';
 
 interface AppsCreatorConsoleScreenProps {
@@ -215,6 +216,8 @@ export const AppsCreatorConsoleScreen: React.FC<AppsCreatorConsoleScreenProps> =
   const [syncingDlr, setSyncingDlr] = useState(false);
   const [dlrSyncSummary, setDlrSyncSummary] = useState<string | null>(null);
   const [defaultSenderInput, setDefaultSenderInput] = useState('');
+  const [editingCapTenantId, setEditingCapTenantId] = useState<string | null>(null);
+  const [customCapInput, setCustomCapInput] = useState('');
 
   // Tester & Logs state
   const [selectedWebhookTrigger, setSelectedWebhookTrigger] = useState<WebhookTriggerEvent>('attendee.registered');
@@ -379,6 +382,34 @@ export const AppsCreatorConsoleScreen: React.FC<AppsCreatorConsoleScreenProps> =
       await refreshBuilderOverview();
     } catch (err) {
       setBuilderError(err instanceof Error ? err.message : 'Plan update failed');
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleUpdateAttendeeCapacity = async (
+    userId: string,
+    payload: { delta?: number; capacity?: number | 'unlimited' | 'default' | null }
+  ) => {
+    setActionBusyId(`cap-${userId}`);
+    setBuilderError(null);
+    try {
+      const res = await api.builder.updateTenantAttendeeCapacity(userId, payload);
+      const label =
+        res.effectiveMaxAttendeesPerEvent === null
+          ? 'Unlimited'
+          : typeof res.effectiveMaxAttendeesPerEvent === 'number'
+            ? `${res.effectiveMaxAttendeesPerEvent.toLocaleString()} / event`
+            : 'updated';
+      showToast(`Attendee capacity set to ${label}.`);
+      setEditingCapTenantId(null);
+      setCustomCapInput('');
+      await refreshBuilderOverview();
+      if (tenantInspection?.tenant.id === userId && res.tenant) {
+        setTenantInspection((prev) => (prev ? { ...prev, tenant: res.tenant! } : prev));
+      }
+    } catch (err) {
+      setBuilderError(err instanceof Error ? err.message : 'Attendee capacity update failed');
     } finally {
       setActionBusyId(null);
     }
@@ -1712,13 +1743,21 @@ const { attendee, event } = await response.json();`;
                     <th className="py-3 px-4">Organiser / Studio</th>
                     <th className="py-3 px-4">RBAC Role</th>
                     <th className="py-3 px-4">Plan</th>
+                    <th className="py-3 px-4">Attendee Cap</th>
                     <th className="py-3 px-4">Activity &amp; Storage</th>
                     <th className="py-3 px-4">SMS Credits</th>
                     <th className="py-3 px-4 text-right">Builder Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E5E5EA]">
-                  {filteredTenants.map((tenant) => (
+                  {filteredTenants.map((tenant) => {
+                    const tenantEnt = getPlanEntitlements({
+                      plan: tenant.plan,
+                      planAttendeeCapacity: tenant.planAttendeeCapacity,
+                    });
+                    const hasCustomCap = tenant.planAttendeeCapacity !== undefined;
+                    const isEditingCap = editingCapTenantId === tenant.id;
+                    return (
                     <tr
                       key={tenant.id}
                       className={tenant.suspended ? 'bg-[#F5F5F7]/80' : 'hover:bg-[#F5F5F7]/40'}
@@ -1776,6 +1815,120 @@ const { attendee, event } = await response.json();`;
                           <option value="Pro Organizer">Pro Organizer</option>
                           <option value="Enterprise">Enterprise</option>
                         </select>
+                      </td>
+                      <td className="py-3.5 px-4 align-top min-w-[190px]">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-mono font-semibold text-[#0B0B0B] tabular-nums">
+                            {formatPlanAttendeeCapacityLabel({
+                              plan: tenant.plan,
+                              planAttendeeCapacity: tenant.planAttendeeCapacity,
+                            })}
+                          </span>
+                          {hasCustomCap && (
+                            <span className="px-1.5 py-0.5 rounded bg-[#0B0B0B] text-white font-mono text-[9px] uppercase">
+                              Custom
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                          <button
+                            type="button"
+                            disabled={actionBusyId === `cap-${tenant.id}`}
+                            onClick={() => handleUpdateAttendeeCapacity(tenant.id, { delta: 50 })}
+                            className="px-2 py-0.5 rounded-md border border-[#E5E5EA] hover:border-[#0B0B0B] font-mono text-[10px] font-semibold text-[#0B0B0B]"
+                          >
+                            +50
+                          </button>
+                          <button
+                            type="button"
+                            disabled={actionBusyId === `cap-${tenant.id}`}
+                            onClick={() => handleUpdateAttendeeCapacity(tenant.id, { delta: 100 })}
+                            className="px-2 py-0.5 rounded-md border border-[#E5E5EA] hover:border-[#0B0B0B] font-mono text-[10px] font-semibold text-[#0B0B0B]"
+                          >
+                            +100
+                          </button>
+                          <button
+                            type="button"
+                            disabled={actionBusyId === `cap-${tenant.id}`}
+                            onClick={() => handleUpdateAttendeeCapacity(tenant.id, { delta: 250 })}
+                            className="px-2 py-0.5 rounded-md border border-[#E5E5EA] hover:border-[#0B0B0B] font-mono text-[10px] font-semibold text-[#0B0B0B]"
+                          >
+                            +250
+                          </button>
+                          <button
+                            type="button"
+                            disabled={actionBusyId === `cap-${tenant.id}`}
+                            onClick={() => {
+                              if (isEditingCap) {
+                                setEditingCapTenantId(null);
+                              } else {
+                                setEditingCapTenantId(tenant.id);
+                                setCustomCapInput(
+                                  tenantEnt.maxAttendeesPerEvent !== null
+                                    ? String(tenantEnt.maxAttendeesPerEvent)
+                                    : ''
+                                );
+                              }
+                            }}
+                            className="px-2 py-0.5 rounded-md border border-[#E5E5EA] hover:border-[#0B0B0B] font-mono text-[10px] font-semibold text-[#0B0B0B]"
+                          >
+                            {isEditingCap ? 'Cancel' : 'Set'}
+                          </button>
+                          {tenantEnt.maxAttendeesPerEvent !== null && (
+                            <button
+                              type="button"
+                              disabled={actionBusyId === `cap-${tenant.id}`}
+                              onClick={() =>
+                                handleUpdateAttendeeCapacity(tenant.id, { capacity: 'unlimited' })
+                              }
+                              title="Unlock unlimited attendees per event"
+                              className="px-2 py-0.5 rounded-md border border-[#E5E5EA] hover:border-[#0B0B0B] font-mono text-[10px] font-semibold text-[#0B0B0B]"
+                            >
+                              ∞
+                            </button>
+                          )}
+                          {hasCustomCap && (
+                            <button
+                              type="button"
+                              disabled={actionBusyId === `cap-${tenant.id}`}
+                              onClick={() =>
+                                handleUpdateAttendeeCapacity(tenant.id, { capacity: 'default' })
+                              }
+                              className="px-2 py-0.5 rounded-md border border-[#E5E5EA] hover:border-[#0B0B0B] font-mono text-[10px] text-[#71717A] hover:text-[#0B0B0B]"
+                            >
+                              Reset
+                            </button>
+                          )}
+                        </div>
+                        {isEditingCap && (
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              const num = Number(customCapInput);
+                              if (!Number.isFinite(num) || num < 1) return;
+                              void handleUpdateAttendeeCapacity(tenant.id, { capacity: num });
+                            }}
+                            className="flex items-center gap-1 mt-1.5"
+                          >
+                            <input
+                              type="number"
+                              min={1}
+                              max={1000000}
+                              value={customCapInput}
+                              onChange={(e) => setCustomCapInput(e.target.value)}
+                              placeholder="Seats"
+                              aria-label={`Custom attendee capacity for ${tenant.email}`}
+                              className="w-20 h-7 px-2 rounded-md border border-[#E5E5EA] focus:border-[#0B0B0B] focus:outline-none font-mono text-[11px] tabular-nums"
+                            />
+                            <button
+                              type="submit"
+                              disabled={actionBusyId === `cap-${tenant.id}` || !customCapInput}
+                              className="h-7 px-2.5 rounded-md bg-[#0B0B0B] text-white font-mono text-[10px] font-semibold disabled:opacity-50"
+                            >
+                              Apply
+                            </button>
+                          </form>
+                        )}
                       </td>
                       <td className="py-3.5 px-4 align-top font-mono tabular-nums text-[11px] text-[#0B0B0B]">
                         <div>{tenant.eventsCount} events · {tenant.attendeesCount} guests</div>
@@ -1842,7 +1995,8 @@ const { attendee, event } = await response.json();`;
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -2971,7 +3125,12 @@ const { attendee, event } = await response.json();`;
                 </div>
                 <p className="text-xs text-[#71717A] mt-1 font-mono">
                   {tenantInspection.tenant.name} · {tenantInspection.tenant.email} ·{' '}
-                  {tenantInspection.tenant.studio}
+                  {tenantInspection.tenant.studio} · {tenantInspection.tenant.plan} (
+                  {formatPlanAttendeeCapacityLabel({
+                    plan: tenantInspection.tenant.plan,
+                    planAttendeeCapacity: tenantInspection.tenant.planAttendeeCapacity,
+                  })}
+                  )
                 </p>
               </div>
               <button

@@ -377,6 +377,7 @@ export interface OrganizerProfile {
   plan: 'Starter' | 'Pro Organizer' | 'Enterprise';
   planBillingCycle?: 'monthly' | 'annual';
   planExpiresAt?: string;
+  planAttendeeCapacity?: number | 'unlimited';
   smsCredits: number;
   capacityAlertThreshold: number;
   avatarUrl?: string;
@@ -583,6 +584,7 @@ export interface BuilderTenantSummary {
   studio: string;
   appRole: AppRole;
   plan: OrganizerProfile['plan'];
+  planAttendeeCapacity?: number | 'unlimited';
   smsCredits: number;
   eventsCount: number;
   attendeesCount: number;

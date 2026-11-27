@@ -26,7 +26,14 @@ export function calculateSmsCredits(message?: string): number {
   return Math.max(1, Math.ceil(clean.length / 160));
 }
 
+export const DEFAULT_CHECKIN_MESSAGE =
+  `Thank you for being a part of the celebration at {event}, {name}! You're checked in. Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`;
+
+const LEGACY_DEFAULT_CHECKIN_MESSAGE =
+  `Welcome to {event}, {name}! You're checked in. Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`;
+
 export function getDefaultMessageConfig(event?: Partial<EventItem>): Required<EventMessageConfig> {
+  const customCheckIn = event?.messageConfig?.checkInMessage?.trim();
   return {
     confirmationMessage:
       event?.messageConfig?.confirmationMessage?.trim() ||
@@ -35,8 +42,9 @@ export function getDefaultMessageConfig(event?: Partial<EventItem>): Required<Ev
       event?.messageConfig?.reminderMessage?.trim() ||
       `Reminder: {event} starts {date} at {time} ({venue}). Present QR token {code} at the gate. Camera: {cameraLink}`,
     checkInMessage:
-      event?.messageConfig?.checkInMessage?.trim() ||
-      `Welcome to {event}, {name}! You're checked in. Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`,
+      customCheckIn && customCheckIn !== LEGACY_DEFAULT_CHECKIN_MESSAGE
+        ? customCheckIn
+        : DEFAULT_CHECKIN_MESSAGE,
     thankYouMessage:
       event?.messageConfig?.thankYouMessage?.trim() ||
       `Thank you for attending {event}, {name}! Relive the moments & turn your 5 camera shots into a collage: {cameraLink}`,
@@ -89,8 +97,12 @@ export function resolveEventMessage(params: {
   includeGuestInCameraUrl?: boolean;
 }): { text: string; cameraUrl: string; eventUrl: string } {
   const defaults = getDefaultMessageConfig(params.event);
+  const incomingTemplate = params.template?.trim();
   const rawTemplate =
-    params.template?.trim() ||
+    (incomingTemplate &&
+    !(params.type === 'checkin' && incomingTemplate === LEGACY_DEFAULT_CHECKIN_MESSAGE)
+      ? incomingTemplate
+      : '') ||
     (params.type === 'checkin'
       ? defaults.checkInMessage
       : params.type === 'reminder'

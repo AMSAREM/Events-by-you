@@ -41,6 +41,9 @@ alter table public.profiles
 alter table public.profiles
   add column if not exists plan_expires_at timestamptz;
 
+alter table public.profiles
+  add column if not exists plan_attendee_capacity integer;
+
 create unique index if not exists idx_profiles_unique_phone
   on public.profiles (phone)
   where phone is not null and phone <> '';
@@ -121,6 +124,7 @@ begin
     new.plan := old.plan;
     new.plan_billing_cycle := old.plan_billing_cycle;
     new.plan_expires_at := old.plan_expires_at;
+    new.plan_attendee_capacity := old.plan_attendee_capacity;
     new.sms_credits := old.sms_credits;
   end if;
   -- Never allow promoting another user row to creator from authenticated updates
@@ -468,6 +472,7 @@ declare
   v_attendee public.attendees;
   v_owner_plan text;
   v_owner_expires timestamptz;
+  v_owner_capacity integer;
   v_effective_cap integer;
 begin
   select * into v_event from public.events where id = p_event_id and status in ('live', 'upcoming') for update;
@@ -479,11 +484,16 @@ begin
     raise exception 'QR_PASS_NOT_PUBLISHED:%', v_event.title;
   end if;
 
-  select plan, plan_expires_at into v_owner_plan, v_owner_expires
+  select plan, plan_expires_at, plan_attendee_capacity
+  into v_owner_plan, v_owner_expires, v_owner_capacity
   from public.profiles
   where id = v_event.organizer_id;
 
-  if coalesce(v_owner_plan, 'Starter') = 'Starter'
+  if v_owner_capacity = -1 then
+    v_effective_cap := greatest(1, coalesce(v_event.capacity, 100));
+  elsif v_owner_capacity is not null and v_owner_capacity > 0 then
+    v_effective_cap := least(greatest(1, coalesce(v_event.capacity, 50)), v_owner_capacity);
+  elsif coalesce(v_owner_plan, 'Starter') = 'Starter'
      or (v_owner_expires is not null and v_owner_expires < now()) then
     v_effective_cap := least(greatest(1, coalesce(v_event.capacity, 50)), 50);
   else

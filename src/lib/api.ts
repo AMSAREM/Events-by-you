@@ -1254,6 +1254,21 @@ export const api = {
         true
       ),
 
+    updateTenantAttendeeCapacity: (
+      userId: string,
+      payload: { delta?: number; capacity?: number | 'unlimited' | 'default' | null }
+    ) =>
+      request<{
+        ok?: boolean;
+        tenant?: BuilderTenantSummary;
+        planAttendeeCapacity?: number | 'unlimited';
+        effectiveMaxAttendeesPerEvent?: number | null;
+      }>(
+        `/api/builder/tenants/${encodeURIComponent(userId)}/attendee-capacity`,
+        { method: 'POST', body: JSON.stringify(payload) },
+        true
+      ),
+
     updateTenantRole: (
       userId: string,
       appRole: Extract<AppRole, 'organizer' | 'gate_staff'>

@@ -22,6 +22,10 @@ import {
   sanitizeCheckInPolicy,
   sanitizeIsoDate,
 } from '../src/lib/eventDates.ts';
+import {
+  resolvePlanAttendeeCapacityValue,
+  toDbPlanAttendeeCapacity,
+} from '../src/lib/subscriptionPlans.ts';
 
 function cleanEnvValue(raw: string | undefined): string {
   if (!raw) return '';
@@ -146,7 +150,21 @@ export function createServiceSupabaseClient(): SupabaseClient | null {
   });
 }
 
-export function mapProfileRow(row: Record<string, unknown>, fallbackEmail = ''): OrganizerProfile {
+export function resolveProfilePlanAttendeeCapacity(
+  row: Record<string, unknown>,
+  fallbackOverride?: unknown
+): number | 'unlimited' | undefined {
+  if (row.plan_attendee_capacity !== undefined && row.plan_attendee_capacity !== null) {
+    return resolvePlanAttendeeCapacityValue(row.plan_attendee_capacity);
+  }
+  return resolvePlanAttendeeCapacityValue(fallbackOverride);
+}
+
+export function mapProfileRow(
+  row: Record<string, unknown>,
+  fallbackEmail = '',
+  fallbackPlanAttendeeCapacity?: unknown
+): OrganizerProfile {
   const name = String(row.name ?? 'Organiser');
   const rawEmail = String(row.email ?? fallbackEmail ?? '');
   const email = isSyntheticPhoneEmail(rawEmail) ? '' : rawEmail;
@@ -165,6 +183,7 @@ export function mapProfileRow(row: Record<string, unknown>, fallbackEmail = ''):
     : rawAppRole === 'gate_staff'
       ? 'gate_staff'
       : 'organizer';
+  const planAttendeeCapacity = resolveProfilePlanAttendeeCapacity(row, fallbackPlanAttendeeCapacity);
   return {
     name,
     firstName: String(row.first_name ?? (name.split(' ')[0] || 'Organiser')),
@@ -180,6 +199,7 @@ export function mapProfileRow(row: Record<string, unknown>, fallbackEmail = ''):
         ? row.plan_billing_cycle
         : undefined,
     planExpiresAt: row.plan_expires_at != null ? String(row.plan_expires_at) : undefined,
+    ...(planAttendeeCapacity !== undefined ? { planAttendeeCapacity } : {}),
     smsCredits: Number(row.sms_credits ?? 0),
     capacityAlertThreshold: Number(row.capacity_alert_threshold ?? 90),
     avatarUrl: row.avatar_url != null ? String(row.avatar_url) : undefined,
@@ -188,6 +208,51 @@ export function mapProfileRow(row: Record<string, unknown>, fallbackEmail = ''):
     twoFactorEnabled: Boolean(row.two_factor_enabled ?? false),
     senderId: row.sender_id != null ? String(row.sender_id) : 'EVENTSAPP',
   };
+}
+
+export async function syncAuthAppMetadataPlanCapacity(
+  svc: SupabaseClient | null,
+  userId: string,
+  capacityValue: number | 'unlimited' | null
+): Promise<void> {
+  if (!svc) return;
+  try {
+    const { data: userRes } = await svc.auth.admin.getUserById(userId);
+    const existingAppMeta =
+      userRes?.user?.app_metadata && typeof userRes.user.app_metadata === 'object'
+        ? { ...userRes.user.app_metadata }
+        : {};
+    const dbVal = toDbPlanAttendeeCapacity(capacityValue);
+    if (dbVal === null) {
+      delete existingAppMeta.plan_attendee_capacity;
+    } else {
+      existingAppMeta.plan_attendee_capacity = dbVal;
+    }
+    await svc.auth.admin.updateUserById(userId, {
+      app_metadata: existingAppMeta,
+    });
+  } catch {
+    // Best-effort metadata persistence fallback
+  }
+}
+
+export async function fetchAuthAppMetadataPlanCapacities(
+  svc: SupabaseClient | null
+): Promise<Map<string, number | 'unlimited'>> {
+  const result = new Map<string, number | 'unlimited'>();
+  if (!svc) return result;
+  try {
+    const { data } = await svc.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    for (const u of data?.users ?? []) {
+      const resolved = resolvePlanAttendeeCapacityValue(u.app_metadata?.plan_attendee_capacity);
+      if (resolved !== undefined) {
+        result.set(u.id, resolved);
+      }
+    }
+  } catch {
+    // Non-fatal fallback
+  }
+  return result;
 }
 
 export function extractEventAttendeeMetaMap(
@@ -538,7 +603,11 @@ export async function ensureProfileRow(
   }
   if (existing) {
     const existingRec = existing as Record<string, unknown>;
-    const mapped = mapProfileRow(existingRec, user.email ?? '');
+    const mapped = mapProfileRow(
+      existingRec,
+      user.email ?? '',
+      user.app_metadata?.plan_attendee_capacity
+    );
     if (resolvedPhone && !mapped.phone) {
       mapped.phone = resolvedPhone;
     }

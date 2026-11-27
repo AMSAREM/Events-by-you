@@ -33,7 +33,70 @@ export interface SubscriptionPlanDefinition {
 
 export const STARTER_MAX_ACTIVE_EVENTS = 1;
 export const STARTER_MAX_ATTENDEES_PER_EVENT = 50;
+export const UNLIMITED_ATTENDEE_CAPACITY_SENTINEL = -1;
+export const MAX_CUSTOM_ATTENDEE_CAPACITY = 1_000_000;
 export const DEFAULT_SHARED_SENDER_ID = 'EVENTSAPP';
+
+export function resolvePlanAttendeeCapacityValue(
+  raw: unknown
+): number | 'unlimited' | undefined {
+  if (raw === undefined || raw === null || raw === '' || raw === 'default') {
+    return undefined;
+  }
+  if (raw === 'unlimited' || Number(raw) === UNLIMITED_ATTENDEE_CAPACITY_SENTINEL) {
+    return 'unlimited';
+  }
+  const num = Number(raw);
+  if (Number.isFinite(num) && num >= 1) {
+    return Math.min(MAX_CUSTOM_ATTENDEE_CAPACITY, Math.round(num));
+  }
+  return undefined;
+}
+
+export function toDbPlanAttendeeCapacity(
+  val: number | 'unlimited' | 'default' | null | undefined
+): number | null {
+  const resolved = resolvePlanAttendeeCapacityValue(val);
+  if (resolved === 'unlimited') return UNLIMITED_ATTENDEE_CAPACITY_SENTINEL;
+  if (typeof resolved === 'number') return resolved;
+  return null;
+}
+
+export function formatPlanAttendeeCapacityLabel(
+  profile?: Pick<OrganizerProfile, 'plan' | 'planExpiresAt' | 'planAttendeeCapacity'> | null
+): string {
+  const effectivePlan = getEffectivePlan(profile);
+  const override = resolvePlanAttendeeCapacityValue(profile?.planAttendeeCapacity);
+  if (override === 'unlimited') {
+    return 'Unlimited (Creator unlocked)';
+  }
+  if (typeof override === 'number') {
+    return `${override.toLocaleString()} / event`;
+  }
+  const baseDef = getPlanDefinition(effectivePlan);
+  return baseDef.entitlements.maxAttendeesPerEvent === null
+    ? 'Unlimited / event'
+    : `${baseDef.entitlements.maxAttendeesPerEvent.toLocaleString()} / event`;
+}
+
+export function computeNextPlanAttendeeCapacity(
+  profile: Pick<OrganizerProfile, 'plan' | 'planExpiresAt' | 'planAttendeeCapacity'>,
+  delta: number
+): number {
+  const cleanDelta = Math.round(Number(delta));
+  if (!Number.isFinite(cleanDelta) || cleanDelta === 0) {
+    throw new Error('Provide a non-zero attendee capacity delta.');
+  }
+  const ent = getPlanEntitlements(profile);
+  if (ent.maxAttendeesPerEvent === null) {
+    if (cleanDelta < 0) {
+      throw new Error('Organiser plan is currently unlimited. Set a numeric capacity first.');
+    }
+    // Adding capacity starting from standard event baseline (or explicit seats)
+    return Math.min(MAX_CUSTOM_ATTENDEE_CAPACITY, Math.max(1, cleanDelta));
+  }
+  return Math.max(1, Math.min(MAX_CUSTOM_ATTENDEE_CAPACITY, ent.maxAttendeesPerEvent + cleanDelta));
+}
 
 export const SUBSCRIPTION_PLAN_CATALOG: readonly SubscriptionPlanDefinition[] = [
   {
@@ -162,7 +225,7 @@ export function getEffectivePlan(
 export function getPlanEntitlements(
   planOrProfile?:
     | SubscriptionPlanName
-    | Pick<OrganizerProfile, 'plan' | 'planExpiresAt'>
+    | Pick<OrganizerProfile, 'plan' | 'planExpiresAt' | 'planAttendeeCapacity'>
     | null
 ): PlanEntitlements {
   if (!planOrProfile) return SUBSCRIPTION_PLAN_CATALOG[0].entitlements;
@@ -170,7 +233,17 @@ export function getPlanEntitlements(
     typeof planOrProfile === 'string'
       ? getPlanDefinition(planOrProfile).name
       : getEffectivePlan(planOrProfile);
-  return getPlanDefinition(planName).entitlements;
+  const base = getPlanDefinition(planName).entitlements;
+  if (typeof planOrProfile === 'object') {
+    const override = resolvePlanAttendeeCapacityValue(planOrProfile.planAttendeeCapacity);
+    if (override === 'unlimited') {
+      return { ...base, maxAttendeesPerEvent: null };
+    }
+    if (typeof override === 'number') {
+      return { ...base, maxAttendeesPerEvent: override };
+    }
+  }
+  return base;
 }
 
 export interface AuthoritativeSubscriptionQuote {
@@ -228,7 +301,10 @@ export function isActiveEventStatus(status?: string): boolean {
 
 export function getEffectiveEventCapacity(
   eventCapacity: number,
-  ownerPlanOrProfile?: SubscriptionPlanName | Pick<OrganizerProfile, 'plan' | 'planExpiresAt'> | null
+  ownerPlanOrProfile?:
+    | SubscriptionPlanName
+    | Pick<OrganizerProfile, 'plan' | 'planExpiresAt' | 'planAttendeeCapacity'>
+    | null
 ): number {
   const ent = getPlanEntitlements(ownerPlanOrProfile);
   const rawCap = Math.max(1, Number(eventCapacity) || 50);
