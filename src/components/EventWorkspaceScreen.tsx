@@ -53,14 +53,21 @@ import {
   normalizePhoneE164,
 } from '../data/initialData';
 import {
+  compareScheduleBlocksChronological,
   formatEventDateSpan,
   formatEventDurationBadge,
+  formatIsoDateShort,
+  formatScheduleBlockDateBadge,
   getAttendeeCheckedInDaysCount,
   getEventCheckInPolicy,
+  getEventDateSlots,
   getEventDayOptions,
+  getScheduleBlockDayFromIso,
   getTodayIsoDate,
   isAttendeeCheckedInForDate,
   isMultiDayEvent,
+  resolveIsoDateForScheduleDay,
+  resolveScheduleBlockDate,
   sanitizeIsoDate,
 } from '../lib/eventDates';
 import {
@@ -180,6 +187,10 @@ interface EventWorkspaceScreenProps {
   onDeletePoll?: (eventId: string, pollId: string) => Promise<void>;
   onToggleScheduleBlock: (blockId: string) => void;
   onAddScheduleBlock: (block: ScheduleBlock) => void;
+  onUpdateScheduleBlock?: (
+    blockId: string,
+    patch: Partial<ScheduleBlock>
+  ) => Promise<void> | void;
   onDeleteScheduleBlock?: (blockId: string) => void;
   onToggleQrPassPublished?: (eventId: string, published: boolean) => Promise<void> | void;
   onNavigateSettings: () => void;
@@ -218,6 +229,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   onDeletePoll,
   onToggleScheduleBlock,
   onAddScheduleBlock,
+  onUpdateScheduleBlock,
   onDeleteScheduleBlock,
   onToggleQrPassPublished,
   onNavigateSettings,
@@ -254,9 +266,19 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
 
   // Add Program Block & Multi-Day Dates inline state
   const [programDayFilter, setProgramDayFilter] = useState<'all' | ScheduleBlock['day']>('all');
+  const [programDateFilter, setProgramDateFilter] = useState<'all' | string>('all');
   const [addingBlock, setAddingBlock] = useState(false);
   const [newBlockDay, setNewBlockDay] = useState<ScheduleBlock['day']>(() =>
     isMultiDayEvent(event) ? 'Day 1' : 'Sat'
+  );
+  const [newBlockDate, setNewBlockDate] = useState<string>(
+    () =>
+      resolveIsoDateForScheduleDay(
+        isMultiDayEvent(event) ? 'Day 1' : 'Sat',
+        event
+      ) ||
+      sanitizeIsoDate(event.isoDate) ||
+      getTodayIsoDate()
   );
   const [newBlockTime, setNewBlockTime] = useState('04:00 - 05:00');
   const [newBlockTitle, setNewBlockTitle] = useState('');
@@ -309,8 +331,11 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     });
     setCircleFilter('all');
     setProgramDayFilter('all');
-    setNewBlockDay(isMultiDayEvent(event) ? 'Day 1' : 'Sat');
+    setProgramDateFilter('all');
+    const defaultDay = isMultiDayEvent(event) ? 'Day 1' : 'Sat';
+    setNewBlockDay(defaultDay);
     const nextStart = sanitizeIsoDate(event.isoDate) ?? getTodayIsoDate();
+    setNewBlockDate(resolveIsoDateForScheduleDay(defaultDay, event) || nextStart);
     setStartIsoDraft(nextStart);
     setMultiDayDraft(isMultiDayEvent(event));
     const existingEnd = sanitizeIsoDate(event.endIsoDate);
@@ -463,11 +488,32 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const eventDurationBadge = formatEventDurationBadge(event);
   const eventCheckInPolicy = getEventCheckInPolicy(event);
   const eventDayOptions = useMemo(() => getEventDayOptions(event), [event]);
+  const eventDateSlots = useMemo(() => getEventDateSlots(event), [event]);
 
   const eventBlocks = useMemo(
-    () => scheduleBlocks.filter((b) => b.eventId === event.id),
-    [scheduleBlocks, event.id]
+    () =>
+      scheduleBlocks
+        .filter((b) => b.eventId === event.id)
+        .sort((a, b) => compareScheduleBlocksChronological(a, b, event)),
+    [scheduleBlocks, event]
   );
+
+  const activeProgramDateSlots = useMemo(() => {
+    const map = new Map<string, { isoDate: string; label: string }>();
+    for (const slot of eventDateSlots) {
+      map.set(slot.isoDate, { isoDate: slot.isoDate, label: slot.fullLabel });
+    }
+    for (const blk of eventBlocks) {
+      const resolved = resolveScheduleBlockDate(blk, event);
+      if (resolved && !map.has(resolved)) {
+        map.set(resolved, {
+          isoDate: resolved,
+          label: formatIsoDateShort(resolved, true),
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.isoDate.localeCompare(b.isoDate));
+  }, [eventDateSlots, eventBlocks, event]);
 
   const activeProgramDays = useMemo(() => {
     const seen = new Set<ScheduleBlock['day']>();
@@ -489,10 +535,13 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
 
   const visibleProgramBlocks = useMemo(
     () =>
-      programDayFilter === 'all'
-        ? eventBlocks
-        : eventBlocks.filter((b) => b.day === programDayFilter),
-    [eventBlocks, programDayFilter]
+      eventBlocks.filter((b) => {
+        const matchesDay = programDayFilter === 'all' || b.day === programDayFilter;
+        const resolved = resolveScheduleBlockDate(b, event);
+        const matchesDate = programDateFilter === 'all' || resolved === programDateFilter;
+        return matchesDay && matchesDate;
+      }),
+    [eventBlocks, programDayFilter, programDateFilter, event]
   );
 
   const eventAttendees = useMemo(
@@ -712,6 +761,11 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const handleAddBlockSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBlockTitle.trim()) return;
+    const chosenDate =
+      sanitizeIsoDate(newBlockDate) || resolveIsoDateForScheduleDay(newBlockDay, event);
+    const chosenDay = chosenDate
+      ? getScheduleBlockDayFromIso(chosenDate, event, newBlockDay)
+      : newBlockDay;
     try {
       await Promise.resolve(
         onAddScheduleBlock({
@@ -723,7 +777,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           stage: newBlockStage.trim() || 'Main Hall',
           lead: newBlockLead.trim() || profile.name,
           completed: false,
-          day: newBlockDay,
+          day: chosenDay,
+          ...(chosenDate ? { date: chosenDate } : {}),
         })
       );
       setNewBlockTitle('');
@@ -1505,18 +1560,39 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     placeholder="Session title (e.g. Closing Fireside Chat)"
                     className="sm:col-span-2 h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] placeholder:text-[#71717A] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
                   />
-                  <select
-                    value={newBlockDay}
-                    onChange={(e) => setNewBlockDay(e.target.value as ScheduleBlock['day'])}
-                    aria-label="Program day"
-                    className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
-                  >
-                    {eventDayOptions.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="grid grid-cols-2 gap-2">
+                    <select
+                      value={newBlockDay}
+                      onChange={(e) => {
+                        const chosenDay = e.target.value as ScheduleBlock['day'];
+                        setNewBlockDay(chosenDay);
+                        const mapped = resolveIsoDateForScheduleDay(chosenDay, event);
+                        if (mapped) setNewBlockDate(mapped);
+                      }}
+                      aria-label="Program day"
+                      className="h-10 px-3 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                    >
+                      {eventDayOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="date"
+                      value={newBlockDate}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setNewBlockDate(val);
+                        const clean = sanitizeIsoDate(val);
+                        if (clean) {
+                          setNewBlockDay(getScheduleBlockDayFromIso(clean, event, newBlockDay));
+                        }
+                      }}
+                      aria-label="Specific calendar date"
+                      className="h-10 px-3 rounded-full bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                    />
+                  </div>
                   <input
                     type="text"
                     value={newBlockTime}
@@ -1547,36 +1623,80 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 </form>
               )}
 
-              {activeProgramDays.length > 1 && (
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-                  <button
-                    type="button"
-                    onClick={() => setProgramDayFilter('all')}
-                    className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
-                      programDayFilter === 'all'
-                        ? 'bg-[#0B0B0B] text-white'
-                        : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
-                    }`}
-                  >
-                    All Days ({eventBlocks.length})
-                  </button>
-                  {activeProgramDays.map((day) => {
-                    const cnt = eventBlocks.filter((b) => b.day === day).length;
-                    return (
+              {(activeProgramDateSlots.length > 1 || activeProgramDays.length > 1) && (
+                <div className="space-y-1.5">
+                  {activeProgramDateSlots.length > 1 && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
                       <button
-                        key={day}
                         type="button"
-                        onClick={() => setProgramDayFilter(day)}
+                        onClick={() => {
+                          setProgramDateFilter('all');
+                          setProgramDayFilter('all');
+                        }}
                         className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
-                          programDayFilter === day
+                          programDateFilter === 'all' && programDayFilter === 'all'
                             ? 'bg-[#0B0B0B] text-white'
                             : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
                         }`}
                       >
-                        {day} ({cnt})
+                        All Dates ({eventBlocks.length})
                       </button>
-                    );
-                  })}
+                      {activeProgramDateSlots.map((slot) => {
+                        const cnt = eventBlocks.filter(
+                          (b) => resolveScheduleBlockDate(b, event) === slot.isoDate
+                        ).length;
+                        return (
+                          <button
+                            key={slot.isoDate}
+                            type="button"
+                            onClick={() => {
+                              setProgramDateFilter(slot.isoDate);
+                              setProgramDayFilter('all');
+                            }}
+                            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                              programDateFilter === slot.isoDate
+                                ? 'bg-[#0B0B0B] text-white'
+                                : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
+                            }`}
+                          >
+                            {slot.label} ({cnt})
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {activeProgramDays.length > 1 && activeProgramDateSlots.length <= 1 && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                      <button
+                        type="button"
+                        onClick={() => setProgramDayFilter('all')}
+                        className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                          programDayFilter === 'all'
+                            ? 'bg-[#0B0B0B] text-white'
+                            : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
+                        }`}
+                      >
+                        All Days ({eventBlocks.length})
+                      </button>
+                      {activeProgramDays.map((day) => {
+                        const cnt = eventBlocks.filter((b) => b.day === day).length;
+                        return (
+                          <button
+                            key={day}
+                            type="button"
+                            onClick={() => setProgramDayFilter(day)}
+                            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                              programDayFilter === day
+                                ? 'bg-[#0B0B0B] text-white'
+                                : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
+                            }`}
+                          >
+                            {day} ({cnt})
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1584,76 +1704,104 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
               <div className="flex flex-col gap-2.5 mt-1">
                 {visibleProgramBlocks.length === 0 ? (
                   <div className="p-6 rounded-2xl bg-white text-center text-xs text-[#71717A]">
-                    No sessions scheduled for this day filter yet. Click &ldquo;Add Item&rdquo; to
+                    No sessions scheduled for this date filter yet. Click &ldquo;Add Item&rdquo; to
                     create a program block.
                   </div>
                 ) : (
-                  visibleProgramBlocks.map((block) => (
-                    <div
-                      key={block.id}
-                      className="group flex flex-col md:flex-row md:items-center justify-between p-4 rounded-2xl bg-white hover:shadow-md transition-all gap-3"
-                    >
-                      <div className="flex items-start md:items-center gap-3 min-w-0">
-                        <GripVertical className="w-4.5 h-4.5 text-[#71717A] shrink-0 mt-1 md:mt-0" />
-                        <span className="px-2.5 py-1 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold shrink-0">
-                          {block.day}
-                        </span>
-                        <div className="px-3 py-1 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] shrink-0 tabular-nums font-mono">
-                          {block.time}
-                        </div>
-                        <div className="flex flex-col min-w-0">
-                          <span className="text-sm sm:text-base font-semibold text-[#0B0B0B]">
-                            {block.title}
+                  visibleProgramBlocks.map((block) => {
+                    const resolvedBlockIso = resolveScheduleBlockDate(block, event) || '';
+                    const dateBadge = formatScheduleBlockDateBadge(block, event);
+                    return (
+                      <div
+                        key={block.id}
+                        className="group flex flex-col md:flex-row md:items-center justify-between p-4 rounded-2xl bg-white hover:shadow-md transition-all gap-3"
+                      >
+                        <div className="flex items-start md:items-center gap-3 min-w-0">
+                          <GripVertical className="w-4.5 h-4.5 text-[#71717A] shrink-0 mt-1 md:mt-0" />
+                          <span className="px-2.5 py-1 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold shrink-0 whitespace-nowrap">
+                            {dateBadge}
                           </span>
-                          <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                            <span className="text-[11px] text-[#0B0B0B] font-semibold">
-                              {block.lead}
+                          <div className="px-3 py-1 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] shrink-0 tabular-nums font-mono">
+                            {block.time}
+                          </div>
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-sm sm:text-base font-semibold text-[#0B0B0B]">
+                              {block.title}
                             </span>
-                            <span className="text-[#71717A] text-[10px]">•</span>
-                            <span className="text-[11px] text-[#71717A]">{block.stage}</span>
+                            <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                              <span className="text-[11px] text-[#0B0B0B] font-semibold">
+                                {block.lead}
+                              </span>
+                              <span className="text-[#71717A] text-[10px]">•</span>
+                              <span className="text-[11px] text-[#71717A]">{block.stage}</span>
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="flex items-center justify-end gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void Promise.resolve(onToggleScheduleBlock(block.id)).catch((err) =>
-                              triggerToast(
-                                err instanceof Error ? err.message : 'Unable to update schedule block.'
-                              )
-                            );
-                          }}
-                          title={block.completed ? 'Mark upcoming' : 'Mark complete'}
-                          className={`px-3 py-1.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 transition-colors ${
-                            block.completed
-                              ? 'bg-[#0B0B0B] text-white'
-                              : 'bg-[#F5F5F7] text-[#0B0B0B] hover:bg-[#E8E8EA]'
-                          }`}
-                        >
-                          <Check className="w-3 h-3" />
-                          <span>{block.completed ? 'Ready' : 'Confirm'}</span>
-                        </button>
-                        {onDeleteScheduleBlock && (
+                        <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+                          {onUpdateScheduleBlock && (
+                            <input
+                              type="date"
+                              value={resolvedBlockIso}
+                              aria-label={`Assign date for ${block.title}`}
+                              onChange={(e) => {
+                                const clean = sanitizeIsoDate(e.target.value);
+                                if (!clean) return;
+                                void Promise.resolve(
+                                  onUpdateScheduleBlock(block.id, {
+                                    date: clean,
+                                    day: getScheduleBlockDayFromIso(clean, event, block.day),
+                                  })
+                                ).catch((err) =>
+                                  triggerToast(
+                                    err instanceof Error
+                                      ? err.message
+                                      : 'Unable to update session date.'
+                                  )
+                                );
+                              }}
+                              className="h-8 px-2.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[11px] font-mono text-[#0B0B0B] focus:bg-white focus:border-[#0B0B0B] focus:outline-none"
+                            />
+                          )}
                           <button
                             type="button"
                             onClick={() => {
-                              void Promise.resolve(onDeleteScheduleBlock(block.id)).catch((err) =>
+                              void Promise.resolve(onToggleScheduleBlock(block.id)).catch((err) =>
                                 triggerToast(
-                                  err instanceof Error ? err.message : 'Unable to delete block.'
+                                  err instanceof Error ? err.message : 'Unable to update schedule block.'
                                 )
                               );
                             }}
-                            aria-label="Delete session"
-                            className="w-8 h-8 rounded-full bg-[#F5F5F7] flex items-center justify-center hover:bg-[#EF4444]/10 hover:text-[#EF4444] text-[#71717A] transition-colors"
+                            title={block.completed ? 'Mark upcoming' : 'Mark complete'}
+                            className={`px-3 py-1.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 transition-colors ${
+                              block.completed
+                                ? 'bg-[#0B0B0B] text-white'
+                                : 'bg-[#F5F5F7] text-[#0B0B0B] hover:bg-[#E8E8EA]'
+                            }`}
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Check className="w-3 h-3" />
+                            <span>{block.completed ? 'Ready' : 'Confirm'}</span>
                           </button>
-                        )}
+                          {onDeleteScheduleBlock && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void Promise.resolve(onDeleteScheduleBlock(block.id)).catch((err) =>
+                                  triggerToast(
+                                    err instanceof Error ? err.message : 'Unable to delete block.'
+                                  )
+                                );
+                              }}
+                              aria-label="Delete session"
+                              className="w-8 h-8 rounded-full bg-[#F5F5F7] flex items-center justify-center hover:bg-[#EF4444]/10 hover:text-[#EF4444] text-[#71717A] transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </section>

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { platformRuntime } from './memoryStore.ts';
 import { POWERED_BY_LINE, stripTrailingPoweredByLine } from '../src/lib/eventMessages.ts';
+import { formatIsoDateShort } from '../src/lib/eventDates.ts';
 import type { EmailDeliverabilityDiagnostics } from '../src/types/events.ts';
 
 export const DEFAULT_APP_URL = (
@@ -317,7 +318,6 @@ async function sendResendRequest(
     html: params.html,
     headers: {
       'X-Entity-Ref-ID': crypto.randomUUID(),
-      'Auto-Submitted': 'auto-generated',
     },
   };
 
@@ -506,10 +506,6 @@ export async function sendAuthOtpEmail(params: {
           ? 'Enter this 6-digit verification code (also sent to your mobile phone via SMS) to sign in to Events By You.'
           : 'Enter this 6-digit verification code to sign in to Events By You.';
 
-  const preheaderText = params.code
-    ? `Your Events By You 6-digit code is ${params.code}. It expires in 10 minutes.`
-    : heading;
-
   const codeBlockHtml = params.code
     ? `
       <div style="margin:24px 0;padding:20px;background:#F5F5F7;border-radius:16px;text-align:center;">
@@ -557,7 +553,6 @@ export async function sendAuthOtpEmail(params: {
     <title>${escapeHtml(subject)}</title>
   </head>
   <body style="margin:0;padding:32px 16px;background:#F5F5F7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0B0B0B;">
-    <span style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">${escapeHtml(preheaderText)}</span>
     <div style="max-width:520px;margin:0 auto;background:#FFFFFF;border-radius:24px;padding:32px;border:1px solid #E5E5EA;">
       <div style="margin-bottom:20px;">
         <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#7BF66E;color:#0D3822;border-radius:8px;font-weight:800;font-size:13px;vertical-align:middle;">E</span>
@@ -570,9 +565,6 @@ export async function sendAuthOtpEmail(params: {
       ${actionButtonHtml}
       <p style="margin:24px 0 0 0;padding-top:16px;border-top:1px solid #E5E5EA;font-size:12px;line-height:1.5;color:#71717A;">
         ${footerLine}
-      </p>
-      <p style="margin:8px 0 0 0;font-size:11px;line-height:1.4;color:#A1A1AA;">
-        ${escapeHtml(POWERED_BY_LINE)}
       </p>
     </div>
   </body>
@@ -587,7 +579,6 @@ export async function sendAuthOtpEmail(params: {
       params.actionLink && includeBrandUrl ? `\nDirect link: ${params.actionLink}` : '',
       `\nIf you did not request this code, please ignore this email.`,
       includeBrandUrl ? `Events By You · ${DEFAULT_APP_URL}` : 'Events By You',
-      POWERED_BY_LINE,
     ].filter(Boolean);
 
     return { html, text: textParts.join('\n') };
@@ -611,21 +602,34 @@ export interface EmailScheduleItem {
   title: string;
   stage?: string;
   lead?: string;
+  date?: string;
+  day?: string;
+}
+
+function formatEmailScheduleDatePrefix(blk: EmailScheduleItem): string {
+  const shortDate = blk.date ? formatIsoDateShort(blk.date, true) : '';
+  if (shortDate && blk.day && /^Day\s+\d+$/i.test(blk.day)) {
+    return `${blk.day} · ${shortDate}`;
+  }
+  if (shortDate) return shortDate;
+  return blk.day?.trim() || '';
 }
 
 function renderEmailScheduleHtml(
   scheduleBlocks?: EmailScheduleItem[],
   eventUrl?: string
 ): string {
-  const items = Array.isArray(scheduleBlocks) ? scheduleBlocks.slice(0, 12) : [];
+  const items = Array.isArray(scheduleBlocks) ? scheduleBlocks.slice(0, 16) : [];
   if (items.length === 0 && !eventUrl) return '';
 
   const rowsHtml = items
-    .map(
-      (blk) => `
+    .map((blk) => {
+      const datePrefix = formatEmailScheduleDatePrefix(blk);
+      const timeHeader = datePrefix ? `${datePrefix} · ${blk.time}` : blk.time;
+      return `
       <div style="padding:10px 12px;background:#FFFFFF;border:1px solid #E5E5EA;border-radius:12px;margin-bottom:8px;">
         <div style="font-size:11px;font-weight:700;color:#0B0B0B;font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;">
-          ${escapeHtml(blk.time)}
+          ${escapeHtml(timeHeader)}
         </div>
         <div style="font-size:13px;font-weight:700;color:#0B0B0B;margin-top:2px;">
           ${escapeHtml(blk.title)}
@@ -637,8 +641,8 @@ function renderEmailScheduleHtml(
               )}</div>`
             : ''
         }
-      </div>`
-    )
+      </div>`;
+    })
     .join('');
 
   const linkHtml = eventUrl
@@ -664,12 +668,14 @@ function renderEmailScheduleText(
   eventUrl?: string
 ): string[] {
   const lines: string[] = [];
-  const items = Array.isArray(scheduleBlocks) ? scheduleBlocks.slice(0, 12) : [];
+  const items = Array.isArray(scheduleBlocks) ? scheduleBlocks.slice(0, 16) : [];
   if (items.length > 0) {
     lines.push('', 'Program Schedule & Run of Show:');
     for (const blk of items) {
+      const datePrefix = formatEmailScheduleDatePrefix(blk);
+      const timeLabel = datePrefix ? `${datePrefix} · ${blk.time}` : blk.time;
       const meta = [blk.stage, blk.lead].filter(Boolean).join(' · ');
-      lines.push(`- ${blk.time}: ${blk.title}${meta ? ` (${meta})` : ''}`);
+      lines.push(`- ${timeLabel}: ${blk.title}${meta ? ` (${meta})` : ''}`);
     }
   }
   if (eventUrl) {
@@ -696,7 +702,6 @@ export async function sendEventPassEmail(params: {
   scheduleBlocks?: EmailScheduleItem[];
 }): Promise<SendResendEmailResult> {
   const subject = `Your pass for ${params.eventTitle} (${params.ticketCode})`;
-  const preheaderText = `${params.tier} Pass ${params.ticketCode} for ${params.eventTitle} · ${params.eventDate}`;
 
   const cleanCustomMessage = stripTrailingPoweredByLine(params.customMessage);
   const renderContent = (effectiveFrom: string) => {
@@ -735,7 +740,6 @@ export async function sendEventPassEmail(params: {
     <title>${escapeHtml(subject)}</title>
   </head>
   <body style="margin:0;padding:32px 16px;background:#F5F5F7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0B0B0B;">
-    <span style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">${escapeHtml(preheaderText)}</span>
     <div style="max-width:540px;margin:0 auto;background:#FFFFFF;border-radius:24px;padding:32px;border:1px solid #E5E5EA;">
       <div style="margin-bottom:20px;">
         <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#7BF66E;color:#0D3822;border-radius:8px;font-weight:800;font-size:13px;vertical-align:middle;">E</span>
@@ -765,9 +769,11 @@ export async function sendEventPassEmail(params: {
       <p style="margin:20px 0 0 0;padding-top:16px;border-top:1px solid #E5E5EA;font-size:12px;line-height:1.5;color:#71717A;">
         Need help? Reply directly to reach ${escapeHtml(params.organizerName)}${poweredByHtml}.
       </p>
-      <p style="margin:8px 0 0 0;font-size:11px;line-height:1.4;color:#A1A1AA;">
-        ${escapeHtml(POWERED_BY_LINE)}
-      </p>
+      ${
+        includeBrandUrl
+          ? `<p style="margin:8px 0 0 0;font-size:11px;line-height:1.4;color:#A1A1AA;">${escapeHtml(POWERED_BY_LINE)}</p>`
+          : ''
+      }
     </div>
   </body>
 </html>`.trim();
@@ -785,7 +791,7 @@ export async function sendEventPassEmail(params: {
       params.cameraUrl ? `\nDisposable Camera (5 photos + collage): ${params.cameraUrl}` : '',
       ``,
       includeBrandUrl ? `Events By You · ${DEFAULT_APP_URL}` : 'Events By You',
-      POWERED_BY_LINE,
+      includeBrandUrl ? POWERED_BY_LINE : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -823,7 +829,6 @@ export async function sendCheckInWelcomeEmail(params: {
   replyTo?: string;
 }): Promise<SendResendEmailResult> {
   const subject = `Checked In: Welcome to ${params.eventTitle}`;
-  const preheaderText = `You're checked in! View the program schedule and open the shared disposable camera for ${params.eventTitle}.`;
 
   const cleanWelcomeMessage = stripTrailingPoweredByLine(params.welcomeMessage);
   const renderContent = (effectiveFrom: string) => {
@@ -847,7 +852,6 @@ export async function sendCheckInWelcomeEmail(params: {
     <title>${escapeHtml(subject)}</title>
   </head>
   <body style="margin:0;padding:32px 16px;background:#F5F5F7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0B0B0B;">
-    <span style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">${escapeHtml(preheaderText)}</span>
     <div style="max-width:540px;margin:0 auto;background:#FFFFFF;border-radius:24px;padding:32px;border:1px solid #E5E5EA;">
       <div style="margin-bottom:20px;">
         <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#7BF66E;color:#0D3822;border-radius:8px;font-weight:800;font-size:13px;vertical-align:middle;">E</span>
@@ -878,9 +882,11 @@ export async function sendCheckInWelcomeEmail(params: {
       <p style="margin:20px 0 0 0;padding-top:16px;border-top:1px solid #E5E5EA;font-size:12px;line-height:1.5;color:#71717A;">
         Hosted by ${escapeHtml(params.organizerName)}${poweredByHtml}.
       </p>
-      <p style="margin:8px 0 0 0;font-size:11px;line-height:1.4;color:#A1A1AA;">
-        ${escapeHtml(POWERED_BY_LINE)}
-      </p>
+      ${
+        includeBrandUrl
+          ? `<p style="margin:8px 0 0 0;font-size:11px;line-height:1.4;color:#A1A1AA;">${escapeHtml(POWERED_BY_LINE)}</p>`
+          : ''
+      }
     </div>
   </body>
 </html>`.trim();
@@ -895,8 +901,10 @@ export async function sendCheckInWelcomeEmail(params: {
       `Pass Code: ${params.ticketCode}`,
       `Venue: ${params.eventVenue}, ${params.eventCity} · ${params.eventDate}`,
       includeBrandUrl ? `Events By You · ${DEFAULT_APP_URL}` : 'Events By You',
-      POWERED_BY_LINE,
-    ].join('\n');
+      includeBrandUrl ? POWERED_BY_LINE : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     return { html, text };
   };

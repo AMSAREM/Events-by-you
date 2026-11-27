@@ -224,15 +224,44 @@ export function extractEventShotShootersMap(rawExtraConfig: unknown): Record<str
   return map as Record<string, string>;
 }
 
+export function extractEventScheduleDatesMap(
+  rawExtraConfig: unknown
+): Record<string, { date?: string; day?: string }> {
+  if (!rawExtraConfig || typeof rawExtraConfig !== 'object') return {};
+  const map = (rawExtraConfig as Record<string, unknown>).__scheduleDates;
+  if (!map || typeof map !== 'object') return {};
+  const result: Record<string, { date?: string; day?: string }> = {};
+  for (const [blockId, val] of Object.entries(map as Record<string, unknown>)) {
+    if (typeof val === 'string') {
+      const iso = sanitizeIsoDate(val);
+      if (iso) result[blockId] = { date: iso };
+    } else if (val && typeof val === 'object') {
+      const rec = val as Record<string, unknown>;
+      const iso = sanitizeIsoDate(typeof rec.date === 'string' ? rec.date : undefined);
+      const day = typeof rec.day === 'string' && rec.day.trim() ? rec.day.trim() : undefined;
+      if (iso || day) {
+        result[blockId] = { ...(iso ? { date: iso } : {}), ...(day ? { day } : {}) };
+      }
+    }
+  }
+  return result;
+}
+
 export function mapPlanningRow(
   row: Record<string, unknown>,
-  fallbackCategory = 'Events'
+  fallbackCategory = 'Events',
+  eventDateContext?: Pick<EventItem, 'isoDate' | 'endIsoDate'> | null
 ): EventPlanningConfig {
   return sanitizeEventPlanningConfig(
     {
       appliedTemplateCategory: row.applied_template_category ?? fallbackCategory,
       currency: row.currency === 'USD' ? 'USD' : 'GHS',
       targetBudget: Number(row.target_budget ?? 0),
+      eventDates: Array.isArray(row.event_dates) ? row.event_dates : undefined,
+      dayScheduleNotes:
+        row.day_schedule_notes && typeof row.day_schedule_notes === 'object'
+          ? row.day_schedule_notes
+          : undefined,
       tasks: Array.isArray(row.tasks) ? row.tasks : [],
       budgetItems: Array.isArray(row.budget_items) ? row.budget_items : [],
       vendors: Array.isArray(row.vendors) ? row.vendors : [],
@@ -242,7 +271,8 @@ export function mapPlanningRow(
           ? row.updated_at
           : undefined,
     },
-    fallbackCategory
+    fallbackCategory,
+    eventDateContext
   );
 }
 
@@ -263,15 +293,31 @@ export function mapEventRow(
     delete rawExtraObj.__messageConfig;
     delete rawExtraObj.__attendeeMeta;
     delete rawExtraObj.__shotShooters;
+    delete rawExtraObj.__scheduleDates;
   }
 
+  const startIso = String(row.iso_date);
+  const rawEndIso = sanitizeIsoDate(
+    row.end_iso_date != null
+      ? String(row.end_iso_date)
+      : typeof rawExtraObj?.endIsoDate === 'string'
+        ? rawExtraObj.endIsoDate
+        : undefined
+  );
+  const resolvedEndIso = rawEndIso && rawEndIso > startIso ? rawEndIso : undefined;
+  const dateContext = { isoDate: startIso, endIsoDate: resolvedEndIso };
+  const resolvedCheckInPolicy = sanitizeCheckInPolicy(
+    row.check_in_policy ?? rawExtraObj?.checkInPolicy
+  );
+
   const resolvedPlanning =
-    planningOverride ??
-    (row.planning_config && typeof row.planning_config === 'object'
-      ? sanitizeEventPlanningConfig(row.planning_config, String(row.category ?? 'Events'))
-      : rawExtraObj?.planningConfig && typeof rawExtraObj.planningConfig === 'object'
-        ? sanitizeEventPlanningConfig(rawExtraObj.planningConfig, String(row.category ?? 'Events'))
-        : undefined);
+    planningOverride
+      ? sanitizeEventPlanningConfig(planningOverride, String(row.category ?? 'Events'), dateContext)
+      : row.planning_config && typeof row.planning_config === 'object'
+        ? sanitizeEventPlanningConfig(row.planning_config, String(row.category ?? 'Events'), dateContext)
+        : rawExtraObj?.planningConfig && typeof rawExtraObj.planningConfig === 'object'
+          ? sanitizeEventPlanningConfig(rawExtraObj.planningConfig, String(row.category ?? 'Events'), dateContext)
+          : undefined;
 
   const mergedExtra =
     rawExtraObj || resolvedPlanning
@@ -283,18 +329,6 @@ export function mapEventRow(
 
   const resolvedBrandColor = normalizeHexColor(
     row.brand_color != null ? String(row.brand_color) : mergedExtra?.brandColor
-  );
-  const startIso = String(row.iso_date);
-  const rawEndIso = sanitizeIsoDate(
-    row.end_iso_date != null
-      ? String(row.end_iso_date)
-      : typeof rawExtraObj?.endIsoDate === 'string'
-        ? rawExtraObj.endIsoDate
-        : undefined
-  );
-  const resolvedEndIso = rawEndIso && rawEndIso > startIso ? rawEndIso : undefined;
-  const resolvedCheckInPolicy = sanitizeCheckInPolicy(
-    row.check_in_policy ?? rawExtraObj?.checkInPolicy
   );
 
   return {
@@ -371,7 +405,13 @@ export function mapAttendeeRow(row: Record<string, unknown>): Attendee {
   };
 }
 
-export function mapScheduleRow(row: Record<string, unknown>): ScheduleBlock {
+export function mapScheduleRow(
+  row: Record<string, unknown>,
+  fallbackMeta?: { date?: string; day?: string }
+): ScheduleBlock {
+  const date = sanitizeIsoDate(
+    typeof row.date === 'string' ? row.date : fallbackMeta?.date
+  );
   return {
     id: String(row.id),
     eventId: String(row.event_id),
@@ -381,7 +421,8 @@ export function mapScheduleRow(row: Record<string, unknown>): ScheduleBlock {
     stage: String(row.stage),
     lead: String(row.lead),
     completed: Boolean(row.completed),
-    day: normalizeScheduleDay(row.day, 'Sat'),
+    day: normalizeScheduleDay(fallbackMeta?.day ?? row.day, 'Sat'),
+    ...(date ? { date } : {}),
   };
 }
 

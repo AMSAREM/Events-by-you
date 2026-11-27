@@ -69,6 +69,7 @@ export interface ScheduleBlock {
   stage: string;
   lead: string;
   completed: boolean;
+  date?: string; // Specific ISO calendar date YYYY-MM-DD
   day:
     | 'Mon'
     | 'Tue'
@@ -179,6 +180,7 @@ export interface PlanningTask {
   phase: PlanningTaskPhase;
   priority: PlanningPriority;
   dueLabel: string;
+  dueDate?: string; // Specific ISO calendar date YYYY-MM-DD
   assignee: string;
   completed: boolean;
   completedAt?: string;
@@ -220,6 +222,7 @@ export interface PlanningVendor {
   quotedFee: number;
   status: PlanningVendorStatus;
   arrivalWindow?: string;
+  serviceDate?: string; // Specific ISO calendar date YYYY-MM-DD
   notes?: string;
 }
 
@@ -229,6 +232,7 @@ export interface PlanningTeamRole {
   roleTitle: string;
   station: string;
   shiftWindow: string;
+  shiftDate?: string; // Specific ISO calendar date YYYY-MM-DD
   phone?: string;
   briefed: boolean;
 }
@@ -237,6 +241,8 @@ export interface EventPlanningConfig {
   appliedTemplateCategory?: string;
   currency: 'GHS' | 'USD';
   targetBudget: number;
+  eventDates?: string[]; // Ordered ISO YYYY-MM-DD dates covered by this event
+  dayScheduleNotes?: Record<string, string>; // Optional per-date ops notes keyed by YYYY-MM-DD
   tasks: PlanningTask[];
   budgetItems: PlanningBudgetItem[];
   vendors: PlanningVendor[];

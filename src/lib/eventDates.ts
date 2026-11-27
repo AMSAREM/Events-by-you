@@ -158,36 +158,192 @@ export function formatEventDurationBadge(
   return `${getEventDayCount(event)}-Day Event`;
 }
 
+export interface EventDateSlot {
+  isoDate: string;
+  dayIndex: number;
+  dayTag: ScheduleBlock['day'];
+  weekdayShort: (typeof SCHEDULE_WEEKDAYS)[number];
+  shortLabel: string;
+  fullLabel: string;
+}
+
+const UTC_WEEKDAY_MAP: readonly (typeof SCHEDULE_WEEKDAYS)[number][] = [
+  'Sun',
+  'Mon',
+  'Tue',
+  'Wed',
+  'Thu',
+  'Fri',
+  'Sat',
+];
+
+export function formatIsoDateShort(isoDate?: string, includeWeekday = true): string {
+  const clean = sanitizeIsoDate(isoDate);
+  if (!clean) return '';
+  const d = new Date(`${clean}T00:00:00Z`);
+  return d.toLocaleDateString('en-US', {
+    ...(includeWeekday ? { weekday: 'short' } : {}),
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+export function getWeekdayForIsoDate(isoDate?: string): (typeof SCHEDULE_WEEKDAYS)[number] | undefined {
+  const clean = sanitizeIsoDate(isoDate);
+  if (!clean) return undefined;
+  const d = new Date(`${clean}T00:00:00Z`);
+  return UTC_WEEKDAY_MAP[d.getUTCDay()] ?? 'Sat';
+}
+
+export function getEventDateSlots(
+  event?: Pick<EventItem, 'isoDate' | 'endIsoDate'> | null
+): EventDateSlot[] {
+  const startIso = sanitizeIsoDate(event?.isoDate);
+  if (!startIso) return [];
+  const dayCount = getEventDayCount(event);
+  const startMs = Date.parse(`${startIso}T00:00:00Z`);
+  const slots: EventDateSlot[] = [];
+
+  for (let idx = 0; idx < dayCount; idx++) {
+    const d = new Date(startMs + idx * 86_400_000);
+    const isoDate = d.toISOString().slice(0, 10);
+    const weekdayShort = UTC_WEEKDAY_MAP[d.getUTCDay()] ?? 'Sat';
+    const dayTag: ScheduleBlock['day'] =
+      dayCount > 1 && idx < SCHEDULE_EVENT_DAYS.length
+        ? SCHEDULE_EVENT_DAYS[idx]
+        : weekdayShort;
+    const shortLabel = formatIsoDateShort(isoDate, true);
+    const fullLabel =
+      dayCount > 1 ? `Day ${idx + 1} · ${shortLabel}` : shortLabel;
+    slots.push({
+      isoDate,
+      dayIndex: idx,
+      dayTag,
+      weekdayShort,
+      shortLabel,
+      fullLabel,
+    });
+  }
+  return slots;
+}
+
+export function getEventIsoDates(
+  event?: Pick<EventItem, 'isoDate' | 'endIsoDate'> | null
+): string[] {
+  return getEventDateSlots(event).map((slot) => slot.isoDate);
+}
+
+export function getScheduleBlockDayFromIso(
+  isoDate?: string,
+  event?: Pick<EventItem, 'isoDate' | 'endIsoDate'> | null,
+  fallback: ScheduleBlock['day'] = 'Sat'
+): ScheduleBlock['day'] {
+  const clean = sanitizeIsoDate(isoDate);
+  if (!clean) return fallback;
+  const slots = getEventDateSlots(event);
+  const matched = slots.find((s) => s.isoDate === clean);
+  if (matched) return matched.dayTag;
+  return getWeekdayForIsoDate(clean) ?? fallback;
+}
+
+export function resolveIsoDateForScheduleDay(
+  day?: ScheduleBlock['day'],
+  event?: Pick<EventItem, 'isoDate' | 'endIsoDate'> | null
+): string | undefined {
+  const startIso = sanitizeIsoDate(event?.isoDate);
+  if (!startIso) return undefined;
+  const slots = getEventDateSlots(event);
+  if (slots.length === 0) return startIso;
+
+  if (!day) return slots[0].isoDate;
+  const dayNumMatch = /^Day\s+(\d+)$/i.exec(day.trim());
+  if (dayNumMatch) {
+    const idx = Math.max(0, Number(dayNumMatch[1]) - 1);
+    if (idx < slots.length) {
+      return slots[idx].isoDate;
+    }
+    const startMs = Date.parse(`${startIso}T00:00:00Z`);
+    return new Date(startMs + idx * 86_400_000).toISOString().slice(0, 10);
+  }
+
+  const weekdayMatch = slots.find(
+    (s) => s.weekdayShort.toLowerCase() === day.trim().toLowerCase()
+  );
+  if (weekdayMatch) return weekdayMatch.isoDate;
+
+  return slots.length === 1 ? slots[0].isoDate : undefined;
+}
+
+export function resolveScheduleBlockDate(
+  block: Pick<ScheduleBlock, 'day' | 'date'>,
+  event?: Pick<EventItem, 'isoDate' | 'endIsoDate'> | null
+): string | undefined {
+  const explicit = sanitizeIsoDate(block.date);
+  if (explicit) return explicit;
+  return resolveIsoDateForScheduleDay(block.day, event);
+}
+
+export function formatScheduleBlockDateBadge(
+  block: Pick<ScheduleBlock, 'day' | 'date'>,
+  event?: Pick<EventItem, 'isoDate' | 'endIsoDate'> | null
+): string {
+  const resolved = resolveScheduleBlockDate(block, event);
+  if (!resolved) return block.day;
+  const slots = getEventDateSlots(event);
+  const slot = slots.find((s) => s.isoDate === resolved);
+  if (slot) return slot.fullLabel;
+  return formatIsoDateShort(resolved, true) || block.day;
+}
+
+export function compareScheduleBlocksChronological(
+  a: Pick<ScheduleBlock, 'day' | 'date' | 'time'>,
+  b: Pick<ScheduleBlock, 'day' | 'date' | 'time'>,
+  event?: Pick<EventItem, 'isoDate' | 'endIsoDate'> | null
+): number {
+  const da = resolveScheduleBlockDate(a, event) || '';
+  const db = resolveScheduleBlockDate(b, event) || '';
+  if (da && db && da !== db) {
+    return da.localeCompare(db);
+  }
+  if (da && !db) return -1;
+  if (!da && db) return 1;
+  return String(a.time || '').localeCompare(String(b.time || ''));
+}
+
 export function getEventDayOptions(
   event?: Pick<EventItem, 'isoDate' | 'endIsoDate'> | null
-): { value: ScheduleBlock['day']; label: string }[] {
-  const options: { value: ScheduleBlock['day']; label: string }[] = [];
-  const startIso = sanitizeIsoDate(event?.isoDate);
-  const dayCount = getEventDayCount(event);
+): { value: ScheduleBlock['day']; label: string; isoDate?: string }[] {
+  const options: { value: ScheduleBlock['day']; label: string; isoDate?: string }[] = [];
+  const slots = getEventDateSlots(event);
 
-  if (dayCount > 1) {
-    const capped = Math.min(7, dayCount);
+  if (slots.length > 1) {
+    const capped = Math.min(SCHEDULE_EVENT_DAYS.length, slots.length);
     for (let idx = 0; idx < capped; idx++) {
-      const value = SCHEDULE_EVENT_DAYS[idx];
-      let label: string = value;
-      if (startIso) {
-        const d = new Date(Date.parse(`${startIso}T00:00:00Z`) + idx * 86_400_000);
-        const shortDate = d.toLocaleDateString('en-US', {
-          weekday: 'short',
-          month: 'short',
-          day: 'numeric',
-          timeZone: 'UTC',
-        });
-        label = `${value} · ${shortDate}`;
-      }
-      options.push({ value, label });
+      const slot = slots[idx];
+      options.push({
+        value: SCHEDULE_EVENT_DAYS[idx],
+        label: slot.fullLabel,
+        isoDate: slot.isoDate,
+      });
     }
+  } else if (slots.length === 1) {
+    options.push({
+      value: 'Day 1',
+      label: `Day 1 · ${slots[0].shortLabel}`,
+      isoDate: slots[0].isoDate,
+    });
   } else {
     options.push({ value: 'Day 1', label: 'Day 1' });
   }
 
   for (const weekday of SCHEDULE_WEEKDAYS) {
-    options.push({ value: weekday, label: weekday });
+    const matchingSlot = slots.find((s) => s.weekdayShort === weekday);
+    options.push({
+      value: weekday,
+      label: matchingSlot ? `${weekday} · ${matchingSlot.shortLabel}` : weekday,
+      isoDate: matchingSlot?.isoDate,
+    });
   }
 
   return options;

@@ -202,6 +202,10 @@ alter table public.events
   add column if not exists message_config jsonb;
 alter table public.events
   add column if not exists planning_config jsonb;
+alter table public.events
+  add column if not exists end_iso_date text;
+alter table public.events
+  add column if not exists check_in_policy text;
 
 create index if not exists idx_events_organizer on public.events(organizer_id);
 create index if not exists idx_events_status on public.events(status);
@@ -232,6 +236,7 @@ alter table public.attendees add column if not exists validation_group text;
 alter table public.attendees add column if not exists invite_code_used text;
 alter table public.attendees add column if not exists gift_entry jsonb;
 alter table public.attendees add column if not exists custom_responses jsonb;
+alter table public.attendees add column if not exists checked_in_dates jsonb;
 
 create index if not exists idx_attendees_event on public.attendees(event_id);
 
@@ -245,9 +250,16 @@ create table if not exists public.schedule_blocks (
   stage text not null,
   lead text not null,
   completed boolean not null default false,
-  day text not null default 'Sat' check (day in ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat')),
+  day text not null default 'Sat' check (day in ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun', 'Day 1', 'Day 2', 'Day 3', 'Day 4', 'Day 5', 'Day 6', 'Day 7')),
+  date text,
   created_at timestamptz not null default now()
 );
+
+alter table public.schedule_blocks add column if not exists date text;
+alter table public.schedule_blocks drop constraint if exists schedule_blocks_day_check;
+alter table public.schedule_blocks
+  add constraint schedule_blocks_day_check
+  check (day in ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun', 'Day 1', 'Day 2', 'Day 3', 'Day 4', 'Day 5', 'Day 6', 'Day 7'));
 
 create index if not exists idx_schedule_event on public.schedule_blocks(event_id);
 
@@ -814,9 +826,14 @@ create table if not exists public.event_planning_configs (
   budget_items jsonb not null default '[]'::jsonb,
   vendors jsonb not null default '[]'::jsonb,
   team_roles jsonb not null default '[]'::jsonb,
+  event_dates jsonb not null default '[]'::jsonb,
+  day_schedule_notes jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.event_planning_configs add column if not exists event_dates jsonb not null default '[]'::jsonb;
+alter table public.event_planning_configs add column if not exists day_schedule_notes jsonb not null default '{}'::jsonb;
 
 create index if not exists idx_event_planning_organizer
   on public.event_planning_configs(organizer_id);

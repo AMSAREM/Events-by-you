@@ -11,10 +11,13 @@ import {
 } from '../src/data/initialData.ts';
 import { normalizeHexColor } from '../src/lib/themeColors.ts';
 import {
+  compareScheduleBlocksChronological,
   formatEventDateSpan,
   getEventCheckInPolicy,
+  getScheduleBlockDayFromIso,
   getTodayIsoDate,
   normalizeScheduleDay,
+  resolveScheduleBlockDate,
   sanitizeCheckedInDates,
   sanitizeCheckInPolicy,
   sanitizeIsoDate,
@@ -151,16 +154,25 @@ export const platformRuntime = {
     const cleanExplicit = (explicit || '').trim().slice(0, 11);
     const runtimeOverride = (this.flags.arkeselSenderId || '').trim().slice(0, 11);
     const envSender = (process.env.ARKESEL_SENDER_ID || '').trim().slice(0, 11);
-    if (cleanExplicit) {
+    const isGenericDefault = (val: string) =>
+      val.toUpperCase() === DEFAULT_SHARED_SENDER_ID.toUpperCase();
+
+    if (cleanExplicit && !isGenericDefault(cleanExplicit)) {
       return { senderId: cleanExplicit, isDefaultUnverifiedWarning: false };
     }
     if (runtimeOverride) {
-      return { senderId: runtimeOverride, isDefaultUnverifiedWarning: false };
+      return {
+        senderId: runtimeOverride,
+        isDefaultUnverifiedWarning: isGenericDefault(runtimeOverride),
+      };
     }
     if (envSender) {
-      return { senderId: envSender, isDefaultUnverifiedWarning: false };
+      return {
+        senderId: envSender,
+        isDefaultUnverifiedWarning: isGenericDefault(envSender),
+      };
     }
-    return { senderId: 'EVENTSAPP', isDefaultUnverifiedWarning: true };
+    return { senderId: DEFAULT_SHARED_SENDER_ID, isDefaultUnverifiedWarning: true };
   },
 
   recordSmsDispatch(entry: Omit<SmsDispatchLogEntry, 'id' | 'timestamp'>): SmsDispatchLogEntry {
@@ -795,6 +807,33 @@ export const memoryStore = {
       }
     }
     return null;
+  },
+
+  getEventScheduleBlocks(eventId: string): ScheduleBlock[] {
+    const evt = db.events.get(eventId);
+    const blocks = Array.from(db.scheduleBlocks.values())
+      .filter((b) => b.eventId === eventId)
+      .map((b) => {
+        const date = evt ? resolveScheduleBlockDate(b, evt) : sanitizeIsoDate(b.date);
+        return date && !b.date ? { ...b, date } : b;
+      });
+    return blocks.sort((a, b) => compareScheduleBlocksChronological(a, b, evt));
+  },
+
+  getPublicScheduleBlocks(eventIds?: string[]): ScheduleBlock[] {
+    const allowedIds = eventIds
+      ? new Set(eventIds)
+      : new Set(this.getPublicEvents().map((e) => e.id));
+    const blocks: ScheduleBlock[] = [];
+    for (const blk of db.scheduleBlocks.values()) {
+      if (!allowedIds.has(blk.eventId)) continue;
+      const evt = db.events.get(blk.eventId);
+      const date = evt ? resolveScheduleBlockDate(blk, evt) : sanitizeIsoDate(blk.date);
+      blocks.push(date && !blk.date ? { ...blk, date } : blk);
+    }
+    return blocks.sort((a, b) =>
+      compareScheduleBlocksChronological(a, b, db.events.get(a.eventId) ?? null)
+    );
   },
 
   getEventOrganizerDefaults(slugOrId: string): {
@@ -1815,33 +1854,37 @@ export const memoryStore = {
       ent.maxAttendeesPerEvent != null
         ? Math.min(Math.max(1, Number(event.capacity) || 50), ent.maxAttendeesPerEvent)
         : Math.max(1, Number(event.capacity) || 100);
-    const initialExtraDataConfig = event.extraDataConfig
-      ? {
-          ...event.extraDataConfig,
-          planningConfig:
-            event.extraDataConfig.planningConfig ??
-            createStarterPlanningConfig(
-              event.category || 'Events',
-              event.organizer || owner?.profile.name || 'Organiser',
-              event.venue || 'Main Venue'
-            ),
-        }
-      : {
-          enableGiftTable: false,
-          customFields: [],
-          planningConfig: createStarterPlanningConfig(
-            event.category || 'Events',
-            event.organizer || owner?.profile.name || 'Organiser',
-            event.venue || 'Main Venue'
-          ),
-        };
-
     const cleanStartIso = sanitizeIsoDate(event.isoDate) || getTodayIsoDate();
     const rawEndIso = sanitizeIsoDate(event.endIsoDate ?? event.extraDataConfig?.endIsoDate);
     const cleanEndIso = rawEndIso && rawEndIso > cleanStartIso ? rawEndIso : undefined;
     const cleanPolicy = sanitizeCheckInPolicy(
       event.checkInPolicy ?? event.extraDataConfig?.checkInPolicy
     );
+    const dateContext = { isoDate: cleanStartIso, endIsoDate: cleanEndIso };
+
+    const sanitizedPlanning = sanitizeEventPlanningConfig(
+      event.extraDataConfig?.planningConfig ??
+        createStarterPlanningConfig(
+          event.category || 'Events',
+          event.organizer || owner?.profile.name || 'Organiser',
+          event.venue || 'Main Venue',
+          dateContext
+        ),
+      event.category || 'Events',
+      dateContext
+    );
+
+    const initialExtraDataConfig = event.extraDataConfig
+      ? {
+          ...event.extraDataConfig,
+          planningConfig: sanitizedPlanning,
+        }
+      : {
+          enableGiftTable: false,
+          customFields: [],
+          planningConfig: sanitizedPlanning,
+        };
+
     const created: EventItem = {
       ...event,
       id: uniqueEventId,
@@ -1871,11 +1914,17 @@ export const memoryStore = {
 
     const createdBlocks: ScheduleBlock[] = blocks.map((b, idx) => {
       const id = `sch-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}-${idx}`;
+      const resolvedDate =
+        sanitizeIsoDate(b.date) ?? resolveScheduleBlockDate({ day: b.day, date: b.date }, dateContext);
+      const resolvedDay = resolvedDate
+        ? getScheduleBlockDayFromIso(resolvedDate, dateContext, normalizeScheduleDay(b.day, 'Sat'))
+        : normalizeScheduleDay(b.day, 'Sat');
       const block: ScheduleBlock = {
         ...b,
         id,
         eventId: uniqueEventId,
-        day: normalizeScheduleDay(b.day, 'Sat'),
+        day: resolvedDay,
+        ...(resolvedDate ? { date: resolvedDate } : {}),
       };
       db.scheduleBlocks.set(id, block);
       return block;
@@ -1985,11 +2034,19 @@ export const memoryStore = {
         : existing.checkInPolicy;
 
     const finalExtra = mergedExtra ? { ...mergedExtra } : undefined;
+    const dateContext = { isoDate: nextStartIso, endIsoDate: nextEndIso };
     if (finalExtra) {
       if (nextEndIso) finalExtra.endIsoDate = nextEndIso;
       else delete finalExtra.endIsoDate;
       if (nextPolicy) finalExtra.checkInPolicy = nextPolicy;
       else delete finalExtra.checkInPolicy;
+      if (finalExtra.planningConfig) {
+        finalExtra.planningConfig = sanitizeEventPlanningConfig(
+          finalExtra.planningConfig,
+          updated.category || existing.category || 'Events',
+          dateContext
+        );
+      }
     }
 
     const next = {
@@ -2051,7 +2108,8 @@ export const memoryStore = {
     }
     const sanitizedPlanning = sanitizeEventPlanningConfig(
       rawPlanning,
-      existing.category || 'Events'
+      existing.category || 'Events',
+      { isoDate: existing.isoDate, endIsoDate: existing.endIsoDate }
     );
     const prevExtra = existing.extraDataConfig ?? {
       enableGiftTable: false,
@@ -2667,12 +2725,64 @@ export const memoryStore = {
   addScheduleBlock(userId: string, block: ScheduleBlock): ScheduleBlock {
     const evt = db.events.get(block.eventId);
     if (!evt || evt.organizerId !== userId) throw new Error('Event not found.');
+    const resolvedDate =
+      sanitizeIsoDate(block.date) ?? resolveScheduleBlockDate({ day: block.day, date: block.date }, evt);
+    const resolvedDay = resolvedDate
+      ? getScheduleBlockDayFromIso(resolvedDate, evt, normalizeScheduleDay(block.day, 'Sat'))
+      : normalizeScheduleDay(block.day, 'Sat');
     const normalized: ScheduleBlock = {
       ...block,
-      day: normalizeScheduleDay(block.day, 'Sat'),
+      day: resolvedDay,
+      ...(resolvedDate ? { date: resolvedDate } : {}),
     };
     db.scheduleBlocks.set(normalized.id, normalized);
     return normalized;
+  },
+
+  updateScheduleBlock(
+    userId: string,
+    blockId: string,
+    patch: Partial<ScheduleBlock>
+  ): ScheduleBlock {
+    const blk = db.scheduleBlocks.get(blockId);
+    if (!blk) throw new Error('Schedule block not found.');
+    const evt = db.events.get(blk.eventId);
+    if (!evt || evt.organizerId !== userId) throw new Error('Unauthorized.');
+
+    const explicitDateProvided = 'date' in patch;
+    const cleanedExplicitDate = explicitDateProvided ? sanitizeIsoDate(patch.date) : blk.date;
+    let nextDay = patch.day !== undefined ? normalizeScheduleDay(patch.day, blk.day) : blk.day;
+    let nextDate = cleanedExplicitDate;
+
+    if (explicitDateProvided && cleanedExplicitDate) {
+      nextDay =
+        patch.day !== undefined
+          ? normalizeScheduleDay(patch.day, getScheduleBlockDayFromIso(cleanedExplicitDate, evt, blk.day))
+          : getScheduleBlockDayFromIso(cleanedExplicitDate, evt, blk.day);
+    } else if (patch.day !== undefined && !explicitDateProvided) {
+      nextDate = resolveScheduleBlockDate({ day: nextDay, date: undefined }, evt) ?? blk.date;
+    }
+
+    const updated: ScheduleBlock = {
+      ...blk,
+      ...(typeof patch.time === 'string' && patch.time.trim() ? { time: patch.time.trim() } : {}),
+      ...(typeof patch.duration === 'string' && patch.duration.trim()
+        ? { duration: patch.duration.trim() }
+        : {}),
+      ...(typeof patch.title === 'string' && patch.title.trim() ? { title: patch.title.trim() } : {}),
+      ...(typeof patch.stage === 'string' && patch.stage.trim() ? { stage: patch.stage.trim() } : {}),
+      ...(typeof patch.lead === 'string' && patch.lead.trim() ? { lead: patch.lead.trim() } : {}),
+      ...(typeof patch.completed === 'boolean' ? { completed: patch.completed } : {}),
+      day: nextDay,
+    };
+    if (nextDate) {
+      updated.date = nextDate;
+    } else {
+      delete updated.date;
+    }
+
+    db.scheduleBlocks.set(blockId, updated);
+    return updated;
   },
 
   toggleScheduleBlock(userId: string, blockId: string): ScheduleBlock {

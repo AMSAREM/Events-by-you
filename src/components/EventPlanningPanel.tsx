@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
+  Calendar,
   Check,
   CheckCircle2,
   ClipboardCheck,
@@ -19,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { EVENT_CATEGORIES } from '../data/initialData';
+import { formatIsoDateShort, getEventDateSlots, sanitizeIsoDate } from '../lib/eventDates';
 import {
   computeEventReadiness,
   formatPlanningMoney,
@@ -90,6 +92,10 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
   );
   const [confirmTemplateModal, setConfirmTemplateModal] = useState(false);
 
+  // Multi-day specific date filter & note draft
+  const [activeDateFilter, setActiveDateFilter] = useState<'all' | 'pre-event' | string>('all');
+  const [dayNoteDraft, setDayNoteDraft] = useState('');
+
   // Checklist filters & add state
   const [taskStatusFilter, setTaskStatusFilter] = useState<'all' | 'pending' | 'completed'>('all');
   const [taskPhaseFilter, setTaskPhaseFilter] = useState<'all' | PlanningTaskPhase>('all');
@@ -99,6 +105,7 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
   const [newTaskPhase, setNewTaskPhase] = useState<PlanningTaskPhase>('Venue & Permits');
   const [newTaskPriority, setNewTaskPriority] = useState<PlanningPriority>('high');
   const [newTaskDue, setNewTaskDue] = useState('T-7 Days');
+  const [newTaskDueDate, setNewTaskDueDate] = useState<string>('');
   const [newTaskAssignee, setNewTaskAssignee] = useState(organizerName || 'Organiser');
 
   // Budget add & edit state
@@ -124,6 +131,9 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
   const [newVendorEmail, setNewVendorEmail] = useState('');
   const [newVendorFee, setNewVendorFee] = useState('');
   const [newVendorArrival, setNewVendorArrival] = useState('07:30 AM');
+  const [newVendorServiceDate, setNewVendorServiceDate] = useState<string>(
+    () => sanitizeIsoDate(event.isoDate) ?? ''
+  );
   const [newVendorStatus, setNewVendorStatus] = useState<PlanningVendorStatus>('quoted');
   const [newVendorNotes, setNewVendorNotes] = useState('');
 
@@ -133,9 +143,22 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
   const [newRoleTitle, setNewRoleTitle] = useState('Gate Check-In Lead');
   const [newRoleStation, setNewRoleStation] = useState('');
   const [newRoleShift, setNewRoleShift] = useState('08:00 AM - 04:00 PM');
+  const [newRoleShiftDate, setNewRoleShiftDate] = useState<string>(
+    () => sanitizeIsoDate(event.isoDate) ?? ''
+  );
   const [newRolePhone, setNewRolePhone] = useState('');
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
   const [editingMemberName, setEditingMemberName] = useState('');
+
+  const eventDateSlots = useMemo(() => getEventDateSlots(event), [event]);
+
+  useEffect(() => {
+    const startIso = sanitizeIsoDate(event.isoDate) ?? '';
+    setActiveDateFilter('all');
+    setDayNoteDraft('');
+    setNewVendorServiceDate(startIso);
+    setNewRoleShiftDate(startIso);
+  }, [event.id, event.isoDate]);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -146,11 +169,22 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
 
   const currentConfig: EventPlanningConfig = useMemo(() => {
     const existing = event.extraDataConfig?.planningConfig;
+    const defaultEventDates = eventDateSlots.map((slot) => slot.isoDate);
     if (existing) {
       return {
         appliedTemplateCategory: existing.appliedTemplateCategory || event.category || 'Events',
         currency: existing.currency === 'USD' ? 'USD' : 'GHS',
         targetBudget: Number(existing.targetBudget) || 0,
+        eventDates:
+          Array.isArray(existing.eventDates) && existing.eventDates.length > 0
+            ? existing.eventDates
+            : defaultEventDates.length > 0
+              ? defaultEventDates
+              : undefined,
+        dayScheduleNotes:
+          existing.dayScheduleNotes && typeof existing.dayScheduleNotes === 'object'
+            ? { ...existing.dayScheduleNotes }
+            : undefined,
         tasks: Array.isArray(existing.tasks) ? existing.tasks : [],
         budgetItems: Array.isArray(existing.budgetItems) ? existing.budgetItems : [],
         vendors: Array.isArray(existing.vendors) ? existing.vendors : [],
@@ -162,12 +196,13 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
       appliedTemplateCategory: event.category || 'Events',
       currency: event.category?.toLowerCase() === 'corporate' || event.category?.toLowerCase() === 'tech' ? 'USD' : 'GHS',
       targetBudget: 0,
+      ...(defaultEventDates.length > 0 ? { eventDates: defaultEventDates } : {}),
       tasks: [],
       budgetItems: [],
       vendors: [],
       teamRoles: [],
     };
-  }, [event.extraDataConfig?.planningConfig, event.category]);
+  }, [event.extraDataConfig?.planningConfig, event.category, eventDateSlots]);
 
   const readiness = useMemo(() => computeEventReadiness(event), [event]);
 
@@ -210,13 +245,35 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
       templateCategory || event.category || 'Events',
       mode,
       organizerName || event.organizer,
-      event.venue
+      event.venue,
+      { isoDate: event.isoDate, endIsoDate: event.endIsoDate }
     );
     await persistPlanningConfig(
       merged,
       mode === 'replace'
         ? `${templateCategory} starter plan loaded`
         : `${templateCategory} starter items merged`
+    );
+  };
+
+  const handleSaveDayScheduleNote = (isoDate: string, note: string) => {
+    const trimmed = note.trim();
+    const nextNotes = { ...(currentConfig.dayScheduleNotes ?? {}) };
+    if (trimmed) {
+      nextNotes[isoDate] = trimmed;
+    } else {
+      delete nextNotes[isoDate];
+    }
+    void persistPlanningConfig(
+      {
+        ...currentConfig,
+        eventDates:
+          currentConfig.eventDates && currentConfig.eventDates.length > 0
+            ? currentConfig.eventDates
+            : eventDateSlots.map((s) => s.isoDate),
+        dayScheduleNotes: Object.keys(nextNotes).length > 0 ? nextNotes : undefined,
+      },
+      `Date note updated for ${formatIsoDateShort(isoDate, true)}`
     );
   };
 
@@ -228,14 +285,20 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
         taskStatusFilter === 'all' ||
         (taskStatusFilter === 'completed' ? task.completed : !task.completed);
       const matchesPhase = taskPhaseFilter === 'all' || task.phase === taskPhaseFilter;
+      const matchesDate =
+        activeDateFilter === 'all' ||
+        (activeDateFilter === 'pre-event'
+          ? !task.dueDate
+          : task.dueDate === activeDateFilter);
       const matchesQuery =
         !q ||
         task.title.toLowerCase().includes(q) ||
         task.assignee.toLowerCase().includes(q) ||
-        task.dueLabel.toLowerCase().includes(q);
-      return matchesStatus && matchesPhase && matchesQuery;
+        task.dueLabel.toLowerCase().includes(q) ||
+        (task.dueDate && task.dueDate.includes(q));
+      return matchesStatus && matchesPhase && matchesDate && matchesQuery;
     });
-  }, [currentConfig.tasks, taskStatusFilter, taskPhaseFilter, taskQuery]);
+  }, [currentConfig.tasks, taskStatusFilter, taskPhaseFilter, activeDateFilter, taskQuery]);
 
   const handleToggleTask = (taskId: string) => {
     const nextTasks = currentConfig.tasks.map((task) =>
@@ -250,15 +313,30 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
     void persistPlanningConfig({ ...currentConfig, tasks: nextTasks });
   };
 
+  const handleUpdateTaskDate = (taskId: string, nextDateRaw: string) => {
+    const cleanDate = sanitizeIsoDate(nextDateRaw);
+    const nextTasks = currentConfig.tasks.map((task) =>
+      task.id === taskId ? { ...task, dueDate: cleanDate } : task
+    );
+    void persistPlanningConfig(
+      { ...currentConfig, tasks: nextTasks },
+      cleanDate ? `Task assigned to ${formatIsoDateShort(cleanDate, true)}` : 'Task date cleared'
+    );
+  };
+
   const handleAddTask = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTaskTitle.trim()) return;
+    const cleanDueDate = sanitizeIsoDate(newTaskDueDate);
     const item: PlanningTask = {
       id: `tsk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
       title: newTaskTitle.trim(),
       phase: newTaskPhase,
       priority: newTaskPriority,
-      dueLabel: newTaskDue.trim() || 'Before Event',
+      dueLabel:
+        newTaskDue.trim() ||
+        (cleanDueDate ? formatIsoDateShort(cleanDueDate, true) : 'Before Event'),
+      ...(cleanDueDate ? { dueDate: cleanDueDate } : {}),
       assignee: newTaskAssignee.trim() || organizerName || 'Organiser',
       completed: false,
     };
@@ -382,18 +460,24 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
     const q = vendorQuery.trim().toLowerCase();
     return currentConfig.vendors.filter((v) => {
       const matchesStatus = vendorStatusFilter === 'all' || v.status === vendorStatusFilter;
+      const matchesDate =
+        activeDateFilter === 'all' ||
+        activeDateFilter === 'pre-event' ||
+        v.serviceDate === activeDateFilter;
       const matchesQuery =
         !q ||
         v.name.toLowerCase().includes(q) ||
         v.serviceCategory.toLowerCase().includes(q) ||
-        v.contactPerson.toLowerCase().includes(q);
-      return matchesStatus && matchesQuery;
+        v.contactPerson.toLowerCase().includes(q) ||
+        (v.serviceDate && v.serviceDate.includes(q));
+      return matchesStatus && matchesDate && matchesQuery;
     });
-  }, [currentConfig.vendors, vendorStatusFilter, vendorQuery]);
+  }, [currentConfig.vendors, vendorStatusFilter, activeDateFilter, vendorQuery]);
 
   const handleAddVendor = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newVendorName.trim()) return;
+    const cleanServiceDate = sanitizeIsoDate(newVendorServiceDate);
     const vendor: PlanningVendor = {
       id: `vnd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
       name: newVendorName.trim(),
@@ -404,6 +488,7 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
       quotedFee: Math.max(0, Number(newVendorFee) || 0),
       status: newVendorStatus,
       arrivalWindow: newVendorArrival.trim() || undefined,
+      ...(cleanServiceDate ? { serviceDate: cleanServiceDate } : {}),
       notes: newVendorNotes.trim() || undefined,
     };
     setNewVendorName('');
@@ -417,6 +502,19 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
     void persistPlanningConfig(
       { ...currentConfig, vendors: [...currentConfig.vendors, vendor] },
       'Vendor contact added'
+    );
+  };
+
+  const handleVendorServiceDateChange = (vendorId: string, nextDateRaw: string) => {
+    const cleanDate = sanitizeIsoDate(nextDateRaw);
+    const nextVendors = currentConfig.vendors.map((v) =>
+      v.id === vendorId ? { ...v, serviceDate: cleanDate } : v
+    );
+    void persistPlanningConfig(
+      { ...currentConfig, vendors: nextVendors },
+      cleanDate
+        ? `Vendor arrival assigned to ${formatIsoDateShort(cleanDate, true)}`
+        : 'Vendor date cleared'
     );
   };
 
@@ -438,15 +536,24 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
   };
 
   // --- Team & Usher Handlers ---
+  const filteredTeamRoles = useMemo(() => {
+    return currentConfig.teamRoles.filter((role) => {
+      if (activeDateFilter === 'all' || activeDateFilter === 'pre-event') return true;
+      return role.shiftDate === activeDateFilter;
+    });
+  }, [currentConfig.teamRoles, activeDateFilter]);
+
   const handleAddRole = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRoleTitle.trim()) return;
+    const cleanShiftDate = sanitizeIsoDate(newRoleShiftDate);
     const role: PlanningTeamRole = {
       id: `rol-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
       memberName: newRoleMember.trim() || 'Unassigned — Assign Lead',
       roleTitle: newRoleTitle.trim(),
       station: newRoleStation.trim() || 'Main Hall',
       shiftWindow: newRoleShift.trim() || 'Full Event',
+      ...(cleanShiftDate ? { shiftDate: cleanShiftDate } : {}),
       phone: newRolePhone.trim() || undefined,
       briefed: false,
     };
@@ -457,6 +564,19 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
     void persistPlanningConfig(
       { ...currentConfig, teamRoles: [...currentConfig.teamRoles, role] },
       'Team role added'
+    );
+  };
+
+  const handleRoleShiftDateChange = (roleId: string, nextDateRaw: string) => {
+    const cleanDate = sanitizeIsoDate(nextDateRaw);
+    const nextRoles = currentConfig.teamRoles.map((r) =>
+      r.id === roleId ? { ...r, shiftDate: cleanDate } : r
+    );
+    void persistPlanningConfig(
+      { ...currentConfig, teamRoles: nextRoles },
+      cleanDate
+        ? `Shift assigned to ${formatIsoDateShort(cleanDate, true)}`
+        : 'Shift date cleared'
     );
   };
 
@@ -781,6 +901,90 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
         </div>
       )}
 
+      {/* Event Date Schedule Filter & Day Notes Strip */}
+      {eventDateSlots.length > 0 && (
+        <div className="p-4 sm:p-5 rounded-3xl bg-white border border-[#E5E5EA] space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-bold text-[#0B0B0B]">
+              <Calendar className="w-4 h-4" />
+              <span>
+                {eventDateSlots.length > 1
+                  ? `Multi-Day Schedule Dates (${eventDateSlots.length} Days)`
+                  : 'Event Calendar Date'}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto max-w-full pb-0.5">
+              <button
+                type="button"
+                onClick={() => setActiveDateFilter('all')}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                  activeDateFilter === 'all'
+                    ? 'bg-[#0B0B0B] text-white'
+                    : 'bg-[#F5F5F7] text-[#71717A] hover:text-[#0B0B0B]'
+                }`}
+              >
+                All Dates
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveDateFilter('pre-event')}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                  activeDateFilter === 'pre-event'
+                    ? 'bg-[#0B0B0B] text-white'
+                    : 'bg-[#F5F5F7] text-[#71717A] hover:text-[#0B0B0B]'
+                }`}
+              >
+                Pre-Event
+              </button>
+              {eventDateSlots.map((slot) => (
+                <button
+                  key={slot.isoDate}
+                  type="button"
+                  onClick={() => {
+                    setActiveDateFilter(slot.isoDate);
+                    setDayNoteDraft(currentConfig.dayScheduleNotes?.[slot.isoDate] ?? '');
+                  }}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                    activeDateFilter === slot.isoDate
+                      ? 'bg-[#0B0B0B] text-white'
+                      : 'bg-[#F5F5F7] text-[#71717A] hover:text-[#0B0B0B]'
+                  }`}
+                >
+                  {slot.fullLabel}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {activeDateFilter !== 'all' && activeDateFilter !== 'pre-event' && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSaveDayScheduleNote(activeDateFilter, dayNoteDraft);
+              }}
+              className="flex flex-col sm:flex-row sm:items-center gap-2 pt-2 border-t border-[#E5E5EA]"
+            >
+              <input
+                type="text"
+                disabled={!canEdit}
+                value={dayNoteDraft}
+                onChange={(e) => setDayNoteDraft(e.target.value)}
+                placeholder={`Schedule highlight or gate note for ${formatIsoDateShort(activeDateFilter, true)}...`}
+                className="flex-1 h-9 px-3.5 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] focus:outline-none"
+              />
+              {canEdit && (
+                <button
+                  type="submit"
+                  className="h-9 px-4 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 whitespace-nowrap shrink-0"
+                >
+                  Save Date Note
+                </button>
+              )}
+            </form>
+          )}
+        </div>
+      )}
+
       {/* Segmented Sub-View Switcher */}
       <div className="flex items-center gap-1.5 p-1.5 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] overflow-x-auto">
         {(
@@ -955,15 +1159,25 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
                   <option value="low">Low</option>
                 </select>
               </div>
-              <div className="lg:col-span-3 grid grid-cols-2 gap-2">
+              <div className="lg:col-span-4 grid grid-cols-3 gap-2">
                 <div>
-                  <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Due</label>
+                  <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Due Label</label>
                   <input
                     type="text"
                     value={newTaskDue}
                     onChange={(e) => setNewTaskDue(e.target.value)}
                     placeholder="T-7 Days"
                     className="w-full h-10 px-3 rounded-xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Specific Date</label>
+                  <input
+                    type="date"
+                    value={newTaskDueDate}
+                    onChange={(e) => setNewTaskDueDate(e.target.value)}
+                    aria-label="Task due date"
+                    className="w-full h-10 px-2.5 rounded-xl bg-white border border-[#E5E5EA] text-xs font-mono text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
                   />
                 </div>
                 <div>
@@ -1042,6 +1256,14 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
                         <span>{task.phase}</span>
                         <span aria-hidden="true">·</span>
                         <span className="font-mono tabular-nums">{task.dueLabel}</span>
+                        {task.dueDate && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="font-mono tabular-nums font-semibold text-[#0B0B0B]">
+                              {formatIsoDateShort(task.dueDate, true)}
+                            </span>
+                          </>
+                        )}
                         <span aria-hidden="true">·</span>
                         <span>{task.assignee}</span>
                         <span aria-hidden="true">·</span>
@@ -1067,16 +1289,27 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
                     </div>
                   </div>
 
-                  {canEdit && (
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteTask(task.id)}
-                      aria-label={`Delete task ${task.title}`}
-                      className="w-9 h-9 rounded-full hover:bg-red-50 text-[#71717A] hover:text-[#DC2626] flex items-center justify-center shrink-0 transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {canEdit && (
+                      <input
+                        type="date"
+                        value={task.dueDate ?? ''}
+                        aria-label={`Assign calendar date for ${task.title}`}
+                        onChange={(e) => handleUpdateTaskDate(task.id, e.target.value)}
+                        className="h-8 px-2.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[11px] font-mono text-[#0B0B0B] focus:bg-white focus:border-[#0B0B0B] focus:outline-none"
+                      />
+                    )}
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteTask(task.id)}
+                        aria-label={`Delete task ${task.title}`}
+                        className="w-9 h-9 rounded-full hover:bg-red-50 text-[#71717A] hover:text-[#DC2626] flex items-center justify-center shrink-0 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1532,6 +1765,16 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
                 />
               </div>
               <div className="lg:col-span-2">
+                <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Service Date</label>
+                <input
+                  type="date"
+                  value={newVendorServiceDate}
+                  onChange={(e) => setNewVendorServiceDate(e.target.value)}
+                  aria-label="Vendor service date"
+                  className="w-full h-10 px-2.5 rounded-xl bg-white border border-[#E5E5EA] text-xs font-mono text-[#0B0B0B]"
+                />
+              </div>
+              <div className="lg:col-span-2">
                 <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Arrival Time</label>
                 <input
                   type="text"
@@ -1586,7 +1829,7 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
             <div className="p-8 text-center space-y-2">
               <p className="text-sm font-semibold text-[#0B0B0B]">No vendors in this view</p>
               <p className="text-xs text-[#71717A]">
-                Track venue managers, catering teams, sound engineers, and setup arrival times here.
+                Track venue managers, catering teams, sound engineers, and setup arrival dates here.
               </p>
             </div>
           ) : (
@@ -1615,6 +1858,14 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
                       <span>{vendor.serviceCategory}</span>
                       <span aria-hidden="true">·</span>
                       <span>{vendor.contactPerson}</span>
+                      {vendor.serviceDate && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-mono tabular-nums font-semibold text-[#0B0B0B]">
+                            {formatIsoDateShort(vendor.serviceDate, true)}
+                          </span>
+                        </>
+                      )}
                       {vendor.arrivalWindow && (
                         <>
                           <span aria-hidden="true">·</span>
@@ -1632,6 +1883,15 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {canEdit && (
+                      <input
+                        type="date"
+                        value={vendor.serviceDate ?? ''}
+                        aria-label={`Service date for ${vendor.name}`}
+                        onChange={(e) => handleVendorServiceDateChange(vendor.id, e.target.value)}
+                        className="min-h-[36px] px-2.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[11px] font-mono text-[#0B0B0B]"
+                      />
+                    )}
                     <button
                       type="button"
                       onClick={() => copyContact(vendor.phone, `${vendor.name} phone`)}
@@ -1750,6 +2010,16 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
                 />
               </div>
               <div className="lg:col-span-2">
+                <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Shift Date</label>
+                <input
+                  type="date"
+                  value={newRoleShiftDate}
+                  onChange={(e) => setNewRoleShiftDate(e.target.value)}
+                  aria-label="Crew shift date"
+                  className="w-full h-10 px-2.5 rounded-xl bg-white border border-[#E5E5EA] text-xs font-mono text-[#0B0B0B]"
+                />
+              </div>
+              <div className="lg:col-span-2">
                 <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Shift Window</label>
                 <input
                   type="text"
@@ -1787,16 +2057,20 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
             </form>
           )}
 
-          {currentConfig.teamRoles.length === 0 ? (
+          {filteredTeamRoles.length === 0 ? (
             <div className="p-8 text-center space-y-2">
-              <p className="text-sm font-semibold text-[#0B0B0B]">No team assignments yet</p>
+              <p className="text-sm font-semibold text-[#0B0B0B]">
+                {currentConfig.teamRoles.length === 0
+                  ? 'No team assignments yet'
+                  : 'No crew shifts assigned to this date'}
+              </p>
               <p className="text-xs text-[#71717A]">
                 Add gate leads, ushers, or stage coordinators above to verify day-of coverage.
               </p>
             </div>
           ) : (
             <div className="divide-y divide-[#E5E5EA]">
-              {currentConfig.teamRoles.map((role) => {
+              {filteredTeamRoles.map((role) => {
                 const isUnassigned = role.memberName.toLowerCase().startsWith('unassigned');
                 return (
                   <div
@@ -1850,6 +2124,14 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
                       </div>
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[#71717A]">
                         <span>{role.station}</span>
+                        {role.shiftDate && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="font-mono tabular-nums font-semibold text-[#0B0B0B]">
+                              {formatIsoDateShort(role.shiftDate, true)}
+                            </span>
+                          </>
+                        )}
                         <span aria-hidden="true">·</span>
                         <span className="font-mono tabular-nums">{role.shiftWindow}</span>
                         {role.phone && (
@@ -1867,7 +2149,16 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {canEdit && (
+                        <input
+                          type="date"
+                          value={role.shiftDate ?? ''}
+                          aria-label={`Shift date for ${role.roleTitle}`}
+                          onChange={(e) => handleRoleShiftDateChange(role.id, e.target.value)}
+                          className="h-9 px-2.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[11px] font-mono text-[#0B0B0B]"
+                        />
+                      )}
                       <button
                         type="button"
                         disabled={!canEdit}

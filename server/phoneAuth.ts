@@ -616,17 +616,17 @@ export async function sendArkeselSmsOtp(params: {
           ? 'gateway diagnostics'
           : 'workspace sign-in';
 
-  const message = appendPoweredByLine(
+  const message =
     params.purpose === 'test'
       ? `Events By You gateway test (${sender}). Confirmation code: ${params.code}.`
-      : `Your Events By You ${purposeText} code is ${params.code}. Valid for 10 minutes.`
-  );
+      : `Your Events By You ${purposeText} code is ${params.code}. Valid for 10 minutes. Do not share this code.`;
 
   const callbackUrl = resolveArkeselCallbackUrl();
   const payload: Record<string, unknown> = {
     sender,
     message,
     recipients: [cleanPhone],
+    sandbox: false,
   };
   if (callbackUrl) {
     payload.callback_url = callbackUrl;

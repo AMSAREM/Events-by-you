@@ -11,6 +11,7 @@ import type {
   PlanningVendor,
   PlanningVendorStatus,
 } from '../types/events.ts';
+import { getEventDateSlots, sanitizeIsoDate } from './eventDates.ts';
 
 export const PLANNING_PHASES: PlanningTaskPhase[] = [
   'Venue & Permits',
@@ -832,17 +833,76 @@ function buildCategoryKit(
 export function createStarterPlanningConfig(
   category: string,
   organizerName = 'Lead Organiser',
-  venueName = 'Main Venue'
+  venueName = 'Main Venue',
+  eventDateContext?: Pick<EventItem, 'isoDate' | 'endIsoDate'> | null
 ): EventPlanningConfig {
   const kit = buildCategoryKit(category, organizerName, venueName);
+  const slots = getEventDateSlots(eventDateContext);
+  const eventDates = slots.map((s) => s.isoDate);
+  const firstDate = slots[0]?.isoDate;
+
+  const baseTasks: PlanningTask[] = kit.tasks.map((t, i) => {
+    const inferredDate =
+      t.phase === 'Day-Of Operations' || /event\s*(morning|day|night)/i.test(t.dueLabel)
+        ? firstDate
+        : undefined;
+    return {
+      ...t,
+      id: uid(`tsk${i}`),
+      ...(inferredDate ? { dueDate: inferredDate } : {}),
+    };
+  });
+
+  if (slots.length > 1) {
+    for (const slot of slots.slice(1, 7)) {
+      baseTasks.push({
+        id: uid(`tsk-d${slot.dayIndex + 1}`),
+        title: `Day ${slot.dayIndex + 1} (${slot.shortLabel}): Gate scanner reset, badge check & stage cue readiness`,
+        phase: 'Day-Of Operations',
+        priority: 'high',
+        dueLabel: slot.fullLabel,
+        dueDate: slot.isoDate,
+        assignee: organizerName || 'Gate Check-In Lead',
+        completed: false,
+      });
+    }
+  }
+
+  const baseVendors: PlanningVendor[] = kit.vendors.map((v, i) => ({
+    ...v,
+    id: uid(`vnd${i}`),
+    ...(firstDate && !v.serviceDate ? { serviceDate: firstDate } : {}),
+  }));
+
+  const baseRoles: PlanningTeamRole[] = kit.teamRoles.map((r, i) => ({
+    ...r,
+    id: uid(`rol${i}`),
+    ...(firstDate && !r.shiftDate ? { shiftDate: firstDate } : {}),
+  }));
+
+  if (slots.length > 1) {
+    for (const slot of slots.slice(1, 7)) {
+      baseRoles.push({
+        id: uid(`rol-d${slot.dayIndex + 1}`),
+        memberName: organizerName || 'Lead Organiser',
+        roleTitle: `Day ${slot.dayIndex + 1} Gate & Floor Lead`,
+        station: venueName || 'Main Entrance',
+        shiftWindow: '08:00 AM - 06:00 PM',
+        shiftDate: slot.isoDate,
+        briefed: false,
+      });
+    }
+  }
+
   return {
     appliedTemplateCategory: category || 'Events',
     currency: kit.currency,
     targetBudget: kit.targetBudget,
-    tasks: kit.tasks.map((t, i) => ({ ...t, id: uid(`tsk${i}`) })),
+    ...(eventDates.length > 0 ? { eventDates } : {}),
+    tasks: baseTasks,
     budgetItems: kit.budgetItems.map((b, i) => ({ ...b, id: uid(`bdg${i}`) })),
-    vendors: kit.vendors.map((v, i) => ({ ...v, id: uid(`vnd${i}`) })),
-    teamRoles: kit.teamRoles.map((r, i) => ({ ...r, id: uid(`rol${i}`) })),
+    vendors: baseVendors,
+    teamRoles: baseRoles,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -852,20 +912,29 @@ export function mergeStarterPlanningTemplate(
   category: string,
   mode: 'replace' | 'append',
   organizerName = 'Lead Organiser',
-  venueName = 'Main Venue'
+  venueName = 'Main Venue',
+  eventDateContext?: Pick<EventItem, 'isoDate' | 'endIsoDate'> | null
 ): EventPlanningConfig {
-  const fresh = createStarterPlanningConfig(category, organizerName, venueName);
+  const fresh = createStarterPlanningConfig(category, organizerName, venueName, eventDateContext);
   if (!existing || mode === 'replace') {
     return fresh;
   }
   const existingTaskTitles = new Set(existing.tasks.map((t) => t.title.trim().toLowerCase()));
   const existingBudgetTitles = new Set(existing.budgetItems.map((b) => b.title.trim().toLowerCase()));
   const existingVendorNames = new Set(existing.vendors.map((v) => v.name.trim().toLowerCase()));
-  const existingRoleTitles = new Set(existing.teamRoles.map((r) => r.roleTitle.trim().toLowerCase()));
+  const existingRoleKeys = new Set(
+    existing.teamRoles.map((r) => `${r.roleTitle.trim().toLowerCase()}::${r.shiftDate || ''}`)
+  );
+
+  const mergedDates =
+    fresh.eventDates && fresh.eventDates.length > 0
+      ? fresh.eventDates
+      : existing.eventDates;
 
   return {
     ...existing,
     appliedTemplateCategory: category,
+    ...(mergedDates && mergedDates.length > 0 ? { eventDates: mergedDates } : {}),
     tasks: [
       ...existing.tasks,
       ...fresh.tasks.filter((t) => !existingTaskTitles.has(t.title.trim().toLowerCase())),
@@ -880,7 +949,9 @@ export function mergeStarterPlanningTemplate(
     ],
     teamRoles: [
       ...existing.teamRoles,
-      ...fresh.teamRoles.filter((r) => !existingRoleTitles.has(r.roleTitle.trim().toLowerCase())),
+      ...fresh.teamRoles.filter(
+        (r) => !existingRoleKeys.has(`${r.roleTitle.trim().toLowerCase()}::${r.shiftDate || ''}`)
+      ),
     ],
     updatedAt: new Date().toISOString(),
   };
@@ -993,7 +1064,8 @@ function clampNonNegativeMoney(val: unknown): number {
 
 export function sanitizeEventPlanningConfig(
   raw: unknown,
-  fallbackCategory = 'Events'
+  fallbackCategory = 'Events',
+  eventDateContext?: Pick<EventItem, 'isoDate' | 'endIsoDate'> | null
 ): EventPlanningConfig {
   const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const appliedTemplateCategory =
@@ -1003,6 +1075,29 @@ export function sanitizeEventPlanningConfig(
 
   const currency: 'GHS' | 'USD' = obj.currency === 'USD' ? 'USD' : 'GHS';
   const targetBudget = clampNonNegativeMoney(obj.targetBudget);
+
+  const contextDates = getEventDateSlots(eventDateContext).map((s) => s.isoDate);
+  const rawEventDates = Array.isArray(obj.eventDates)
+    ? Array.from(
+        new Set(
+          obj.eventDates
+            .map((d) => sanitizeIsoDate(typeof d === 'string' ? d : undefined))
+            .filter((d): d is string => Boolean(d))
+        )
+      ).sort()
+    : [];
+  const eventDates = contextDates.length > 0 ? contextDates : rawEventDates;
+
+  const dayScheduleNotes: Record<string, string> = {};
+  if (obj.dayScheduleNotes && typeof obj.dayScheduleNotes === 'object') {
+    for (const [rawKey, rawNote] of Object.entries(obj.dayScheduleNotes as Record<string, unknown>)) {
+      const cleanDate = sanitizeIsoDate(rawKey);
+      const cleanNote = typeof rawNote === 'string' ? rawNote.trim().slice(0, 500) : '';
+      if (cleanDate && cleanNote) {
+        dayScheduleNotes[cleanDate] = cleanNote;
+      }
+    }
+  }
 
   const validPhases = new Set<PlanningTaskPhase>(PLANNING_PHASES);
   const validPriorities = new Set<PlanningPriority>(['high', 'medium', 'low']);
@@ -1019,6 +1114,7 @@ export function sanitizeEventPlanningConfig(
     const priority = validPriorities.has(rec.priority as PlanningPriority)
       ? (rec.priority as PlanningPriority)
       : 'medium';
+    const dueDate = sanitizeIsoDate(typeof rec.dueDate === 'string' ? rec.dueDate : undefined);
     tasks.push({
       id: typeof rec.id === 'string' && rec.id.trim() ? rec.id.trim().slice(0, 64) : uid('tsk'),
       title,
@@ -1027,7 +1123,8 @@ export function sanitizeEventPlanningConfig(
       dueLabel:
         typeof rec.dueLabel === 'string' && rec.dueLabel.trim()
           ? rec.dueLabel.trim().slice(0, 48)
-          : 'T-7 Days',
+          : dueDate || 'T-7 Days',
+      ...(dueDate ? { dueDate } : {}),
       assignee:
         typeof rec.assignee === 'string' && rec.assignee.trim()
           ? rec.assignee.trim().slice(0, 80)
@@ -1094,6 +1191,9 @@ export function sanitizeEventPlanningConfig(
     const status = validVendorStatuses.has(rec.status as PlanningVendorStatus)
       ? (rec.status as PlanningVendorStatus)
       : 'quoted';
+    const serviceDate = sanitizeIsoDate(
+      typeof rec.serviceDate === 'string' ? rec.serviceDate : undefined
+    );
     vendors.push({
       id: typeof rec.id === 'string' && rec.id.trim() ? rec.id.trim().slice(0, 64) : uid('vnd'),
       name,
@@ -1116,6 +1216,7 @@ export function sanitizeEventPlanningConfig(
         typeof rec.arrivalWindow === 'string' && rec.arrivalWindow.trim()
           ? rec.arrivalWindow.trim().slice(0, 48)
           : undefined,
+      ...(serviceDate ? { serviceDate } : {}),
       notes:
         typeof rec.notes === 'string' && rec.notes.trim()
           ? rec.notes.trim().slice(0, 400)
@@ -1134,6 +1235,7 @@ export function sanitizeEventPlanningConfig(
         ? rec.memberName.trim().slice(0, 120)
         : '';
     if (!roleTitle && !memberName) continue;
+    const shiftDate = sanitizeIsoDate(typeof rec.shiftDate === 'string' ? rec.shiftDate : undefined);
     teamRoles.push({
       id: typeof rec.id === 'string' && rec.id.trim() ? rec.id.trim().slice(0, 64) : uid('rol'),
       memberName: memberName || 'Unassigned',
@@ -1146,6 +1248,7 @@ export function sanitizeEventPlanningConfig(
         typeof rec.shiftWindow === 'string' && rec.shiftWindow.trim()
           ? rec.shiftWindow.trim().slice(0, 64)
           : 'Full Event',
+      ...(shiftDate ? { shiftDate } : {}),
       phone:
         typeof rec.phone === 'string' && rec.phone.trim()
           ? rec.phone.trim().slice(0, 40)
@@ -1158,6 +1261,8 @@ export function sanitizeEventPlanningConfig(
     appliedTemplateCategory,
     currency,
     targetBudget,
+    ...(eventDates.length > 0 ? { eventDates } : {}),
+    ...(Object.keys(dayScheduleNotes).length > 0 ? { dayScheduleNotes } : {}),
     tasks,
     budgetItems,
     vendors,

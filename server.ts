@@ -13,6 +13,7 @@ import {
   createUserSupabaseClient,
   ensureProfileRow,
   extractEventAttendeeMetaMap,
+  extractEventScheduleDatesMap,
   extractEventShotShootersMap,
   findSupabaseUserByEmail,
   findSupabaseUserByPhone,
@@ -87,6 +88,7 @@ import {
   sendAuthOtpEmail,
   sendCheckInWelcomeEmail,
   sendEventPassEmail,
+  type EmailScheduleItem,
 } from './server/resend.ts';
 import {
   appendPoweredByLine,
@@ -95,10 +97,14 @@ import {
   resolveEventMessage,
 } from './src/lib/eventMessages.ts';
 import {
+  compareScheduleBlocksChronological,
   formatEventDateSpan,
   getEventCheckInPolicy,
+  getScheduleBlockDayFromIso,
   getTodayIsoDate,
+  getWeekdayForIsoDate,
   normalizeScheduleDay,
+  resolveScheduleBlockDate,
   sanitizeCheckedInDates,
   sanitizeCheckInPolicy,
   sanitizeIsoDate,
@@ -816,6 +822,98 @@ async function removeEventShotShooter(
   }
 }
 
+function isScheduleDayCheckError(err: { code?: string; message?: string } | null | undefined): boolean {
+  if (!err) return false;
+  const msg = (err.message || '').toLowerCase();
+  return err.code === '23514' || msg.includes('schedule_blocks_day_check') || msg.includes('check constraint');
+}
+
+function toLegacyScheduleDay(
+  day: ScheduleBlock['day'],
+  isoDate?: string
+): 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' {
+  const candidate = isoDate ? getWeekdayForIsoDate(isoDate) ?? day : day;
+  if (
+    candidate === 'Mon' ||
+    candidate === 'Tue' ||
+    candidate === 'Wed' ||
+    candidate === 'Thu' ||
+    candidate === 'Fri' ||
+    candidate === 'Sat'
+  ) {
+    return candidate;
+  }
+  return 'Sat';
+}
+
+async function mergeEventScheduleDatesMeta(
+  client: SupabaseClient,
+  eventId: string,
+  updates: Record<string, { date?: string; day?: string } | null>
+) {
+  if (Object.keys(updates).length === 0) return;
+  try {
+    const { data: rawRow } = await client
+      .from('events')
+      .select('extra_data_config')
+      .eq('id', eventId)
+      .maybeSingle();
+    const currentExtra =
+      rawRow && (rawRow as Record<string, unknown>).extra_data_config &&
+      typeof (rawRow as Record<string, unknown>).extra_data_config === 'object'
+        ? ({ ...((rawRow as Record<string, unknown>).extra_data_config as Record<string, unknown>) })
+        : {};
+    const currentMap = extractEventScheduleDatesMap(currentExtra);
+    for (const [blockId, val] of Object.entries(updates)) {
+      if (val === null) {
+        delete currentMap[blockId];
+      } else {
+        currentMap[blockId] = { ...(currentMap[blockId] ?? {}), ...val };
+      }
+    }
+    currentExtra.__scheduleDates = currentMap;
+    await client.from('events').update({ extra_data_config: currentExtra }).eq('id', eventId);
+  } catch {
+    // Non-fatal fallback
+  }
+}
+
+async function fetchSortedEventScheduleItems(
+  client: SupabaseClient,
+  evt: Pick<EventItem, 'id' | 'isoDate' | 'endIsoDate'>,
+  rawExtraConfig?: unknown
+): Promise<EmailScheduleItem[]> {
+  try {
+    const { data, error } = await client
+      .from('schedule_blocks')
+      .select('*')
+      .eq('event_id', evt.id)
+      .order('created_at', { ascending: true });
+    if (error || !data) return [];
+    const fallbackMap = extractEventScheduleDatesMap(rawExtraConfig);
+    const blocks = data
+      .map((r) => {
+        const rec = r as Record<string, unknown>;
+        return mapScheduleRow(rec, fallbackMap[String(rec.id)]);
+      })
+      .map((blk) => {
+        const resolvedDate = resolveScheduleBlockDate(blk, evt);
+        return resolvedDate && !blk.date ? { ...blk, date: resolvedDate } : blk;
+      })
+      .sort((a, b) => compareScheduleBlocksChronological(a, b, evt));
+    return blocks.map((b) => ({
+      time: b.time,
+      title: b.title,
+      stage: b.stage,
+      lead: b.lead,
+      date: b.date,
+      day: b.day,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -917,21 +1015,30 @@ async function syncEventPlanningRow(
   planning: EventPlanningConfig
 ): Promise<void> {
   const nowIso = planning.updatedAt || new Date().toISOString();
-  const { error } = await client.from('event_planning_configs').upsert(
-    {
-      event_id: eventId,
-      organizer_id: organizerId,
-      applied_template_category: planning.appliedTemplateCategory || 'Events',
-      currency: planning.currency === 'USD' ? 'USD' : 'GHS',
-      target_budget: Number(planning.targetBudget) || 0,
-      tasks: planning.tasks ?? [],
-      budget_items: planning.budgetItems ?? [],
-      vendors: planning.vendors ?? [],
-      team_roles: planning.teamRoles ?? [],
-      updated_at: nowIso,
-    },
-    { onConflict: 'event_id' }
-  );
+  const payload = {
+    event_id: eventId,
+    organizer_id: organizerId,
+    applied_template_category: planning.appliedTemplateCategory || 'Events',
+    currency: planning.currency === 'USD' ? 'USD' : 'GHS',
+    target_budget: Number(planning.targetBudget) || 0,
+    tasks: planning.tasks ?? [],
+    budget_items: planning.budgetItems ?? [],
+    vendors: planning.vendors ?? [],
+    team_roles: planning.teamRoles ?? [],
+    event_dates: planning.eventDates ?? [],
+    day_schedule_notes: planning.dayScheduleNotes ?? {},
+    updated_at: nowIso,
+  };
+  let { error } = await client
+    .from('event_planning_configs')
+    .upsert(payload, { onConflict: 'event_id' });
+  if (error && isMissingColumnError(error)) {
+    const { event_dates: _ed, day_schedule_notes: _dn, ...legacyPayload } = payload;
+    const retry = await client
+      .from('event_planning_configs')
+      .upsert(legacyPayload, { onConflict: 'event_id' });
+    error = retry.error;
+  }
   if (error && !isMissingTableError(error)) {
     throw new Error(error.message);
   }
@@ -950,13 +1057,29 @@ async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
 
   const attendeeMetaByEvent = new Map<string, ReturnType<typeof extractEventAttendeeMetaMap>>();
   const shotShootersByEvent = new Map<string, Record<string, string>>();
+  const scheduleDatesByEvent = new Map<string, Record<string, { date?: string; day?: string }>>();
   const eventCategoryById = new Map<string, string>();
+  const eventDateContextById = new Map<string, Pick<EventItem, 'isoDate' | 'endIsoDate'>>();
   for (const row of eventRows ?? []) {
     const rec = row as Record<string, unknown>;
     const evtId = String(rec.id);
     attendeeMetaByEvent.set(evtId, extractEventAttendeeMetaMap(rec.extra_data_config));
     shotShootersByEvent.set(evtId, extractEventShotShootersMap(rec.extra_data_config));
+    scheduleDatesByEvent.set(evtId, extractEventScheduleDatesMap(rec.extra_data_config));
     eventCategoryById.set(evtId, String(rec.category ?? 'Events'));
+    const extraObj =
+      rec.extra_data_config && typeof rec.extra_data_config === 'object'
+        ? (rec.extra_data_config as Record<string, unknown>)
+        : undefined;
+    const startIso = sanitizeIsoDate(String(rec.iso_date ?? '')) ?? getTodayIsoDate();
+    const rawEnd = sanitizeIsoDate(
+      (rec.end_iso_date as string | undefined) ??
+        (typeof extraObj?.endIsoDate === 'string' ? extraObj.endIsoDate : undefined)
+    );
+    eventDateContextById.set(evtId, {
+      isoDate: startIso,
+      endIsoDate: rawEnd && rawEnd > startIso ? rawEnd : undefined,
+    });
   }
 
   const rawEventRows = eventRows ?? [];
@@ -1033,7 +1156,10 @@ async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
     for (const row of planningRes.data ?? []) {
       const rec = row as Record<string, unknown>;
       const eid = String(rec.event_id);
-      planningByEvent.set(eid, mapPlanningRow(rec, eventCategoryById.get(eid) || 'Events'));
+      planningByEvent.set(
+        eid,
+        mapPlanningRow(rec, eventCategoryById.get(eid) || 'Events', eventDateContextById.get(eid))
+      );
     }
   }
 
@@ -1046,7 +1172,19 @@ async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
     const mapped = mapAttendeeRow(r as Record<string, unknown>);
     return hydrateAttendeeWithEventMeta(mapped, attendeeMetaByEvent.get(mapped.eventId));
   });
-  const scheduleBlocks = (schRes.data ?? []).map((r) => mapScheduleRow(r as Record<string, unknown>));
+  const scheduleBlocks = (schRes.data ?? [])
+    .map((r) => {
+      const rec = r as Record<string, unknown>;
+      const eid = String(rec.event_id);
+      const fallback = scheduleDatesByEvent.get(eid)?.[String(rec.id)];
+      const mapped = mapScheduleRow(rec, fallback);
+      const ctx = eventDateContextById.get(eid);
+      const resolvedDate = resolveScheduleBlockDate(mapped, ctx);
+      return resolvedDate && !mapped.date ? { ...mapped, date: resolvedDate } : mapped;
+    })
+    .sort((a, b) =>
+      compareScheduleBlocksChronological(a, b, eventDateContextById.get(a.eventId) ?? null)
+    );
   const disposableShots = (shotRes.data ?? []).map((r) => {
     const mapped = mapShotRow(r as Record<string, unknown>);
     return hydrateShotWithEventMeta(mapped, shotShootersByEvent.get(mapped.eventId));
@@ -1552,6 +1690,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
               otpType: 'sms',
               channels: delivery.channels,
               provider: delivery.provider,
+              smsSenderId: delivery.smsSenderId,
+              smsMessageId: delivery.smsMessageId,
+              smsWarning: delivery.smsWarning,
             });
           }
           return res.json({
@@ -1603,6 +1744,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           otpType: 'sms',
           channels: challenge.channels,
           provider: challenge.provider,
+          smsSenderId: challenge.smsSenderId,
+          smsMessageId: challenge.smsMessageId,
+          smsWarning: challenge.smsWarning,
         });
       }
 
@@ -2274,6 +2418,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           email: contacts.email,
           channels: delivery.channels,
           provider: delivery.provider,
+          smsSenderId: delivery.smsSenderId,
+          smsMessageId: delivery.smsMessageId,
+          smsWarning: delivery.smsWarning,
         });
       }
 
@@ -2322,6 +2469,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           email: cleanEmail,
           channels: delivery.channels,
           provider: delivery.provider,
+          smsSenderId: delivery.smsSenderId,
+          smsMessageId: delivery.smsMessageId,
+          smsWarning: delivery.smsWarning,
         });
       }
 
@@ -2485,6 +2635,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           'Supabase is not configured on this server. Set SUPABASE_URL and SUPABASE_ANON_KEY in your environment.',
         code: 'SUPABASE_NOT_CONFIGURED',
         events: [],
+        scheduleBlocks: [],
       });
     }
     try {
@@ -2496,15 +2647,43 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .order('created_at', { ascending: false });
 
       if (error) {
-        return res.status(500).json({ error: error.message, events: [] });
+        return res.status(500).json({ error: error.message, events: [], scheduleBlocks: [] });
       }
-      const events = (data ?? []).map((r) =>
-        sanitizePublicEvent(mapEventRow(r as Record<string, unknown>))
-      );
-      return res.json({ events });
+      const rows = data ?? [];
+      const scheduleDatesByEvent = new Map<string, Record<string, { date?: string; day?: string }>>();
+      const events = rows.map((r) => {
+        const rec = r as Record<string, unknown>;
+        scheduleDatesByEvent.set(String(rec.id), extractEventScheduleDatesMap(rec.extra_data_config));
+        return sanitizePublicEvent(mapEventRow(rec));
+      });
+      const eventById = new Map(events.map((e) => [e.id, e]));
+      let scheduleBlocks: ScheduleBlock[] = [];
+      if (events.length > 0) {
+        const { data: schRows } = await supabase
+          .from('schedule_blocks')
+          .select('*')
+          .in(
+            'event_id',
+            events.map((e) => e.id)
+          )
+          .order('created_at', { ascending: true });
+        scheduleBlocks = (schRows ?? [])
+          .map((r) => {
+            const rec = r as Record<string, unknown>;
+            const eid = String(rec.event_id);
+            const mapped = mapScheduleRow(rec, scheduleDatesByEvent.get(eid)?.[String(rec.id)]);
+            const evtCtx = eventById.get(eid);
+            const resolvedDate = resolveScheduleBlockDate(mapped, evtCtx);
+            return resolvedDate && !mapped.date ? { ...mapped, date: resolvedDate } : mapped;
+          })
+          .sort((a, b) =>
+            compareScheduleBlocksChronological(a, b, eventById.get(a.eventId) ?? null)
+          );
+      }
+      return res.json({ events, scheduleBlocks });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load events.';
-      return res.status(500).json({ error: message, events: [] });
+      return res.status(500).json({ error: message, events: [], scheduleBlocks: [] });
     }
   });
 
@@ -2515,11 +2694,36 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           'Supabase is not configured on this server. Set SUPABASE_URL and SUPABASE_ANON_KEY in your environment.',
       });
     }
-    const evt = await resolveEventForPublicOrOg(req.params.slugOrId);
-    if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
-      return res.status(404).json({ error: 'Event invitation not found or no longer active.' });
+    try {
+      const evt = await resolveEventForPublicOrOg(req.params.slugOrId);
+      if (!evt || (evt.status !== 'live' && evt.status !== 'upcoming')) {
+        return res.status(404).json({ error: 'Event invitation not found or no longer active.' });
+      }
+      const supabase = createServiceSupabaseClient() ?? createPublicSupabaseClient();
+      const [{ data: rawEvt }, { data: schRows }] = await Promise.all([
+        supabase.from('events').select('extra_data_config').eq('id', evt.id).maybeSingle(),
+        supabase
+          .from('schedule_blocks')
+          .select('*')
+          .eq('event_id', evt.id)
+          .order('created_at', { ascending: true }),
+      ]);
+      const fallbackMap = extractEventScheduleDatesMap(
+        (rawEvt as Record<string, unknown> | null)?.extra_data_config
+      );
+      const scheduleBlocks = (schRows ?? [])
+        .map((r) => {
+          const rec = r as Record<string, unknown>;
+          const mapped = mapScheduleRow(rec, fallbackMap[String(rec.id)]);
+          const resolvedDate = resolveScheduleBlockDate(mapped, evt);
+          return resolvedDate && !mapped.date ? { ...mapped, date: resolvedDate } : mapped;
+        })
+        .sort((a, b) => compareScheduleBlocksChronological(a, b, evt));
+      return res.json({ event: sanitizePublicEvent(evt), scheduleBlocks });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load event.';
+      return res.status(500).json({ error: message });
     }
-    return res.json({ event: sanitizePublicEvent(evt) });
   });
 
   app.get('/api/public/camera/:slugOrId', requireSupabaseConfiguredMiddleware, async (req, res) => {
@@ -2958,6 +3162,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           smsSkippedReason = 'Organizer SMS bundle balance is 0 (no purchased SMS credits remaining).';
         }
 
+        const publicScheduleItems =
+          isResendConfigured() && cleanEmail.includes('@')
+            ? await fetchSortedEventScheduleItems(supabase, event)
+            : [];
+
         const [smsDelivery, emailDelivery] = await Promise.all([
           debitReserved
             ? dispatchOptionalArkeselSms(
@@ -2983,6 +3192,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                 replyTo,
                 customMessage: resolvedMsg.text,
                 cameraUrl: resolvedMsg.cameraUrl,
+                eventUrl: resolvedMsg.eventUrl,
+                scheduleBlocks: publicScheduleItems,
               })
             : Promise.resolve({ ok: false, skipped: true }),
         ]);
@@ -4822,25 +5033,28 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
 
       const uniqueEventId = `evt-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
 
-      const starterPlanning = sanitizeEventPlanningConfig(
-        event.extraDataConfig?.planningConfig ??
-          createStarterPlanningConfig(
-            event.category || 'Events',
-            event.organizer || 'Organiser',
-            event.venue || 'Main Venue'
-          ),
-        event.category || 'Events'
-      );
-
       const cleanStartIso = sanitizeIsoDate(event.isoDate) ?? getTodayIsoDate();
       const rawEndIso = sanitizeIsoDate(event.endIsoDate ?? event.extraDataConfig?.endIsoDate);
       const cleanEndIso = rawEndIso && rawEndIso > cleanStartIso ? rawEndIso : undefined;
       const cleanPolicy = sanitizeCheckInPolicy(
         event.checkInPolicy ?? event.extraDataConfig?.checkInPolicy
       );
+      const dateContext = { isoDate: cleanStartIso, endIsoDate: cleanEndIso };
       const formattedDate = cleanEndIso
         ? formatEventDateSpan(cleanStartIso, cleanEndIso, event.date)
         : event.date;
+
+      const starterPlanning = sanitizeEventPlanningConfig(
+        event.extraDataConfig?.planningConfig ??
+          createStarterPlanningConfig(
+            event.category || 'Events',
+            event.organizer || 'Organiser',
+            event.venue || 'Main Venue',
+            dateContext
+          ),
+        event.category || 'Events',
+        dateContext
+      );
 
       const eventRow: Record<string, unknown> = {
         id: uniqueEventId,
@@ -4907,23 +5121,53 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
 
       let createdBlocks: ScheduleBlock[] = [];
       if (blocks && blocks.length > 0) {
-        const blockRows = blocks.map((b, idx) => ({
-          id: `sch-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}-${idx}`,
-          event_id: uniqueEventId,
-          time: b.time,
-          duration: b.duration,
-          title: b.title,
-          stage: b.stage,
-          lead: b.lead,
-          completed: b.completed,
-          day: normalizeScheduleDay(b.day, 'Sat'),
-        }));
-        const { data: insertedBlocks, error: schErr } = await client
+        const metaMap: Record<string, { date?: string; day?: string }> = {};
+        const blockRows = blocks.map((b, idx) => {
+          const id = `sch-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}-${idx}`;
+          const resolvedDate =
+            sanitizeIsoDate(b.date) ??
+            resolveScheduleBlockDate({ day: b.day, date: b.date }, dateContext);
+          const resolvedDay = resolvedDate
+            ? getScheduleBlockDayFromIso(resolvedDate, dateContext, normalizeScheduleDay(b.day, 'Sat'))
+            : normalizeScheduleDay(b.day, 'Sat');
+          if (resolvedDate || resolvedDay) {
+            metaMap[id] = { ...(resolvedDate ? { date: resolvedDate } : {}), day: resolvedDay };
+          }
+          return {
+            id,
+            event_id: uniqueEventId,
+            time: b.time,
+            duration: b.duration,
+            title: b.title,
+            stage: b.stage,
+            lead: b.lead,
+            completed: b.completed,
+            day: resolvedDay,
+            ...(resolvedDate ? { date: resolvedDate } : {}),
+          };
+        });
+        let { data: insertedBlocks, error: schErr } = await client
           .from('schedule_blocks')
           .insert(blockRows)
           .select('*');
+        if (schErr && (isMissingColumnError(schErr) || isScheduleDayCheckError(schErr))) {
+          const legacyBlockRows = blockRows.map(({ date: blkDate, ...rest }) => ({
+            ...rest,
+            day: toLegacyScheduleDay(rest.day as ScheduleBlock['day'], blkDate),
+          }));
+          const retryBlocks = await client
+            .from('schedule_blocks')
+            .insert(legacyBlockRows)
+            .select('*');
+          insertedBlocks = retryBlocks.data;
+          schErr = retryBlocks.error;
+        }
         if (schErr) return res.status(400).json({ error: schErr.message });
-        createdBlocks = (insertedBlocks ?? []).map((r) => mapScheduleRow(r as Record<string, unknown>));
+        await mergeEventScheduleDatesMeta(adminOrUserClient, uniqueEventId, metaMap);
+        createdBlocks = (insertedBlocks ?? []).map((r) => {
+          const rec = r as Record<string, unknown>;
+          return mapScheduleRow(rec, metaMap[String(rec.id)]);
+        });
       }
 
       return res.status(201).json({
@@ -4951,12 +5195,6 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         existingRec?.extra_data_config && typeof existingRec.extra_data_config === 'object'
           ? (existingRec.extra_data_config as Record<string, unknown>)
           : {};
-      const incomingPlanning = updated.extraDataConfig?.planningConfig
-        ? sanitizeEventPlanningConfig(
-            updated.extraDataConfig.planningConfig,
-            updated.category || String(existingRec?.category || 'Events')
-          )
-        : undefined;
 
       const cleanStartIso =
         sanitizeIsoDate(updated.isoDate) ??
@@ -4969,6 +5207,21 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         ? sanitizeIsoDate(updated.endIsoDate ?? updated.extraDataConfig?.endIsoDate)
         : sanitizeIsoDate(existingExtraObj.endIsoDate as string | undefined);
       const cleanEndIso = rawEndIso && rawEndIso > cleanStartIso ? rawEndIso : undefined;
+      const dateContext = { isoDate: cleanStartIso, endIsoDate: cleanEndIso };
+
+      const incomingPlanning = updated.extraDataConfig?.planningConfig
+        ? sanitizeEventPlanningConfig(
+            updated.extraDataConfig.planningConfig,
+            updated.category || String(existingRec?.category || 'Events'),
+            dateContext
+          )
+        : existingRec?.planning_config || existingExtraObj.planningConfig
+          ? sanitizeEventPlanningConfig(
+              existingRec?.planning_config ?? existingExtraObj.planningConfig,
+              updated.category || String(existingRec?.category || 'Events'),
+              dateContext
+            )
+          : undefined;
 
       const hasExplicitPolicy =
         'checkInPolicy' in updated ||
@@ -4986,6 +5239,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           updated.brandColor,
           existingRec?.extra_data_config
         ) ?? {};
+      if (incomingPlanning) {
+        embeddedExtra.planningConfig = incomingPlanning;
+      }
       if (cleanEndIso) {
         embeddedExtra.endIsoDate = cleanEndIso;
       } else if (hasExplicitEndDate) {
@@ -5105,11 +5361,16 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         }
 
         const rec = evtRow as Record<string, unknown>;
+        const mappedBase = mapEventRow(rec);
         const override =
           !planErr && planRow
-            ? mapPlanningRow(planRow as Record<string, unknown>, String(rec.category ?? 'Events'))
+            ? mapPlanningRow(
+                planRow as Record<string, unknown>,
+                String(rec.category ?? 'Events'),
+                { isoDate: mappedBase.isoDate, endIsoDate: mappedBase.endIsoDate }
+              )
             : undefined;
-        const mappedEvent = mapEventRow(rec, override);
+        const mappedEvent = override ? mapEventRow(rec, override) : mappedBase;
         return res.json({
           planningConfig: mappedEvent.extraDataConfig?.planningConfig ?? null,
           event: mappedEvent,
@@ -5139,9 +5400,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         }
 
         const rec = evtRow as Record<string, unknown>;
+        const mappedExisting = mapEventRow(rec);
         const sanitizedPlanning = sanitizeEventPlanningConfig(
           req.body,
-          String(rec.category ?? 'Events')
+          String(rec.category ?? 'Events'),
+          { isoDate: mappedExisting.isoDate, endIsoDate: mappedExisting.endIsoDate }
         );
         const existingExtra =
           rec.extra_data_config && typeof rec.extra_data_config === 'object'
@@ -5819,6 +6082,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         }
       }
 
+      const studioScheduleItems =
+        isResendConfigured() && attendee.email?.includes('@')
+          ? await fetchSortedEventScheduleItems(client, evtMapped, (evt as Record<string, unknown>).extra_data_config)
+          : [];
+
       const [smsDelivery, emailDelivery] = await Promise.all([
         debitReserved && normalizedPhone
           ? dispatchOptionalArkeselSms(
@@ -5842,6 +6110,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                 organizerName: evtMapped.organizer,
                 welcomeMessage: studioResolvedMsg.text,
                 cameraUrl: studioResolvedMsg.cameraUrl,
+                eventUrl: studioResolvedMsg.eventUrl,
+                scheduleBlocks: studioScheduleItems,
                 replyTo,
               })
             : sendEventPassEmail({
@@ -5858,6 +6128,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                 replyTo,
                 customMessage: studioResolvedMsg.text,
                 cameraUrl: studioResolvedMsg.cameraUrl,
+                eventUrl: studioResolvedMsg.eventUrl,
+                scheduleBlocks: studioScheduleItems,
               })
           : Promise.resolve({ ok: false, skipped: true }),
       ]);
@@ -6145,6 +6417,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
             }
           }
 
+          const checkInScheduleItems =
+            isResendConfigured() && mappedAttendee.email?.includes('@')
+              ? await fetchSortedEventScheduleItems(adminOrClient, evtMapped, (evtRow as Record<string, unknown>).extra_data_config)
+              : [];
+
           const [smsRes, emailRes] = await Promise.all([
             debitReserved && mappedAttendee.phone
               ? dispatchOptionalArkeselSms(
@@ -6167,6 +6444,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                   organizerName: evtMapped.organizer,
                   welcomeMessage: resolved.text,
                   cameraUrl: resolved.cameraUrl,
+                  eventUrl: resolved.eventUrl,
+                  scheduleBlocks: checkInScheduleItems,
                   replyTo,
                 })
               : Promise.resolve({ ok: false, skipped: true }),
@@ -6488,33 +6767,165 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
   app.post('/api/studio/schedule', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     const block = req.body as ScheduleBlock;
     try {
-      const { data: evtCheck } = await req
-        .supabase!.from('events')
-        .select('id, organizer_id')
+      const client = req.supabase!;
+      const { data: evtCheck } = await client
+        .from('events')
+        .select('id, organizer_id, iso_date, extra_data_config')
         .eq('id', block.eventId)
         .maybeSingle();
       if (!evtCheck || String((evtCheck as Record<string, unknown>).organizer_id) !== req.user!.id) {
         return res.status(403).json({ error: 'Only the event organizer can add schedule blocks.' });
       }
-      const { data, error } = await req
-        .supabase!.from('schedule_blocks')
-        .insert({
-          id: block.id,
-          event_id: block.eventId,
-          time: block.time,
-          duration: block.duration,
-          title: block.title,
-          stage: block.stage,
-          lead: block.lead,
-          completed: Boolean(block.completed),
-          day: normalizeScheduleDay(block.day, 'Sat'),
-        })
+      const evtMapped = mapEventRow(evtCheck as Record<string, unknown>);
+      const resolvedDate =
+        sanitizeIsoDate(block.date) ??
+        resolveScheduleBlockDate({ day: block.day, date: block.date }, evtMapped);
+      const resolvedDay = resolvedDate
+        ? getScheduleBlockDayFromIso(resolvedDate, evtMapped, normalizeScheduleDay(block.day, 'Sat'))
+        : normalizeScheduleDay(block.day, 'Sat');
+      const insertRow: Record<string, unknown> = {
+        id: block.id,
+        event_id: block.eventId,
+        time: block.time,
+        duration: block.duration,
+        title: block.title,
+        stage: block.stage,
+        lead: block.lead,
+        completed: Boolean(block.completed),
+        day: resolvedDay,
+        ...(resolvedDate ? { date: resolvedDate } : {}),
+      };
+
+      let { data, error } = await client
+        .from('schedule_blocks')
+        .insert(insertRow)
         .select('*')
         .single();
+      if (error && (isMissingColumnError(error) || isScheduleDayCheckError(error))) {
+        const { date: _d, ...withoutDate } = insertRow;
+        const retry = await client
+          .from('schedule_blocks')
+          .insert({
+            ...withoutDate,
+            day: toLegacyScheduleDay(resolvedDay, resolvedDate),
+          })
+          .select('*')
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
       if (error) return res.status(400).json({ error: error.message });
-      return res.status(201).json({ block: mapScheduleRow(data as Record<string, unknown>) });
+
+      const metaEntry = {
+        ...(resolvedDate ? { date: resolvedDate } : {}),
+        day: resolvedDay,
+      };
+      await mergeEventScheduleDatesMeta(client, block.eventId, {
+        [String((data as Record<string, unknown>).id)]: metaEntry,
+      });
+
+      return res.status(201).json({
+        block: mapScheduleRow(data as Record<string, unknown>, metaEntry),
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to add schedule block.';
+      return res.status(500).json({ error: message });
+    }
+  });
+
+  app.patch('/api/studio/schedule/:id', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    try {
+      const client = req.supabase!;
+      const patch = (req.body || {}) as Partial<ScheduleBlock>;
+      const { data: existing, error: fetchErr } = await client
+        .from('schedule_blocks')
+        .select('*')
+        .eq('id', req.params.id)
+        .single();
+      if (fetchErr || !existing) {
+        return res.status(404).json({ error: 'Schedule block not found.' });
+      }
+      const existingRec = existing as Record<string, unknown>;
+      const eventId = String(existingRec.event_id);
+
+      const { data: evtRow } = await client
+        .from('events')
+        .select('id, organizer_id, iso_date, extra_data_config')
+        .eq('id', eventId)
+        .maybeSingle();
+      if (!evtRow || String((evtRow as Record<string, unknown>).organizer_id) !== req.user!.id) {
+        return res.status(403).json({ error: 'Unauthorized to edit schedule blocks for this event.' });
+      }
+
+      const evtMapped = mapEventRow(evtRow as Record<string, unknown>);
+      const existingMeta = extractEventScheduleDatesMap(
+        (evtRow as Record<string, unknown>).extra_data_config
+      )[req.params.id];
+      const currentMapped = mapScheduleRow(existingRec, existingMeta);
+
+      const explicitDateProvided = 'date' in patch;
+      const cleanedExplicitDate = explicitDateProvided ? sanitizeIsoDate(patch.date) : currentMapped.date;
+      let nextDay =
+        patch.day !== undefined ? normalizeScheduleDay(patch.day, currentMapped.day) : currentMapped.day;
+      let nextDate = cleanedExplicitDate;
+
+      if (explicitDateProvided && cleanedExplicitDate) {
+        nextDay =
+          patch.day !== undefined
+            ? normalizeScheduleDay(
+                patch.day,
+                getScheduleBlockDayFromIso(cleanedExplicitDate, evtMapped, currentMapped.day)
+              )
+            : getScheduleBlockDayFromIso(cleanedExplicitDate, evtMapped, currentMapped.day);
+      } else if (patch.day !== undefined && !explicitDateProvided) {
+        nextDate = resolveScheduleBlockDate({ day: nextDay, date: undefined }, evtMapped) ?? currentMapped.date;
+      }
+
+      const updPayload: Record<string, unknown> = {
+        ...(typeof patch.time === 'string' && patch.time.trim() ? { time: patch.time.trim() } : {}),
+        ...(typeof patch.duration === 'string' && patch.duration.trim()
+          ? { duration: patch.duration.trim() }
+          : {}),
+        ...(typeof patch.title === 'string' && patch.title.trim() ? { title: patch.title.trim() } : {}),
+        ...(typeof patch.stage === 'string' && patch.stage.trim() ? { stage: patch.stage.trim() } : {}),
+        ...(typeof patch.lead === 'string' && patch.lead.trim() ? { lead: patch.lead.trim() } : {}),
+        ...(typeof patch.completed === 'boolean' ? { completed: patch.completed } : {}),
+        day: nextDay,
+        date: nextDate ?? null,
+      };
+
+      let { data: updated, error: updErr } = await client
+        .from('schedule_blocks')
+        .update(updPayload)
+        .eq('id', req.params.id)
+        .select('*')
+        .single();
+      if (updErr && (isMissingColumnError(updErr) || isScheduleDayCheckError(updErr))) {
+        const { date: _d, ...withoutDate } = updPayload;
+        const retry = await client
+          .from('schedule_blocks')
+          .update({
+            ...withoutDate,
+            day: toLegacyScheduleDay(nextDay, nextDate),
+          })
+          .eq('id', req.params.id)
+          .select('*')
+          .single();
+        updated = retry.data;
+        updErr = retry.error;
+      }
+      if (updErr) return res.status(400).json({ error: updErr.message });
+
+      const metaEntry = nextDate || nextDay ? { ...(nextDate ? { date: nextDate } : {}), day: nextDay } : null;
+      await mergeEventScheduleDatesMeta(client, eventId, {
+        [req.params.id]: metaEntry,
+      });
+
+      return res.json({
+        block: mapScheduleRow(updated as Record<string, unknown>, metaEntry ?? undefined),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update schedule block.';
       return res.status(500).json({ error: message });
     }
   });
@@ -6529,7 +6940,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .single();
       if (fetchErr || !existing) return res.status(404).json({ error: 'Schedule block not found.' });
 
-      const nextCompleted = !Boolean((existing as Record<string, unknown>).completed);
+      const existingRec = existing as Record<string, unknown>;
+      const nextCompleted = !Boolean(existingRec.completed);
       const { data: updated, error: updErr } = await client
         .from('schedule_blocks')
         .update({ completed: nextCompleted })
@@ -6537,7 +6949,16 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .select('*')
         .single();
       if (updErr) return res.status(400).json({ error: updErr.message });
-      return res.json({ block: mapScheduleRow(updated as Record<string, unknown>) });
+
+      const { data: evtRow } = await client
+        .from('events')
+        .select('extra_data_config')
+        .eq('id', String(existingRec.event_id))
+        .maybeSingle();
+      const meta = extractEventScheduleDatesMap(
+        (evtRow as Record<string, unknown> | null)?.extra_data_config
+      )[req.params.id];
+      return res.json({ block: mapScheduleRow(updated as Record<string, unknown>, meta) });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to toggle schedule block.';
       return res.status(500).json({ error: message });
@@ -6546,11 +6967,24 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
 
   app.delete('/api/studio/schedule/:id', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
-      const { error } = await req
-        .supabase!.from('schedule_blocks')
+      const client = req.supabase!;
+      const { data: existing } = await client
+        .from('schedule_blocks')
+        .select('event_id')
+        .eq('id', req.params.id)
+        .maybeSingle();
+      const { error } = await client
+        .from('schedule_blocks')
         .delete()
         .eq('id', req.params.id);
       if (error) return res.status(400).json({ error: error.message });
+      if (existing && (existing as Record<string, unknown>).event_id) {
+        await mergeEventScheduleDatesMeta(
+          client,
+          String((existing as Record<string, unknown>).event_id),
+          { [req.params.id]: null }
+        );
+      }
       return res.json({ ok: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to delete schedule block.';
@@ -7266,10 +7700,21 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
 
   // JSON Error Handler for /api routes
   app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
-    if (!req.path.startsWith('/api/')) return next(err);
-    platformRuntime.recordError(req.path, err);
-    const message = err instanceof Error ? err.message : 'Internal server error.';
-    return res.status(500).json({ error: message });
+    const reqTarget = req.originalUrl || req.url || req.path || '';
+    if (!reqTarget.startsWith('/api')) return next(err);
+    platformRuntime.recordError(reqTarget, err);
+    const errObj = err as { status?: number; statusCode?: number; message?: string } | null;
+    const rawStatus = Number(errObj?.status ?? errObj?.statusCode ?? 500);
+    const status = Number.isInteger(rawStatus) && rawStatus >= 400 && rawStatus <= 599 ? rawStatus : 500;
+    const rawMsg =
+      err instanceof Error
+        ? err.message
+        : typeof errObj?.message === 'string'
+          ? errObj.message
+          : '';
+    const message = rawMsg.trim() || (status === 413 ? 'Uploaded payload is too large.' : 'Internal server error.');
+    if (res.headersSent) return next(err);
+    return res.status(status).json({ error: message });
   });
 
   // =========================================================================

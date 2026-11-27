@@ -1786,6 +1786,24 @@ export default function App() {
     }
   };
 
+  const handleUpdateScheduleBlock = async (
+    blockId: string,
+    patch: Partial<ScheduleBlock>
+  ) => {
+    const previous = scheduleBlocks;
+    setScheduleBlocks((prev) =>
+      prev.map((b) => (b.id === blockId ? { ...b, ...patch } : b))
+    );
+    try {
+      const res = await api.studio.updateScheduleBlock(blockId, patch);
+      setScheduleBlocks((prev) => prev.map((b) => (b.id === blockId ? res.block : b)));
+    } catch (err) {
+      setScheduleBlocks(previous);
+      notifyError(err, 'Failed to update schedule block in Supabase.');
+      throw err;
+    }
+  };
+
   const handleDeleteScheduleBlock = async (blockId: string) => {
     const previous = scheduleBlocks;
     setScheduleBlocks((prev) => prev.filter((b) => b.id !== blockId));
@@ -2898,6 +2916,7 @@ export default function App() {
               onDeletePoll={handleStudioDeletePoll}
               onToggleScheduleBlock={handleToggleScheduleBlock}
               onAddScheduleBlock={handleAddScheduleBlock}
+              onUpdateScheduleBlock={handleUpdateScheduleBlock}
               onDeleteScheduleBlock={handleDeleteScheduleBlock}
               onToggleQrPassPublished={handleToggleQrPassPublished}
               onNavigateSettings={() => {
@@ -3040,6 +3059,7 @@ export default function App() {
                   profile={profile}
                   onToggleBlock={handleToggleScheduleBlock}
                   onAddBlock={handleAddScheduleBlock}
+                  onUpdateBlock={handleUpdateScheduleBlock}
                   onDeleteBlock={handleDeleteScheduleBlock}
                   onManageEvent={handleOpenWorkspace}
                   onNavigateSettings={() => setActiveScreen('settings')}

@@ -29,8 +29,10 @@ import {
 } from '../types/events';
 import { getCategoryPreset } from '../data/initialData';
 import {
+  compareScheduleBlocksChronological,
   formatEventDateSpan,
   formatEventDurationBadge,
+  formatScheduleBlockDateBadge,
   getEventCheckInPolicy,
   isMultiDayEvent,
   sanitizeIsoDate,
@@ -692,7 +694,9 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
 
   const pct = Math.round((event.registered / Math.max(1, event.capacity)) * 100);
   const isAtCeiling = pct >= capacityThreshold;
-  const eventSessions = scheduleBlocks.filter((b) => b.eventId === event.id);
+  const eventSessions = scheduleBlocks
+    .filter((b) => b.eventId === event.id)
+    .sort((a, b) => compareScheduleBlocksChronological(a, b, event));
   const inviteUrl = buildEventInvitationUrl(event.slug || event.id);
   const checkinQrUrl = buildEventInvitationUrl(event.slug || event.id, 'checkin');
   const ogUrl = buildEventOgImageUrl(event.slug || event.id);
@@ -1366,8 +1370,8 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
                   className="px-4 py-3 rounded-2xl bg-[#F5F5F7] flex items-center justify-between gap-3"
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <span className="px-2 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold shrink-0">
-                      {block.day}
+                    <span className="px-2.5 py-0.5 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold shrink-0 whitespace-nowrap">
+                      {formatScheduleBlockDateBadge(block, event)}
                     </span>
                     <span className="font-mono text-xs font-medium text-[#0B0B0B] tabular-nums shrink-0">
                       {block.time}

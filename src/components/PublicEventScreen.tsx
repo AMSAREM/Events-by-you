@@ -49,9 +49,14 @@ import { api } from '../lib/api';
 import {
   ALL_SCHEDULE_DAYS,
   buildEventIcsContent,
+  compareScheduleBlocksChronological,
   formatEventDateSpan,
   formatEventDurationBadge,
+  formatIsoDateShort,
+  formatScheduleBlockDateBadge,
   getEventCheckInPolicy,
+  getEventDateSlots,
+  resolveScheduleBlockDate,
 } from '../lib/eventDates';
 import { useDocumentFullscreen } from '../lib/fullscreen';
 import { isPollsEnabledForEvent } from '../lib/polls';
@@ -294,23 +299,45 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const eventDurationBadge = formatEventDurationBadge(selectedEvent);
   const eventCheckInPolicy = getEventCheckInPolicy(selectedEvent);
   const [scheduleDayFilter, setScheduleDayFilter] = useState<'all' | ScheduleBlock['day']>('all');
+  const [scheduleDateFilter, setScheduleDateFilter] = useState<'all' | string>('all');
   const eventScheduleBlocks = useMemo(
     () =>
       selectedEvent
-        ? scheduleBlocks.filter((b) => b.eventId === selectedEvent.id)
+        ? scheduleBlocks
+            .filter((b) => b.eventId === selectedEvent.id)
+            .sort((a, b) => compareScheduleBlocksChronological(a, b, selectedEvent))
         : [],
     [scheduleBlocks, selectedEvent]
   );
+  const scheduleDateTabs = useMemo(() => {
+    if (!selectedEvent) return [];
+    const map = new Map<string, string>();
+    for (const slot of getEventDateSlots(selectedEvent)) {
+      map.set(slot.isoDate, slot.fullLabel);
+    }
+    for (const blk of eventScheduleBlocks) {
+      const resolved = resolveScheduleBlockDate(blk, selectedEvent);
+      if (resolved && !map.has(resolved)) {
+        map.set(resolved, formatIsoDateShort(resolved, true));
+      }
+    }
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([isoDate, label]) => ({ isoDate, label }));
+  }, [eventScheduleBlocks, selectedEvent]);
   const distinctScheduleDays = useMemo(() => {
     const present = new Set(eventScheduleBlocks.map((b) => b.day));
     return ALL_SCHEDULE_DAYS.filter((d) => present.has(d));
   }, [eventScheduleBlocks]);
   const filteredScheduleBlocks = useMemo(
     () =>
-      scheduleDayFilter === 'all'
-        ? eventScheduleBlocks
-        : eventScheduleBlocks.filter((b) => b.day === scheduleDayFilter),
-    [eventScheduleBlocks, scheduleDayFilter]
+      eventScheduleBlocks.filter((b) => {
+        if (scheduleDateFilter !== 'all') {
+          return resolveScheduleBlockDate(b, selectedEvent) === scheduleDateFilter;
+        }
+        return scheduleDayFilter === 'all' || b.day === scheduleDayFilter;
+      }),
+    [eventScheduleBlocks, scheduleDayFilter, scheduleDateFilter, selectedEvent]
   );
 
   const [name, setName] = useState('');
@@ -376,6 +403,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     setDuplicateError(null);
     setLookupError(null);
     setScheduleDayFilter('all');
+    setScheduleDateFilter('all');
   }, [selectedEvent?.id, selectedEvent?.flyerUrl, validationConfig.enabled, validationConfig.options]);
 
   const normalizedPhone = useMemo(() => {
@@ -2932,35 +2960,81 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     </span>
                   </div>
 
-                  {distinctScheduleDays.length > 1 && (
+                  {scheduleDateTabs.length > 1 ? (
                     <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
                       <button
                         type="button"
-                        onClick={() => setScheduleDayFilter('all')}
+                        onClick={() => {
+                          setScheduleDateFilter('all');
+                          setScheduleDayFilter('all');
+                        }}
                         className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                          scheduleDayFilter === 'all'
+                          scheduleDateFilter === 'all'
                             ? 'bg-[#0B0B0B] text-white'
                             : 'bg-white text-[#71717A] border border-[#E5E5EA] hover:text-[#0B0B0B]'
                         }`}
                       >
-                        All Days
+                        All Dates
                       </button>
-                      {distinctScheduleDays.map((day) => (
+                      {scheduleDateTabs.map((tab) => (
                         <button
-                          key={day}
+                          key={tab.isoDate}
                           type="button"
-                          onClick={() => setScheduleDayFilter(day)}
+                          onClick={() => {
+                            setScheduleDateFilter(tab.isoDate);
+                            setScheduleDayFilter('all');
+                          }}
                           className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                            scheduleDayFilter === day
+                            scheduleDateFilter === tab.isoDate
                               ? 'bg-[#0B0B0B] text-white'
                               : 'bg-white text-[#71717A] border border-[#E5E5EA] hover:text-[#0B0B0B]'
                           }`}
                         >
-                          {day}
+                          {tab.label}
                         </button>
                       ))}
                     </div>
+                  ) : (
+                    distinctScheduleDays.length > 1 && (
+                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                        <button
+                          type="button"
+                          onClick={() => setScheduleDayFilter('all')}
+                          className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                            scheduleDayFilter === 'all'
+                              ? 'bg-[#0B0B0B] text-white'
+                              : 'bg-white text-[#71717A] border border-[#E5E5EA] hover:text-[#0B0B0B]'
+                          }`}
+                        >
+                          All Days
+                        </button>
+                        {distinctScheduleDays.map((day) => (
+                          <button
+                            key={day}
+                            type="button"
+                            onClick={() => setScheduleDayFilter(day)}
+                            className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                              scheduleDayFilter === day
+                                ? 'bg-[#0B0B0B] text-white'
+                                : 'bg-white text-[#71717A] border border-[#E5E5EA] hover:text-[#0B0B0B]'
+                            }`}
+                          >
+                            {day}
+                          </button>
+                        ))}
+                      </div>
+                    )
                   )}
+
+                  {scheduleDateFilter !== 'all' &&
+                    extraDataConfig.planningConfig?.dayScheduleNotes?.[scheduleDateFilter] && (
+                      <div className="px-4 py-2.5 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#444748]">
+                        <span className="font-semibold text-[#0B0B0B]">
+                          {formatIsoDateShort(scheduleDateFilter, true)} Note:{' '}
+                        </span>
+                        {extraDataConfig.planningConfig.dayScheduleNotes[scheduleDateFilter]}
+                      </div>
+                    )}
 
                   {filteredScheduleBlocks.map((blk) => (
                     <div
@@ -2976,8 +3050,8 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                             {blk.title}
                           </h4>
                           <div className="flex items-center gap-1.5 shrink-0">
-                            <span className="text-[10px] font-semibold bg-[#0B0B0B] text-white px-2 py-0.5 rounded-full whitespace-nowrap">
-                              {blk.day}
+                            <span className="text-[10px] font-semibold bg-[#0B0B0B] text-white px-2.5 py-0.5 rounded-full whitespace-nowrap">
+                              {formatScheduleBlockDateBadge(blk, selectedEvent)}
                             </span>
                             <span className="text-[11px] font-medium bg-[#F3F3F5] text-[#71717A] px-2.5 py-0.5 rounded-full tabular-nums">
                               {blk.time}

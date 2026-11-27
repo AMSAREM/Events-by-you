@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -33,10 +33,15 @@ import {
 } from '../types/events';
 import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
 import {
+  compareScheduleBlocksChronological,
   formatEventDateSpan,
   formatEventDurationBadge,
+  formatScheduleBlockDateBadge,
+  getEventDateSlots,
   getEventDayCount,
   getEventDayOptions,
+  getScheduleBlockDayFromIso,
+  resolveIsoDateForScheduleDay,
   sanitizeIsoDate,
 } from '../lib/eventDates';
 import {
@@ -143,13 +148,40 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
 
   // Step 2: Schedule blocks (organiser-defined run of show)
   const [draftBlocks, setDraftBlocks] = useState<
-    { id: string; day: ScheduleBlock['day']; time: string; title: string; lead: string; stage: string }[]
+    {
+      id: string;
+      day: ScheduleBlock['day'];
+      date?: string;
+      time: string;
+      title: string;
+      lead: string;
+      stage: string;
+    }[]
   >([]);
   const [newBlockDay, setNewBlockDay] = useState<ScheduleBlock['day']>('Day 1');
+  const [newBlockDate, setNewBlockDate] = useState<string>('2026-12-18');
   const [newBlockTime, setNewBlockTime] = useState('10:00 - 11:00');
   const [newBlockTitle, setNewBlockTitle] = useState('');
   const [newBlockLead, setNewBlockLead] = useState('');
   const [newBlockStage, setNewBlockStage] = useState('Workshop Lab');
+
+  useEffect(() => {
+    const cleanStart = sanitizeIsoDate(startIsoDate) ?? '2026-12-18';
+    const cleanEnd =
+      isMultiDay && sanitizeIsoDate(endIsoDate) && endIsoDate > cleanStart
+        ? endIsoDate
+        : undefined;
+    const resolved =
+      resolveIsoDateForScheduleDay(newBlockDay, { isoDate: cleanStart, endIsoDate: cleanEnd }) ||
+      cleanStart;
+    setNewBlockDate((prev) => {
+      const cleanPrev = sanitizeIsoDate(prev);
+      if (!cleanPrev) return resolved;
+      if (cleanEnd && (cleanPrev < cleanStart || cleanPrev > cleanEnd)) return resolved;
+      if (!cleanEnd && !isMultiDay && cleanPrev !== cleanStart) return cleanStart;
+      return cleanPrev;
+    });
+  }, [startIsoDate, endIsoDate, isMultiDay, newBlockDay]);
 
   // Step 3: Telecom & Capacity
   const entitlements = getPlanEntitlements(profile);
@@ -233,17 +265,31 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const handleAddDraftBlock = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBlockTitle.trim()) return;
-    setDraftBlocks((prev) => [
-      ...prev,
-      {
-        id: `wiz-blk-${Date.now()}`,
-        day: newBlockDay,
-        time: newBlockTime.trim() || '14:00 - 15:00',
-        title: newBlockTitle.trim(),
-        lead: newBlockLead.trim() || profile.name,
-        stage: newBlockStage.trim() || 'Main Hall',
-      },
-    ]);
+    const cleanStart = sanitizeIsoDate(startIsoDate) ?? '2026-12-18';
+    const cleanEnd =
+      isMultiDay && sanitizeIsoDate(endIsoDate) && endIsoDate > cleanStart
+        ? endIsoDate
+        : undefined;
+    const dateCtx = { isoDate: cleanStart, endIsoDate: cleanEnd };
+    const cleanDate =
+      sanitizeIsoDate(newBlockDate) || resolveIsoDateForScheduleDay(newBlockDay, dateCtx);
+    const resolvedDay = cleanDate
+      ? getScheduleBlockDayFromIso(cleanDate, dateCtx, newBlockDay)
+      : newBlockDay;
+    setDraftBlocks((prev) =>
+      [
+        ...prev,
+        {
+          id: `wiz-blk-${Date.now()}`,
+          day: resolvedDay,
+          ...(cleanDate ? { date: cleanDate } : {}),
+          time: newBlockTime.trim() || '14:00 - 15:00',
+          title: newBlockTitle.trim(),
+          lead: newBlockLead.trim() || profile.name,
+          stage: newBlockStage.trim() || 'Main Hall',
+        },
+      ].sort((a, b) => compareScheduleBlocksChronological(a, b, dateCtx))
+    );
     setNewBlockTitle('');
     setNewBlockLead('');
   };
@@ -355,7 +401,8 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
           planningConfig: createStarterPlanningConfig(
             category || tags[0] || 'Events',
             profile.name || profile.studio || 'Organiser',
-            venueFormat === 'virtual' ? 'Livestream Stage' : venue.trim() || 'Main Auditorium'
+            venueFormat === 'virtual' ? 'Livestream Stage' : venue.trim() || 'Main Auditorium',
+            { isoDate: cleanStartIso, endIsoDate: cleanEndIso }
           ),
           ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
           checkInPolicy,
@@ -384,17 +431,23 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
             },
       };
 
-      const createdBlocks: ScheduleBlock[] = draftBlocks.map((blk, i) => ({
-        id: `sch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${i}`,
-        eventId,
-        time: blk.time,
-        duration: '60m',
-        title: blk.title,
-        stage: blk.stage,
-        lead: blk.lead,
-        completed: false,
-        day: blk.day,
-      }));
+      const createdBlocks: ScheduleBlock[] = draftBlocks.map((blk, i) => {
+        const cleanBlkDate =
+          sanitizeIsoDate(blk.date) ||
+          resolveIsoDateForScheduleDay(blk.day, { isoDate: cleanStartIso, endIsoDate: cleanEndIso });
+        return {
+          id: `sch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${i}`,
+          eventId,
+          time: blk.time,
+          duration: '60m',
+          title: blk.title,
+          stage: blk.stage,
+          lead: blk.lead,
+          completed: false,
+          day: blk.day,
+          ...(cleanBlkDate ? { date: cleanBlkDate } : {}),
+        };
+      });
 
       await onCreateEvent(createdEvent, createdBlocks);
     } catch (err) {
@@ -418,6 +471,10 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     endIsoDate: effectiveEndIso,
   });
   const wizardDayOptions = getEventDayOptions({
+    isoDate: effectiveStartIso,
+    endIsoDate: effectiveEndIso,
+  });
+  const wizardDateSlots = getEventDateSlots({
     isoDate: effectiveStartIso,
     endIsoDate: effectiveEndIso,
   });
@@ -1245,18 +1302,48 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                   placeholder="Session Title (e.g. Fireside Chat)"
                   className="sm:col-span-2 h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none"
                 />
-                <select
-                  value={newBlockDay}
-                  onChange={(e) => setNewBlockDay(e.target.value as ScheduleBlock['day'])}
-                  aria-label="Program day"
-                  className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] focus:outline-none"
-                >
-                  {wizardDayOptions.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    value={newBlockDay}
+                    onChange={(e) => {
+                      const nextDay = e.target.value as ScheduleBlock['day'];
+                      setNewBlockDay(nextDay);
+                      const mappedDate = resolveIsoDateForScheduleDay(nextDay, {
+                        isoDate: effectiveStartIso,
+                        endIsoDate: effectiveEndIso,
+                      });
+                      if (mappedDate) setNewBlockDate(mappedDate);
+                    }}
+                    aria-label="Program day"
+                    className="h-10 px-3 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] focus:outline-none"
+                  >
+                    {wizardDayOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="date"
+                    value={newBlockDate}
+                    min={wizardDateSlots.length > 0 ? wizardDateSlots[0].isoDate : undefined}
+                    onChange={(e) => {
+                      const clean = sanitizeIsoDate(e.target.value);
+                      setNewBlockDate(e.target.value);
+                      if (clean) {
+                        setNewBlockDay(
+                          getScheduleBlockDayFromIso(
+                            clean,
+                            { isoDate: effectiveStartIso, endIsoDate: effectiveEndIso },
+                            newBlockDay
+                          )
+                        );
+                      }
+                    }}
+                    aria-label="Specific calendar date"
+                    className="h-10 px-3 rounded-full bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B] focus:outline-none"
+                  />
+                </div>
                 <input
                   type="text"
                   value={newBlockTime}
@@ -1293,8 +1380,8 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                     className="p-4 rounded-2xl bg-white flex items-center justify-between gap-3"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="px-2.5 py-1 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold shrink-0">
-                        {blk.day}
+                      <span className="px-2.5 py-1 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold shrink-0 whitespace-nowrap">
+                        {formatScheduleBlockDateBadge(blk, previewEventDraft)}
                       </span>
                       <span className="px-3 py-1 rounded-full bg-[#F5F5F7] font-mono text-xs font-semibold text-[#0B0B0B] tabular-nums shrink-0">
                         {blk.time}

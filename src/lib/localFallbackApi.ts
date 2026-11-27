@@ -13,10 +13,13 @@ import {
 } from '../data/initialData';
 import { appendPoweredByLine, calculateSmsCredits, resolveEventMessage } from './eventMessages';
 import {
+  compareScheduleBlocksChronological,
   formatEventDateSpan,
   getEventCheckInPolicy,
+  getScheduleBlockDayFromIso,
   getTodayIsoDate,
   normalizeScheduleDay,
+  resolveScheduleBlockDate,
   sanitizeCheckedInDates,
   sanitizeCheckInPolicy,
   sanitizeIsoDate,
@@ -367,9 +370,12 @@ function loadUserWorkspace(db: LocalDatabase, userId: string) {
   const events = db.events
     .filter((e) => e.organizerId === userId)
     .map(({ organizerId: _org, ...rest }) => rest);
+  const evtById = new Map(events.map((e) => [e.id, e]));
   const evtIds = new Set(events.map((e) => e.id));
   const attendees = db.attendees.filter((a) => evtIds.has(a.eventId));
-  const scheduleBlocks = db.scheduleBlocks.filter((b) => evtIds.has(b.eventId));
+  const scheduleBlocks = db.scheduleBlocks
+    .filter((b) => evtIds.has(b.eventId))
+    .sort((a, b) => compareScheduleBlocksChronological(a, b, evtById.get(a.eventId) ?? null));
   const alerts = db.alerts
     .filter((al) => al.organizerId === userId)
     .map(({ organizerId: _org, ...rest }) => rest);
@@ -834,8 +840,11 @@ export async function localFallbackRequest<T>(
     const events = db.events
       .filter((e) => e.status === 'live' || e.status === 'upcoming')
       .map((e) => sanitizePublicEventItem(e));
+    const evtById = new Map(events.map((e) => [e.id, e]));
     const eventIds = new Set(events.map((e) => e.id));
-    const scheduleBlocks = db.scheduleBlocks.filter((b) => eventIds.has(b.eventId));
+    const scheduleBlocks = db.scheduleBlocks
+      .filter((b) => eventIds.has(b.eventId))
+      .sort((a, b) => compareScheduleBlocksChronological(a, b, evtById.get(a.eventId) ?? null));
     return { events, scheduleBlocks } as T;
   }
 
@@ -850,7 +859,9 @@ export async function localFallbackRequest<T>(
     if (!matched) {
       throw new LocalApiError('Event invitation not found or no longer active.', 404);
     }
-    const scheduleBlocks = db.scheduleBlocks.filter((b) => b.eventId === matched.id);
+    const scheduleBlocks = db.scheduleBlocks
+      .filter((b) => b.eventId === matched.id)
+      .sort((a, b) => compareScheduleBlocksChronological(a, b, matched));
     return { event: sanitizePublicEventItem(matched), scheduleBlocks } as T;
   }
 
@@ -1790,16 +1801,28 @@ export async function localFallbackRequest<T>(
     const slugTaken = db.events.some((e) => e.slug === baseSlug);
     const uniqueSlug = slugTaken ? `${baseSlug}-${randomHex(2)}` : baseSlug;
     const uniqueEventId = `evt-${Date.now().toString(36)}-${randomHex(4)}`;
+    const cleanStartIso = sanitizeIsoDate(event.isoDate) || getTodayIsoDate();
+    const rawEndIso = sanitizeIsoDate(event.endIsoDate ?? event.extraDataConfig?.endIsoDate);
+    const cleanEndIso = rawEndIso && rawEndIso > cleanStartIso ? rawEndIso : undefined;
+    const cleanPolicy = sanitizeCheckInPolicy(
+      event.checkInPolicy ?? event.extraDataConfig?.checkInPolicy
+    );
+    const dateContext = { isoDate: cleanStartIso, endIsoDate: cleanEndIso };
     const initialExtraDataConfig = event.extraDataConfig
       ? {
           ...event.extraDataConfig,
-          planningConfig:
-            event.extraDataConfig.planningConfig ??
-            createStarterPlanningConfig(
-              event.category || 'Events',
-              event.organizer || user.profile.name || 'Organiser',
-              event.venue || 'Main Venue'
-            ),
+          planningConfig: event.extraDataConfig.planningConfig
+            ? sanitizeEventPlanningConfig(
+                event.extraDataConfig.planningConfig,
+                event.category || 'Events',
+                dateContext
+              )
+            : createStarterPlanningConfig(
+                event.category || 'Events',
+                event.organizer || user.profile.name || 'Organiser',
+                event.venue || 'Main Venue',
+                dateContext
+              ),
         }
       : {
           enableGiftTable: false,
@@ -1807,15 +1830,10 @@ export async function localFallbackRequest<T>(
           planningConfig: createStarterPlanningConfig(
             event.category || 'Events',
             event.organizer || user.profile.name || 'Organiser',
-            event.venue || 'Main Venue'
+            event.venue || 'Main Venue',
+            dateContext
           ),
         };
-    const cleanStartIso = sanitizeIsoDate(event.isoDate) || getTodayIsoDate();
-    const rawEndIso = sanitizeIsoDate(event.endIsoDate ?? event.extraDataConfig?.endIsoDate);
-    const cleanEndIso = rawEndIso && rawEndIso > cleanStartIso ? rawEndIso : undefined;
-    const cleanPolicy = sanitizeCheckInPolicy(
-      event.checkInPolicy ?? event.extraDataConfig?.checkInPolicy
-    );
     const created: EventItem = {
       ...event,
       id: uniqueEventId,
@@ -1838,11 +1856,18 @@ export async function localFallbackRequest<T>(
     };
     db.events.unshift({ ...created, organizerId: user.id });
     const createdBlocks = blocks.map((b, idx) => {
+      const cleanDate =
+        sanitizeIsoDate(b.date) ||
+        resolveScheduleBlockDate({ day: b.day, date: b.date }, dateContext);
+      const dayVal = b.day
+        ? normalizeScheduleDay(b.day, 'Sat')
+        : getScheduleBlockDayFromIso(cleanDate, dateContext, 'Sat');
       const blk: ScheduleBlock = {
         ...b,
         id: `sch-${Date.now().toString(36)}-${randomHex(2)}-${idx}`,
         eventId: uniqueEventId,
-        day: normalizeScheduleDay(b.day, 'Sat'),
+        day: dayVal,
+        ...(cleanDate ? { date: cleanDate } : {}),
       };
       db.scheduleBlocks.push(blk);
       return blk;
@@ -2249,7 +2274,11 @@ export async function localFallbackRequest<T>(
         event: clean,
       } as T;
     }
-    const sanitizedPlanning = sanitizeEventPlanningConfig(body, existing.category || 'Events');
+    const sanitizedPlanning = sanitizeEventPlanningConfig(
+      body,
+      existing.category || 'Events',
+      { isoDate: existing.isoDate, endIsoDate: existing.endIsoDate }
+    );
     const updated = {
       ...existing,
       extraDataConfig: {
@@ -2465,10 +2494,20 @@ export async function localFallbackRequest<T>(
 
   if (method === 'POST' && path === '/studio/schedule') {
     requireRoles(user, ['creator', 'organizer']);
+    const incoming = body as unknown as ScheduleBlock;
+    const evt = db.events.find((e) => e.id === incoming.eventId && e.organizerId === user.id);
+    if (!evt) throw new LocalApiError('Event not found in studio.', 404);
+    const cleanDate =
+      sanitizeIsoDate(incoming.date) ||
+      resolveScheduleBlockDate({ day: incoming.day, date: incoming.date }, evt);
+    const dayVal = incoming.day
+      ? normalizeScheduleDay(incoming.day, 'Sat')
+      : getScheduleBlockDayFromIso(cleanDate, evt, 'Sat');
     const blk: ScheduleBlock = {
-      ...(body as unknown as ScheduleBlock),
-      day: normalizeScheduleDay(body.day, 'Sat'),
-      id: (body.id as string) || `sch-${Date.now()}-${randomHex(2)}`,
+      ...incoming,
+      day: dayVal,
+      ...(cleanDate ? { date: cleanDate } : { date: undefined }),
+      id: (incoming.id as string) || `sch-${Date.now()}-${randomHex(2)}`,
     };
     db.scheduleBlocks.push(blk);
     saveDb(db);
@@ -2481,15 +2520,67 @@ export async function localFallbackRequest<T>(
     const blockId = decodeURIComponent(schToggleMatch[1]);
     const blk = db.scheduleBlocks.find((b) => b.id === blockId);
     if (!blk) throw new LocalApiError('Schedule block not found.', 404);
+    const evt = db.events.find((e) => e.id === blk.eventId && e.organizerId === user.id);
+    if (!evt) throw new LocalApiError('Schedule block not found.', 404);
     blk.completed = !blk.completed;
     saveDb(db);
     return { block: blk } as T;
   }
 
-  const schDelMatch = path.match(/^\/studio\/schedule\/([^/]+)$/);
-  if (method === 'DELETE' && schDelMatch) {
+  const schItemMatch = path.match(/^\/studio\/schedule\/([^/]+)$/);
+  if (method === 'PATCH' && schItemMatch) {
     requireRoles(user, ['creator', 'organizer']);
-    const blockId = decodeURIComponent(schDelMatch[1]);
+    const blockId = decodeURIComponent(schItemMatch[1]);
+    const blk = db.scheduleBlocks.find((b) => b.id === blockId);
+    if (!blk) throw new LocalApiError('Schedule block not found.', 404);
+    const evt = db.events.find((e) => e.id === blk.eventId && e.organizerId === user.id);
+    if (!evt) throw new LocalApiError('Schedule block not found.', 404);
+    const patch = body as Partial<ScheduleBlock>;
+    if ('date' in patch) {
+      if (patch.date === null || patch.date === '') {
+        delete blk.date;
+      } else {
+        const cleanDate = sanitizeIsoDate(patch.date);
+        if (cleanDate) {
+          blk.date = cleanDate;
+          if (!('day' in patch)) {
+            blk.day = getScheduleBlockDayFromIso(cleanDate, evt, blk.day);
+          }
+        }
+      }
+    }
+    if ('day' in patch && patch.day !== undefined) {
+      blk.day = normalizeScheduleDay(patch.day, blk.day);
+    }
+    if (typeof patch.time === 'string' && patch.time.trim()) {
+      blk.time = patch.time.trim();
+    }
+    if (typeof patch.duration === 'string' && patch.duration.trim()) {
+      blk.duration = patch.duration.trim();
+    }
+    if (typeof patch.title === 'string' && patch.title.trim()) {
+      blk.title = patch.title.trim();
+    }
+    if (typeof patch.stage === 'string' && patch.stage.trim()) {
+      blk.stage = patch.stage.trim();
+    }
+    if (typeof patch.lead === 'string' && patch.lead.trim()) {
+      blk.lead = patch.lead.trim();
+    }
+    if (typeof patch.completed === 'boolean') {
+      blk.completed = patch.completed;
+    }
+    saveDb(db);
+    return { block: blk } as T;
+  }
+
+  if (method === 'DELETE' && schItemMatch) {
+    requireRoles(user, ['creator', 'organizer']);
+    const blockId = decodeURIComponent(schItemMatch[1]);
+    const blk = db.scheduleBlocks.find((b) => b.id === blockId);
+    if (!blk) throw new LocalApiError('Schedule block not found.', 404);
+    const evt = db.events.find((e) => e.id === blk.eventId && e.organizerId === user.id);
+    if (!evt) throw new LocalApiError('Schedule block not found.', 404);
     db.scheduleBlocks = db.scheduleBlocks.filter((b) => b.id !== blockId);
     saveDb(db);
     return { ok: true } as T;

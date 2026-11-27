@@ -191,6 +191,9 @@ export function createMemoryRouter() {
           otpType: 'sms',
           channels: delivery.channels,
           provider: delivery.provider,
+          smsSenderId: delivery.smsSenderId,
+          smsMessageId: delivery.smsMessageId,
+          smsWarning: delivery.smsWarning,
         });
       }
       return res.json({
@@ -405,6 +408,9 @@ export function createMemoryRouter() {
         email: existingUser.email || undefined,
         channels: delivery.channels,
         provider: delivery.provider,
+        smsSenderId: delivery.smsSenderId,
+        smsMessageId: delivery.smsMessageId,
+        smsWarning: delivery.smsWarning,
       });
     }
 
@@ -436,6 +442,9 @@ export function createMemoryRouter() {
       email: cleanEmail,
       channels: delivery.channels,
       provider: delivery.provider,
+      smsSenderId: delivery.smsSenderId,
+      smsMessageId: delivery.smsMessageId,
+      smsWarning: delivery.smsWarning,
     });
   });
 
@@ -629,7 +638,9 @@ export function createMemoryRouter() {
   // =========================================================================
 
   router.get('/public/events', (_req, res) => {
-    return res.json({ events: memoryStore.getPublicEvents() });
+    const events = memoryStore.getPublicEvents();
+    const scheduleBlocks = memoryStore.getPublicScheduleBlocks(events.map((e) => e.id));
+    return res.json({ events, scheduleBlocks });
   });
 
   router.get('/public/events/:slugOrId', (req, res) => {
@@ -637,7 +648,8 @@ export function createMemoryRouter() {
     if (!evt) {
       return res.status(404).json({ error: 'Event invitation not found or no longer active.' });
     }
-    return res.json({ event: evt });
+    const scheduleBlocks = memoryStore.getEventScheduleBlocks(evt.id);
+    return res.json({ event: evt, scheduleBlocks });
   });
 
   router.post('/public/events/:eventId/register', async (req, res) => {
@@ -733,6 +745,8 @@ export function createMemoryRouter() {
               replyTo: orgDefaults.replyToEmail,
               customMessage: resolvedMsg?.text,
               cameraUrl: resolvedMsg?.cameraUrl,
+              eventUrl: resolvedMsg?.eventUrl,
+              scheduleBlocks: memoryStore.getEventScheduleBlocks(targetEvent.id),
             })
           : Promise.resolve({ ok: false, skipped: true }),
       ]);
@@ -1762,6 +1776,8 @@ export function createMemoryRouter() {
                 organizerName: result.event.organizer,
                 welcomeMessage: resolvedMsg.text,
                 cameraUrl: resolvedMsg.cameraUrl,
+                eventUrl: resolvedMsg.eventUrl,
+                scheduleBlocks: memoryStore.getEventScheduleBlocks(result.event.id),
                 replyTo: req.memoryUser?.profile.replyToEmail,
               })
             : sendEventPassEmail({
@@ -1778,6 +1794,8 @@ export function createMemoryRouter() {
                 replyTo: req.memoryUser?.profile.replyToEmail,
                 customMessage: resolvedMsg.text,
                 cameraUrl: resolvedMsg.cameraUrl,
+                eventUrl: resolvedMsg.eventUrl,
+                scheduleBlocks: memoryStore.getEventScheduleBlocks(result.event.id),
               })
           : Promise.resolve({ ok: false, skipped: true }),
       ]);
@@ -1915,6 +1933,8 @@ export function createMemoryRouter() {
                   organizerName: evt.organizer,
                   welcomeMessage: resolved.text,
                   cameraUrl: resolved.cameraUrl,
+                  eventUrl: resolved.eventUrl,
+                  scheduleBlocks: memoryStore.getEventScheduleBlocks(evt.id),
                   replyTo: orgDefaults.replyToEmail || req.memoryUser?.profile.replyToEmail,
                 })
               : Promise.resolve({ ok: false, skipped: true }),
@@ -2095,6 +2115,19 @@ export function createMemoryRouter() {
       return res.status(201).json({ block });
     } catch (err) {
       return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to add schedule block.' });
+    }
+  });
+
+  router.patch('/studio/schedule/:id', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    try {
+      const block = memoryStore.updateScheduleBlock(
+        req.user!.id,
+        req.params.id,
+        req.body as Partial<ScheduleBlock>
+      );
+      return res.json({ block });
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to update schedule block.' });
     }
   });
 

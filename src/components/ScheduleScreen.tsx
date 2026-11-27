@@ -1,12 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, Clock, Plus, Trash2 } from 'lucide-react';
+import { Calendar, Check, Clock, Plus, Trash2 } from 'lucide-react';
 import { EventItem, OrganizerProfile, ScheduleBlock, SystemAlert } from '../types/events';
 import {
   ALL_SCHEDULE_DAYS,
   SCHEDULE_EVENT_DAYS,
   SCHEDULE_WEEKDAYS,
+  compareScheduleBlocksChronological,
+  formatIsoDateShort,
+  formatScheduleBlockDateBadge,
+  getEventDateSlots,
   getEventDayOptions,
+  getScheduleBlockDayFromIso,
   isMultiDayEvent,
+  resolveIsoDateForScheduleDay,
+  resolveScheduleBlockDate,
+  sanitizeIsoDate,
 } from '../lib/eventDates';
 import { TopUtilityBar } from './TopUtilityBar';
 
@@ -17,6 +25,7 @@ interface ScheduleScreenProps {
   profile: OrganizerProfile;
   onToggleBlock: (id: string) => void;
   onAddBlock: (block: ScheduleBlock) => void;
+  onUpdateBlock?: (id: string, patch: Partial<ScheduleBlock>) => Promise<void> | void;
   onDeleteBlock?: (id: string) => void;
   onManageEvent: (event: EventItem) => void;
   onNavigateSettings: () => void;
@@ -30,6 +39,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   profile,
   onToggleBlock,
   onAddBlock,
+  onUpdateBlock,
   onDeleteBlock,
   onManageEvent,
   onNavigateSettings,
@@ -37,6 +47,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDay, setSelectedDay] = useState<'All' | ScheduleBlock['day']>('All');
+  const [selectedDate, setSelectedDate] = useState<'all' | string>('all');
   const [selectedEventId, setSelectedEventId] = useState<string>('all');
   const [showAddForm, setShowAddForm] = useState(false);
 
@@ -49,10 +60,27 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   const [newDay, setNewDay] = useState<ScheduleBlock['day']>(() =>
     isMultiDayEvent(events[0]) ? 'Day 1' : 'Sat'
   );
+  const [newDate, setNewDate] = useState<string>(
+    () =>
+      resolveIsoDateForScheduleDay(
+        isMultiDayEvent(events[0]) ? 'Day 1' : 'Sat',
+        events[0]
+      ) ||
+      sanitizeIsoDate(events[0]?.isoDate) ||
+      ''
+  );
 
   useEffect(() => {
     if (events.length > 0 && (!newEventId || !events.some((e) => e.id === newEventId))) {
-      setNewEventId(events[0].id);
+      const firstEvt = events[0];
+      const nextDay = isMultiDayEvent(firstEvt) ? 'Day 1' : 'Sat';
+      setNewEventId(firstEvt.id);
+      setNewDay(nextDay);
+      setNewDate(
+        resolveIsoDateForScheduleDay(nextDay, firstEvt) ||
+          sanitizeIsoDate(firstEvt.isoDate) ||
+          ''
+      );
     }
   }, [events, newEventId]);
 
@@ -88,39 +116,88 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
     return ['All', ...base];
   }, [blocks, selectedEventId, eventMap]);
 
+  const filterDateSlots = useMemo(() => {
+    const map = new Map<string, string>();
+    const selectedEvt = selectedEventId !== 'all' ? eventMap.get(selectedEventId) : undefined;
+    if (selectedEvt) {
+      for (const slot of getEventDateSlots(selectedEvt)) {
+        map.set(slot.isoDate, slot.fullLabel);
+      }
+      for (const b of blocks) {
+        if (b.eventId !== selectedEvt.id) continue;
+        const resolved = resolveScheduleBlockDate(b, selectedEvt);
+        if (resolved && !map.has(resolved)) {
+          map.set(resolved, formatIsoDateShort(resolved, true));
+        }
+      }
+    } else {
+      for (const b of blocks) {
+        const evt = eventMap.get(b.eventId);
+        const resolved = resolveScheduleBlockDate(b, evt ?? null);
+        if (resolved && !map.has(resolved)) {
+          map.set(resolved, formatIsoDateShort(resolved, true));
+        }
+      }
+    }
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([isoDate, label]) => ({ isoDate, label }));
+  }, [blocks, selectedEventId, eventMap]);
+
+  const targetCreateEvent = eventMap.get(newEventId);
+  const targetCreateDateSlots = useMemo(
+    () => getEventDateSlots(targetCreateEvent),
+    [targetCreateEvent]
+  );
+
   const cueDayOptions = useMemo(() => {
-    const targetEvt = eventMap.get(newEventId);
-    const opts = getEventDayOptions(targetEvt);
+    const opts = getEventDayOptions(targetCreateEvent);
     const present = new Set(opts.map((o) => o.value));
     for (const d of ALL_SCHEDULE_DAYS) {
       if (!present.has(d)) opts.push({ value: d, label: d });
     }
     return opts;
-  }, [eventMap, newEventId]);
+  }, [targetCreateEvent]);
 
   const filteredBlocks = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return blocks
       .filter((b) => {
+        const evt = eventMap.get(b.eventId);
         const matchesDay = selectedDay === 'All' || b.day === selectedDay;
+        const resolvedDate = resolveScheduleBlockDate(b, evt ?? null);
+        const matchesDate = selectedDate === 'all' || resolvedDate === selectedDate;
         const matchesEvent = selectedEventId === 'all' || b.eventId === selectedEventId;
-        const evtTitle = eventMap.get(b.eventId)?.title.toLowerCase() ?? '';
+        const evtTitle = evt?.title.toLowerCase() ?? '';
         const matchesQuery =
           !q ||
           b.title.toLowerCase().includes(q) ||
           b.stage.toLowerCase().includes(q) ||
           b.lead.toLowerCase().includes(q) ||
+          (resolvedDate && resolvedDate.includes(q)) ||
           evtTitle.includes(q);
-        return matchesDay && matchesEvent && matchesQuery;
+        return matchesDay && matchesDate && matchesEvent && matchesQuery;
       })
-      .sort((a, b) => a.time.localeCompare(b.time));
-  }, [blocks, selectedDay, selectedEventId, searchQuery, eventMap]);
+      .sort((a, b) =>
+        compareScheduleBlocksChronological(
+          a,
+          b,
+          eventMap.get(a.eventId) ?? eventMap.get(b.eventId) ?? null
+        )
+      );
+  }, [blocks, selectedDay, selectedDate, selectedEventId, searchQuery, eventMap]);
 
   const completedCount = filteredBlocks.filter((b) => b.completed).length;
 
   const handleCreateCue = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim() || !newEventId) return;
+    const evt = eventMap.get(newEventId);
+    const chosenDate =
+      sanitizeIsoDate(newDate) || resolveIsoDateForScheduleDay(newDay, evt);
+    const chosenDay = chosenDate
+      ? getScheduleBlockDayFromIso(chosenDate, evt, newDay)
+      : newDay;
     try {
       await Promise.resolve(
         onAddBlock({
@@ -132,7 +209,8 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
           stage: newStage.trim() || 'Main Stage',
           lead: newLead.trim() || profile.name,
           completed: false,
-          day: newDay,
+          day: chosenDay,
+          ...(chosenDate ? { date: chosenDate } : {}),
         })
       );
       setNewTitle('');
@@ -159,7 +237,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
           <TopUtilityBar
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
-            searchPlaceholder="Search cues, stages, leads..."
+            searchPlaceholder="Search cues, dates, stages, leads..."
             alerts={alerts}
             onResolveAlert={onResolveAlert}
             onInspectAlertEvent={(id) => {
@@ -173,55 +251,100 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
       </div>
 
       {/* Filter Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-1 p-1 bg-[#F5F5F7] rounded-full overflow-x-auto max-w-full">
-            {filterDays.map((day) => (
+      <div className="space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-1 p-1 bg-[#F5F5F7] rounded-full overflow-x-auto max-w-full">
+              {filterDays.map((day) => (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => {
+                    setSelectedDay(day);
+                    setSelectedDate('all');
+                  }}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                    selectedDay === day && selectedDate === 'all'
+                      ? 'bg-[#0B0B0B] text-white'
+                      : 'text-[#71717A] hover:text-[#0B0B0B]'
+                  }`}
+                >
+                  {day === 'All' ? 'All Days' : day}
+                </button>
+              ))}
+            </div>
+
+            <select
+              value={selectedEventId}
+              onChange={(e) => {
+                setSelectedEventId(e.target.value);
+                setSelectedDate('all');
+              }}
+              aria-label="Filter by event"
+              className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] border border-transparent focus:border-[#0B0B0B] focus:bg-white focus:outline-none"
+            >
+              <option value="all">All Productions</option>
+              {events.map((evt) => (
+                <option key={evt.id} value={evt.id}>
+                  {evt.title}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowAddForm((prev) => !prev)}
+            className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            Add Cue
+          </button>
+        </div>
+
+        {filterDateSlots.length > 0 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#71717A] pr-1 shrink-0">
+              <Calendar className="w-3.5 h-3.5" />
+              Dates:
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelectedDate('all')}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                selectedDate === 'all'
+                  ? 'bg-[#0B0B0B] text-white'
+                  : 'bg-[#F5F5F7] text-[#71717A] hover:text-[#0B0B0B]'
+              }`}
+            >
+              All Dates
+            </button>
+            {filterDateSlots.map((slot) => (
               <button
-                key={day}
+                key={slot.isoDate}
                 type="button"
-                onClick={() => setSelectedDay(day)}
-                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                  selectedDay === day
+                onClick={() => {
+                  setSelectedDate(slot.isoDate);
+                  setSelectedDay('All');
+                }}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                  selectedDate === slot.isoDate
                     ? 'bg-[#0B0B0B] text-white'
-                    : 'text-[#71717A] hover:text-[#0B0B0B]'
+                    : 'bg-[#F5F5F7] text-[#71717A] hover:text-[#0B0B0B]'
                 }`}
               >
-                {day === 'All' ? 'All Days' : day}
+                {slot.label}
               </button>
             ))}
           </div>
-
-          <select
-            value={selectedEventId}
-            onChange={(e) => setSelectedEventId(e.target.value)}
-            aria-label="Filter by event"
-            className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] border border-transparent focus:border-[#0B0B0B] focus:bg-white focus:outline-none"
-          >
-            <option value="all">All Productions</option>
-            {events.map((evt) => (
-              <option key={evt.id} value={evt.id}>
-                {evt.title}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setShowAddForm((prev) => !prev)}
-          className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          Add Cue
-        </button>
+        )}
       </div>
 
       {/* Inline Add Cue Form */}
       {showAddForm && (
         <form
           onSubmit={handleCreateCue}
-          className="p-6 rounded-3xl bg-[#F5F5F7] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end"
+          className="p-6 rounded-3xl bg-[#F5F5F7] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-8 gap-3 items-end"
         >
           <div className="lg:col-span-2">
             <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Cue Title</label>
@@ -242,9 +365,15 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                 const nextId = e.target.value;
                 setNewEventId(nextId);
                 const nextEvt = eventMap.get(nextId);
+                const nextDay = nextEvt && isMultiDayEvent(nextEvt) ? 'Day 1' : newDay;
                 if (nextEvt && isMultiDayEvent(nextEvt)) {
                   setNewDay('Day 1');
                 }
+                const nextIso =
+                  resolveIsoDateForScheduleDay(nextDay, nextEvt) ||
+                  sanitizeIsoDate(nextEvt?.isoDate) ||
+                  '';
+                if (nextIso) setNewDate(nextIso);
               }}
               className="w-full h-10 px-3 rounded-full bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
             >
@@ -264,30 +393,71 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
               className="w-full h-10 px-3.5 rounded-full bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
             />
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Day</label>
+          <div>
+            <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Specific Date</label>
+            {targetCreateDateSlots.length > 1 ? (
               <select
-                value={newDay}
-                onChange={(e) => setNewDay(e.target.value as ScheduleBlock['day'])}
-                className="w-full h-10 px-2.5 rounded-full bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
+                value={newDate}
+                onChange={(e) => {
+                  const chosen = e.target.value;
+                  setNewDate(chosen);
+                  if (chosen) {
+                    setNewDay(getScheduleBlockDayFromIso(chosen, targetCreateEvent, newDay));
+                  }
+                }}
+                aria-label="Specific schedule date"
+                className="w-full h-10 px-3 rounded-full bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B]"
               >
-                {cueDayOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
+                {targetCreateDateSlots.map((slot) => (
+                  <option key={slot.isoDate} value={slot.isoDate}>
+                    {slot.fullLabel}
                   </option>
                 ))}
               </select>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Time</label>
+            ) : (
               <input
-                type="text"
-                value={newTime}
-                onChange={(e) => setNewTime(e.target.value)}
-                className="w-full h-10 px-3 rounded-full bg-white border border-[#E5E5EA] text-xs font-mono text-[#0B0B0B] tabular-nums"
+                type="date"
+                value={newDate}
+                onChange={(e) => {
+                  const chosen = e.target.value;
+                  setNewDate(chosen);
+                  const clean = sanitizeIsoDate(chosen);
+                  if (clean) {
+                    setNewDay(getScheduleBlockDayFromIso(clean, targetCreateEvent, newDay));
+                  }
+                }}
+                aria-label="Specific schedule date"
+                className="w-full h-10 px-3 rounded-full bg-white border border-[#E5E5EA] text-xs font-mono text-[#0B0B0B]"
               />
-            </div>
+            )}
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Day Tag</label>
+            <select
+              value={newDay}
+              onChange={(e) => {
+                const chosenDay = e.target.value as ScheduleBlock['day'];
+                setNewDay(chosenDay);
+                const mapped = resolveIsoDateForScheduleDay(chosenDay, targetCreateEvent);
+                if (mapped) setNewDate(mapped);
+              }}
+              className="w-full h-10 px-2.5 rounded-full bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
+            >
+              {cueDayOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Time</label>
+            <input
+              type="text"
+              value={newTime}
+              onChange={(e) => setNewTime(e.target.value)}
+              className="w-full h-10 px-3 rounded-full bg-white border border-[#E5E5EA] text-xs font-mono text-[#0B0B0B] tabular-nums"
+            />
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -306,12 +476,15 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
           <div className="p-10 rounded-3xl bg-[#F5F5F7] text-center">
             <p className="text-sm font-semibold text-[#0B0B0B]">No cues scheduled</p>
             <p className="text-xs text-[#71717A] mt-1">
-              Add a production cue or adjust the active day filter.
+              Add a production cue or adjust the active date or day filter.
             </p>
           </div>
         ) : (
           filteredBlocks.map((block) => {
             const evt = eventMap.get(block.eventId);
+            const dateBadge = formatScheduleBlockDateBadge(block, evt ?? null);
+            const resolvedBlockIso = resolveScheduleBlockDate(block, evt ?? null) || '';
+            const evtDateSlots = getEventDateSlots(evt);
             return (
               <div
                 key={block.id}
@@ -333,13 +506,15 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                     <Check className="w-3.5 h-3.5" />
                   </button>
 
-                  <div className="w-20 shrink-0">
+                  <div className="w-32 shrink-0">
                     <p className="font-mono text-sm font-semibold text-[#0B0B0B] tabular-nums">
                       {block.time}
                     </p>
                     <p className="text-[11px] text-[#71717A] tabular-nums inline-flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {block.day} · {block.duration}
+                      <Clock className="w-3 h-3 shrink-0" />
+                      <span className="truncate">
+                        {dateBadge} · {block.duration}
+                      </span>
                     </p>
                   </div>
 
@@ -368,7 +543,51 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-end gap-2.5 shrink-0">
+                <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+                  {onUpdateBlock && (
+                    <input
+                      type="date"
+                      value={resolvedBlockIso}
+                      aria-label={`Assign calendar date for ${block.title}`}
+                      onChange={(e) => {
+                        const clean = sanitizeIsoDate(e.target.value);
+                        if (!clean) return;
+                        void Promise.resolve(
+                          onUpdateBlock(block.id, {
+                            date: clean,
+                            day: getScheduleBlockDayFromIso(clean, evt ?? null, block.day),
+                          })
+                        ).catch(() => {});
+                      }}
+                      className="h-8 px-2.5 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-mono text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                    />
+                  )}
+                  {onUpdateBlock && evtDateSlots.length > 1 && (
+                    <select
+                      value={resolvedBlockIso}
+                      aria-label={`Select event day for ${block.title}`}
+                      onChange={(e) => {
+                        const clean = sanitizeIsoDate(e.target.value);
+                        if (!clean) return;
+                        void Promise.resolve(
+                          onUpdateBlock(block.id, {
+                            date: clean,
+                            day: getScheduleBlockDayFromIso(clean, evt ?? null, block.day),
+                          })
+                        ).catch(() => {});
+                      }}
+                      className="h-8 px-2.5 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                    >
+                      {!evtDateSlots.some((s) => s.isoDate === resolvedBlockIso) && resolvedBlockIso && (
+                        <option value={resolvedBlockIso}>{formatIsoDateShort(resolvedBlockIso, true)}</option>
+                      )}
+                      {evtDateSlots.map((slot) => (
+                        <option key={slot.isoDate} value={slot.isoDate}>
+                          {slot.fullLabel}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <button
                     type="button"
                     onClick={() => {

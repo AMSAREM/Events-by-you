@@ -1079,6 +1079,13 @@ export const api = {
         true
       ),
 
+    updateScheduleBlock: (blockId: string, patch: Partial<ScheduleBlock>) =>
+      request<{ block: ScheduleBlock }>(
+        `/api/studio/schedule/${encodeURIComponent(blockId)}`,
+        { method: 'PATCH', body: JSON.stringify(patch) },
+        true
+      ),
+
     toggleScheduleBlock: (blockId: string) =>
       request<{ block: ScheduleBlock }>(
         `/api/studio/schedule/${encodeURIComponent(blockId)}/toggle`,

@@ -3,7 +3,7 @@ import type { NextFunction, Request, Response } from 'express';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { normalizePhoneE164 } from '../src/data/initialData.ts';
 import type { AppRole } from '../src/types/events.ts';
-import { appendPoweredByLine } from '../src/lib/eventMessages.ts';
+import { appendPoweredByLine, stripTrailingPoweredByLine } from '../src/lib/eventMessages.ts';
 import { platformRuntime, type MemoryUser } from './memoryStore.ts';
 
 export interface AuthedRequest extends Request {
@@ -270,14 +270,14 @@ export async function dispatchOptionalArkeselSms(
       appUrl && /^https:\/\//i.test(appUrl) && !appUrl.includes('localhost')
         ? `${appUrl}/api/webhooks/arkesel-dlr`
         : undefined;
-    const messageText = appendPoweredByLine(
-      customMessage?.trim() ||
-        `${eventTitle}: Pass confirmed! Code: ${ticketCode}. Show this QR token at check-in.`
-    );
+    const messageText =
+      stripTrailingPoweredByLine(customMessage) ||
+      `${eventTitle}: Pass confirmed! Code: ${ticketCode}. Show this QR token at check-in.`;
     const body: Record<string, unknown> = {
       sender: senderId,
       message: messageText,
       recipients: [cleanPhone],
+      sandbox: false,
     };
     if (callbackUrl) {
       body.callback_url = callbackUrl;
