@@ -146,7 +146,12 @@ interface EventWorkspaceScreenProps {
   onRecordGiftEntry?: (
     eventId: string,
     gift: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
-  ) => Promise<{ gift: GiftTableEntry; event: EventItem }> | void;
+  ) => Promise<{
+    gift: GiftTableEntry;
+    event: EventItem;
+    giftSmsSent?: boolean;
+    smsSkippedReason?: string;
+  }> | void;
   onCreateGiftAttendantLink?: (
     eventId: string,
     payload: { attendantName: string; roleLabel?: string; phone?: string }
@@ -728,7 +733,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     }
     setSavingGiftDesk(true);
     try {
-      await onRecordGiftEntry(event.id, {
+      const res = await onRecordGiftEntry(event.id, {
         giverName: giftGiverName.trim(),
         giverPhone: giftGiverPhone.trim() ? normalizePhoneE164(giftGiverPhone.trim()) : undefined,
         giftType: giftDeskType,
@@ -745,7 +750,11 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
       setGiftGiverPhone('');
       setGiftDeskAmount('');
       setGiftDeskMessage('');
-      triggerToast('Gift table entry recorded cleanly');
+      triggerToast(
+        res && res.giftSmsSent
+          ? 'Gift recorded & thank-you SMS sent ("We appreciate your gift")'
+          : 'Gift table entry recorded cleanly'
+      );
     } catch (err) {
       triggerToast(err instanceof Error ? err.message : 'Unable to record gift entry');
     } finally {

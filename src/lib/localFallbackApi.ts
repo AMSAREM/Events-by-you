@@ -11,7 +11,12 @@ import {
   validateStrictPassword,
   validateStrictPhoneE164,
 } from '../data/initialData';
-import { appendPoweredByLine, calculateSmsCredits, resolveEventMessage } from './eventMessages';
+import {
+  appendPoweredByLine,
+  calculateSmsCredits,
+  resolveEventMessage,
+  resolveGiftThankYouMessage,
+} from './eventMessages';
 import {
   compareScheduleBlocksChronological,
   formatEventDateSpan,
@@ -1072,8 +1077,38 @@ export async function localFallbackRequest<T>(
       enableGiftTable: true,
       giftLedger: [gift, ...(existingExtra.giftLedger ?? [])],
     };
+    const smsOutcome = (() => {
+      const owner = Object.values(db.users).find((u) => u.id === evt.organizerId);
+      const phoneRes = gift.giverPhone ? validateStrictPhoneE164(gift.giverPhone) : null;
+      if (!phoneRes || !phoneRes.ok) return { giftSmsSent: false };
+      const resolved = resolveGiftThankYouMessage({
+        event: evt,
+        giverName: gift.giverName,
+        giftType: gift.giftType,
+        currency: gift.currency,
+        amount: gift.amount,
+        registryItem: gift.registryItem,
+      });
+      const cost = Math.max(1, calculateSmsCredits(resolved.text));
+      if (!owner || owner.profile.smsCredits < cost) {
+        return {
+          giftSmsSent: false,
+          giftDispatchedMessage: resolved.text,
+          smsCredits: owner?.profile.smsCredits ?? 0,
+          smsSkippedReason: `No SMS credits remaining (${owner?.profile.smsCredits ?? 0} left, ${cost} needed).`,
+        };
+      }
+      owner.profile.smsCredits -= cost;
+      evt.smsDispatched += 1;
+      return {
+        giftSmsSent: true,
+        giftDispatchedMessage: resolved.text,
+        smsCredits: owner.profile.smsCredits,
+        smsCreditsUsed: cost,
+      };
+    })();
     saveDb(db);
-    return { gift, event: sanitizePublicEventItem(evt) } as T;
+    return { gift, event: sanitizePublicEventItem(evt), ...smsOutcome } as T;
   }
 
   const publicDeskMatch = path.match(/^\/public\/events\/([^/]+)\/gift-desk\/([^/]+)$/);
@@ -1137,9 +1172,39 @@ export async function localFallbackRequest<T>(
         giftLedger: [gift, ...(existingExtra.giftLedger ?? [])],
         attendantLinks: updatedLinks,
       };
+      const smsOutcome = (() => {
+        const owner = Object.values(db.users).find((u) => u.id === evt.organizerId);
+        const phoneRes = gift.giverPhone ? validateStrictPhoneE164(gift.giverPhone) : null;
+        if (!phoneRes || !phoneRes.ok) return { giftSmsSent: false };
+        const resolved = resolveGiftThankYouMessage({
+          event: evt,
+          giverName: gift.giverName,
+          giftType: gift.giftType,
+          currency: gift.currency,
+          amount: gift.amount,
+          registryItem: gift.registryItem,
+        });
+        const cost = Math.max(1, calculateSmsCredits(resolved.text));
+        if (!owner || owner.profile.smsCredits < cost) {
+          return {
+            giftSmsSent: false,
+            giftDispatchedMessage: resolved.text,
+            smsCredits: owner?.profile.smsCredits ?? 0,
+            smsSkippedReason: `No SMS credits remaining (${owner?.profile.smsCredits ?? 0} left, ${cost} needed).`,
+          };
+        }
+        owner.profile.smsCredits -= cost;
+        evt.smsDispatched += 1;
+        return {
+          giftSmsSent: true,
+          giftDispatchedMessage: resolved.text,
+          smsCredits: owner.profile.smsCredits,
+          smsCreditsUsed: cost,
+        };
+      })();
       saveDb(db);
       const { token: _secret, ...safeAttendant } = updatedLink;
-      return { gift, event: sanitizePublicEventItem(evt), attendant: safeAttendant } as T;
+      return { gift, event: sanitizePublicEventItem(evt), attendant: safeAttendant, ...smsOutcome } as T;
     }
   }
 
@@ -1958,6 +2023,8 @@ export async function localFallbackRequest<T>(
     return {
       attendee: att,
       event: cleanEvent,
+      checkInMessageSent: Boolean(att.checkedIn && smsCreditsUsed > 0),
+      checkInSmsSent: Boolean(att.checkedIn && smsCreditsUsed > 0),
       cameraUrl: resolved.cameraUrl,
       dispatchedMessage: resolved.text,
       smsCredits: user.profile.smsCredits,
@@ -2002,9 +2069,38 @@ export async function localFallbackRequest<T>(
       enableGiftTable: true,
       giftLedger: [gift, ...(existingExtra.giftLedger ?? [])],
     };
+    const smsOutcome = (() => {
+      const phoneRes = gift.giverPhone ? validateStrictPhoneE164(gift.giverPhone) : null;
+      if (!phoneRes || !phoneRes.ok) return { giftSmsSent: false };
+      const resolved = resolveGiftThankYouMessage({
+        event: evt,
+        giverName: gift.giverName,
+        giftType: gift.giftType,
+        currency: gift.currency,
+        amount: gift.amount,
+        registryItem: gift.registryItem,
+      });
+      const cost = Math.max(1, calculateSmsCredits(resolved.text));
+      if (user.profile.smsCredits < cost) {
+        return {
+          giftSmsSent: false,
+          giftDispatchedMessage: resolved.text,
+          smsCredits: user.profile.smsCredits,
+          smsSkippedReason: `No SMS credits remaining (${user.profile.smsCredits} left, ${cost} needed).`,
+        };
+      }
+      user.profile.smsCredits -= cost;
+      evt.smsDispatched += 1;
+      return {
+        giftSmsSent: true,
+        giftDispatchedMessage: resolved.text,
+        smsCredits: user.profile.smsCredits,
+        smsCreditsUsed: cost,
+      };
+    })();
     saveDb(db);
     const { organizerId: _org, ...cleanEvent } = evt;
-    return { gift, event: cleanEvent } as T;
+    return { gift, event: cleanEvent, ...smsOutcome } as T;
   }
 
   const studioGiftLinksCreateMatch = path.match(/^\/studio\/events\/([^/]+)\/gift-links$/);

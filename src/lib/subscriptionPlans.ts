@@ -1,5 +1,5 @@
 import type { EventItem, OrganizerProfile } from '../types/events.ts';
-import { getDefaultMessageConfig } from './eventMessages.ts';
+import { getDefaultMessageConfig, isLegacyDefaultCheckInMessage } from './eventMessages.ts';
 
 export type SubscriptionPlanName = OrganizerProfile['plan'];
 export type SubscriptionPlanId = 'starter' | 'pro' | 'enterprise';
@@ -335,6 +335,7 @@ export function hasCustomMessageOverrides(
   for (const k of keys) {
     const val = (incoming[k] || '').trim();
     if (!val) continue;
+    if (k === 'checkInMessage' && isLegacyDefaultCheckInMessage(val)) continue;
     const prev = (existing?.[k] || '').trim();
     if (val !== defaults[k] && val !== prev) {
       return true;

@@ -39,6 +39,7 @@ import {
   appendPoweredByLine,
   calculateSmsCredits,
   resolveEventMessage,
+  resolveGiftThankYouMessage,
 } from '../src/lib/eventMessages.ts';
 import {
   getEventCheckInPolicy,
@@ -819,15 +820,74 @@ export function createMemoryRouter() {
     }
   });
 
+  async function dispatchMemoryGiftThankYouSms(event: EventItem, gift: GiftTableEntry) {
+    const rawPhone = (gift.giverPhone || '').trim();
+    if (!rawPhone) return { giftSmsSent: false };
+    const phoneCheck = validateStrictPhoneE164(rawPhone);
+    if (!phoneCheck.ok) {
+      return { giftSmsSent: false, smsSkippedReason: phoneCheck.error };
+    }
+    const orgDefaults = memoryStore.getEventOrganizerDefaults(event.id);
+    const orgId = orgDefaults.organizerId;
+    const resolved = resolveGiftThankYouMessage({
+      event,
+      giverName: gift.giverName,
+      giftType: gift.giftType,
+      currency: gift.currency,
+      amount: gift.amount,
+      registryItem: gift.registryItem,
+    });
+    if (!orgId) {
+      return { giftSmsSent: false, giftDispatchedMessage: resolved.text };
+    }
+    const smsCost = Math.max(1, calculateSmsCredits(resolved.text));
+    const currentCredits = memoryStore.getSmsCredits(orgId);
+    if (currentCredits < smsCost) {
+      return {
+        giftSmsSent: false,
+        giftDispatchedMessage: resolved.text,
+        smsCredits: currentCredits,
+        smsSkippedReason: `No SMS credits remaining (${currentCredits} left, ${smsCost} needed).`,
+      };
+    }
+    const smsRes = await dispatchOptionalArkeselSms(
+      phoneCheck.normalized,
+      event.title,
+      'GIFT',
+      orgDefaults.allowCustomSenderId
+        ? event.senderId || orgDefaults.senderId
+        : DEFAULT_SHARED_SENDER_ID,
+      resolved.text
+    );
+    if (smsRes === 'Arkesel Sent') {
+      const debit = memoryStore.consumeSmsCredits(orgId, smsCost);
+      if (debit.ok) {
+        memoryStore.incrementEventSmsDispatched(event.id, 1);
+        return {
+          giftSmsSent: true,
+          giftDispatchedMessage: resolved.text,
+          smsCredits: debit.remaining,
+          smsCreditsUsed: smsCost,
+        };
+      }
+    }
+    return {
+      giftSmsSent: false,
+      giftDispatchedMessage: resolved.text,
+      smsCredits: currentCredits,
+    };
+  }
+
   // Standalone Public Gift Table endpoint
-  router.post('/public/events/:slugOrId/gifts', (req, res) => {
+  router.post('/public/events/:slugOrId/gifts', async (req, res) => {
     try {
       const result = memoryStore.recordGiftTableEntry(
         req.params.slugOrId,
         req.body as Partial<GiftTableEntry>,
         'public-table'
       );
-      return res.status(201).json(result);
+      const smsOutcome = await dispatchMemoryGiftThankYouSms(result.event, result.gift);
+      return res.status(201).json({ ...result, ...smsOutcome });
     } catch (err) {
       const status = (err as Error & { status?: number }).status || 400;
       return res.status(status).json({
@@ -848,14 +908,15 @@ export function createMemoryRouter() {
     }
   });
 
-  router.post('/public/events/:slugOrId/gift-desk/:token', (req, res) => {
+  router.post('/public/events/:slugOrId/gift-desk/:token', async (req, res) => {
     try {
       const result = memoryStore.recordGiftDeskEntry(
         req.params.slugOrId,
         req.params.token,
         req.body as Partial<GiftTableEntry>
       );
-      return res.status(201).json(result);
+      const smsOutcome = await dispatchMemoryGiftThankYouSms(result.event, result.gift);
+      return res.status(201).json({ ...result, ...smsOutcome });
     } catch (err) {
       const status = (err as Error & { status?: number }).status || 400;
       return res.status(status).json({
@@ -1827,6 +1888,8 @@ export function createMemoryRouter() {
       return res.status(201).json({
         attendee: updatedAtt,
         event: updatedEvt,
+        checkInMessageSent: Boolean(updatedAtt.checkedIn && (smsCreditsUsed > 0 || emailDelivery.ok)),
+        checkInSmsSent: Boolean(updatedAtt.checkedIn && smsCreditsUsed > 0),
         cameraUrl: resolvedMsg.cameraUrl,
         dispatchedMessage: resolvedMsg.text,
         smsCredits: smsCreditsRemaining,
@@ -1839,14 +1902,15 @@ export function createMemoryRouter() {
     }
   });
 
-  router.post('/studio/events/:eventId/gifts', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+  router.post('/studio/events/:eventId/gifts', requireMemoryAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
     try {
       const result = memoryStore.recordGiftTableEntry(
         req.params.eventId,
         req.body as Partial<GiftTableEntry>,
         'gift-desk'
       );
-      return res.status(201).json(result);
+      const smsOutcome = await dispatchMemoryGiftThankYouSms(result.event, result.gift);
+      return res.status(201).json({ ...result, ...smsOutcome });
     } catch (err) {
       const status = (err as Error & { status?: number }).status || 400;
       return res.status(status).json({
@@ -1907,12 +1971,16 @@ export function createMemoryRouter() {
 
         // Only debit & send check-in SMS/welcome email on first entry so Day 2+ scans never double-bill
         if (addedFirstTime) {
+          const cleanCheckInPhone = attendee.phone ? normalizePhoneE164(attendee.phone) : '';
+          const hasValidCheckInPhone = Boolean(
+            cleanCheckInPhone && cleanCheckInPhone.replace(/\D/g, '').length >= 9
+          );
           const smsCost = Math.max(1, calculateSmsCredits(resolved.text));
-          const canSendSms = Boolean(attendee.phone && smsCredits >= smsCost);
+          const canSendSms = Boolean(hasValidCheckInPhone && smsCredits >= smsCost);
           const [smsRes, emailRes] = await Promise.all([
             canSendSms
               ? dispatchOptionalArkeselSms(
-                  attendee.phone,
+                  cleanCheckInPhone,
                   evt.title,
                   attendee.ticketCode,
                   orgDefaults.allowCustomSenderId
@@ -1940,7 +2008,7 @@ export function createMemoryRouter() {
               : Promise.resolve({ ok: false, skipped: true }),
           ]);
 
-          if (attendee.phone && !canSendSms) {
+          if (hasValidCheckInPhone && !canSendSms) {
             smsSkippedReason = `No SMS credits remaining (${smsCredits} left, ${smsCost} needed). Purchase an SMS bundle for check-in SMS.`;
           } else if (smsRes === 'Arkesel Sent') {
             const debit = memoryStore.consumeSmsCredits(orgId, smsCost);

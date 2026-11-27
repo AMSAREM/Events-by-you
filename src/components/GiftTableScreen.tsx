@@ -33,7 +33,12 @@ interface GiftTableScreenProps {
   onRecordGiftEntry: (
     eventId: string,
     gift: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
-  ) => Promise<{ gift: GiftTableEntry; event: EventItem }> | void;
+  ) => Promise<{
+    gift: GiftTableEntry;
+    event: EventItem;
+    giftSmsSent?: boolean;
+    smsSkippedReason?: string;
+  }> | void;
   onCreateGiftAttendantLink: (
     eventId: string,
     payload: { attendantName: string; roleLabel?: string; phone?: string }
@@ -173,7 +178,7 @@ export const GiftTableScreen: React.FC<GiftTableScreenProps> = ({
     if (giftType === 'cash-momo' && (!amount || Number(amount) <= 0)) return;
     setSavingGift(true);
     try {
-      await onRecordGiftEntry(selectedEvent.id, {
+      const res = await onRecordGiftEntry(selectedEvent.id, {
         giverName: giverName.trim(),
         giverPhone: giverPhone.trim() || undefined,
         giftType,
@@ -194,7 +199,11 @@ export const GiftTableScreen: React.FC<GiftTableScreenProps> = ({
       setRegistryItem('');
       setSide('');
       setMessage('');
-      triggerToast('Gift entry recorded on standalone ledger');
+      triggerToast(
+        res && res.giftSmsSent
+          ? 'Gift recorded & thank-you SMS sent ("We appreciate your gift")'
+          : 'Gift entry recorded on standalone ledger'
+      );
     } catch (err) {
       triggerToast(err instanceof Error ? err.message : 'Unable to record gift entry.');
     } finally {

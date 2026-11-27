@@ -97,6 +97,7 @@ import {
   calculateSmsCredits,
   MAX_SHOTS_PER_USER,
   resolveEventMessage,
+  resolveGiftThankYouMessage,
 } from './src/lib/eventMessages.ts';
 import {
   compareScheduleBlocksChronological,
@@ -773,6 +774,121 @@ async function resolveOwnerEntitlementProfile(
     plan: (rec.plan as OrganizerProfile['plan']) || 'Starter',
     planExpiresAt: rec.plan_expires_at != null ? String(rec.plan_expires_at) : undefined,
     ...(planAttendeeCapacity !== undefined ? { planAttendeeCapacity } : {}),
+  };
+}
+
+async function dispatchSupabaseGiftThankYouSms(params: {
+  client: SupabaseClient;
+  event: EventItem;
+  gift: GiftTableEntry;
+  organizerId?: string;
+  eventRow?: Record<string, unknown> | null;
+}): Promise<{
+  giftSmsSent: boolean;
+  giftDispatchedMessage?: string;
+  smsCredits?: number;
+  smsCreditsUsed?: number;
+  smsSkippedReason?: string;
+}> {
+  const rawPhone = (params.gift.giverPhone || '').trim();
+  if (!rawPhone) {
+    return { giftSmsSent: false };
+  }
+  const phoneCheck = validateStrictPhoneE164(rawPhone);
+  if (!phoneCheck.ok) {
+    return { giftSmsSent: false, smsSkippedReason: phoneCheck.error };
+  }
+
+  const resolved = resolveGiftThankYouMessage({
+    event: params.event,
+    giverName: params.gift.giverName,
+    giftType: params.gift.giftType,
+    currency: params.gift.currency,
+    amount: params.gift.amount,
+    registryItem: params.gift.registryItem,
+  });
+
+  const organizerId =
+    params.organizerId ||
+    (params.eventRow && typeof params.eventRow.organizer_id === 'string'
+      ? params.eventRow.organizer_id
+      : undefined);
+
+  if (!organizerId) {
+    return {
+      giftSmsSent: false,
+      giftDispatchedMessage: resolved.text,
+      smsSkippedReason: 'Organizer account not linked to event.',
+    };
+  }
+
+  const svc = createServiceSupabaseClient() ?? params.client;
+  const { data: orgProf } = await svc
+    .from('profiles')
+    .select('plan, plan_expires_at, sender_id, sms_credits')
+    .eq('id', organizerId)
+    .maybeSingle();
+
+  const orgRec = (orgProf ?? {}) as Record<string, unknown>;
+  const ent = getPlanEntitlements({
+    plan: (orgRec.plan as OrganizerProfile['plan']) || 'Starter',
+    planExpiresAt: orgRec.plan_expires_at != null ? String(orgRec.plan_expires_at) : undefined,
+  });
+  const orgSenderId =
+    ent.allowCustomSenderId && typeof orgRec.sender_id === 'string' && orgRec.sender_id.trim()
+      ? orgRec.sender_id.trim()
+      : undefined;
+  const eventSenderId = ent.allowCustomSenderId ? params.event.senderId : DEFAULT_SHARED_SENDER_ID;
+
+  const smsCost = Math.max(1, calculateSmsCredits(resolved.text));
+  const debit = await consumeSupabaseSmsCredits(svc, organizerId, smsCost);
+  if (!debit.ok) {
+    return {
+      giftSmsSent: false,
+      giftDispatchedMessage: resolved.text,
+      smsCredits: debit.remaining,
+      smsSkippedReason: `No SMS credits remaining (${debit.remaining} left, ${smsCost} needed).`,
+    };
+  }
+
+  const smsRes = await dispatchOptionalArkeselSms(
+    phoneCheck.normalized,
+    params.event.title,
+    'GIFT',
+    eventSenderId || orgSenderId,
+    resolved.text
+  );
+
+  const hasLiveArkesel =
+    Boolean((process.env.ARKESEL_API_KEY || '').trim()) && platformRuntime.flags.smsMode !== 'sandbox';
+  if (smsRes === 'Pending' && hasLiveArkesel) {
+    const refunded = await refundSupabaseSmsCredits(svc, organizerId, smsCost);
+    return {
+      giftSmsSent: false,
+      giftDispatchedMessage: resolved.text,
+      smsCredits: refunded,
+      smsSkippedReason: 'SMS gateway unavailable; credit refunded.',
+    };
+  }
+
+  if (smsRes === 'Arkesel Sent') {
+    const prevDispatched = Number(params.eventRow?.sms_dispatched ?? params.event.smsDispatched ?? 0);
+    await svc
+      .from('events')
+      .update({ sms_dispatched: prevDispatched + 1 })
+      .eq('id', params.event.id);
+    return {
+      giftSmsSent: true,
+      giftDispatchedMessage: resolved.text,
+      smsCredits: debit.remaining,
+      smsCreditsUsed: smsCost,
+    };
+  }
+
+  return {
+    giftSmsSent: false,
+    giftDispatchedMessage: resolved.text,
+    smsCredits: debit.remaining,
   };
 }
 
@@ -3520,7 +3636,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         const adminClient = createServiceSupabaseClient() ?? createPublicSupabaseClient();
         const { data: rawRow } = await adminClient
           .from('events')
-          .select('extra_data_config')
+          .select('organizer_id, sender_id, sms_dispatched, extra_data_config')
           .eq('id', evt.id)
           .maybeSingle();
         const currentExtra =
@@ -3545,9 +3661,17 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         if (updErr) {
           return res.status(400).json({ error: updErr.message });
         }
+        const mappedUpdated = mapEventRow(updatedRow as Record<string, unknown>);
+        const smsOutcome = await dispatchSupabaseGiftThankYouSms({
+          client: adminClient,
+          event: mappedUpdated,
+          gift: giftEntry,
+          eventRow: (updatedRow as Record<string, unknown>) ?? (rawRow as Record<string, unknown> | null),
+        });
         return res.status(201).json({
           gift: giftEntry,
-          event: sanitizePublicEvent(mapEventRow(updatedRow as Record<string, unknown>)),
+          event: sanitizePublicEvent(mappedUpdated),
+          ...smsOutcome,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to record gift table entry.';
@@ -3686,11 +3810,19 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         if (updErr) {
           return res.status(400).json({ error: updErr.message });
         }
+        const mappedUpdated = mapEventRow(updatedRow as Record<string, unknown>);
+        const smsOutcome = await dispatchSupabaseGiftThankYouSms({
+          client: adminClient,
+          event: mappedUpdated,
+          gift: giftEntry,
+          eventRow: updatedRow as Record<string, unknown>,
+        });
         const { token: _secret, ...safeAttendant } = updatedMatched;
         return res.status(201).json({
           gift: giftEntry,
-          event: sanitizePublicEvent(mapEventRow(updatedRow as Record<string, unknown>)),
+          event: sanitizePublicEvent(mappedUpdated),
           attendant: safeAttendant,
+          ...smsOutcome,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to log desk gift entry.';
@@ -5811,9 +5943,21 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         if (updErr) {
           return res.status(400).json({ error: updErr.message });
         }
+        const mappedUpdated = mapEventRow(updatedRow as Record<string, unknown>);
+        const smsOutcome = await dispatchSupabaseGiftThankYouSms({
+          client,
+          event: mappedUpdated,
+          gift: giftEntry,
+          organizerId:
+            typeof (updatedRow as Record<string, unknown>).organizer_id === 'string'
+              ? String((updatedRow as Record<string, unknown>).organizer_id)
+              : req.user!.id,
+          eventRow: updatedRow as Record<string, unknown>,
+        });
         return res.status(201).json({
           gift: giftEntry,
-          event: mapEventRow(updatedRow as Record<string, unknown>),
+          event: mappedUpdated,
+          ...smsOutcome,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to log gift desk entry.';
@@ -6500,6 +6644,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       return res.status(201).json({
         attendee: mappedAtt,
         event: mapEventRow(updatedEvt as Record<string, unknown>),
+        checkInMessageSent: Boolean(mappedAtt.checkedIn && (smsCreditsUsed > 0 || emailDelivery.ok)),
+        checkInSmsSent: Boolean(mappedAtt.checkedIn && smsCreditsUsed > 0),
         cameraUrl: studioResolvedMsg.cameraUrl,
         dispatchedMessage: studioResolvedMsg.text,
         smsCredits: smsCreditsRemaining,
@@ -6655,9 +6801,13 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           }
           smsCredits = Number(orgProfRec?.sms_credits ?? 0);
 
+          const cleanCheckInPhone = mappedAttendee.phone ? normalizePhoneE164(mappedAttendee.phone) : '';
+          const hasValidCheckInPhone = Boolean(
+            cleanCheckInPhone && cleanCheckInPhone.replace(/\D/g, '').length >= 9
+          );
           const smsCost = Math.max(1, calculateSmsCredits(resolved.text));
           let debitReserved = false;
-          if (mappedAttendee.phone) {
+          if (hasValidCheckInPhone) {
             const debit = await consumeSupabaseSmsCredits(client, orgId, smsCost);
             debitReserved = debit.ok;
             smsCredits = debit.remaining;
@@ -6672,9 +6822,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
               : [];
 
           const [smsRes, emailRes] = await Promise.all([
-            debitReserved && mappedAttendee.phone
+            debitReserved && hasValidCheckInPhone
               ? dispatchOptionalArkeselSms(
-                  normalizePhoneE164(mappedAttendee.phone),
+                  cleanCheckInPhone,
                   evtMapped.title,
                   mappedAttendee.ticketCode,
                   evtMapped.senderId || orgSenderId,

@@ -27,10 +27,18 @@ export function calculateSmsCredits(message?: string): number {
 }
 
 export const DEFAULT_CHECKIN_MESSAGE =
-  `Thank you for being a part of the celebration at {event}, {name}! You're checked in. Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`;
+  `You're checked in to {event}, {name}! Thank you for being a part of the celebration. Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`;
 
-const LEGACY_DEFAULT_CHECKIN_MESSAGE =
-  `Welcome to {event}, {name}! You're checked in. Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`;
+export const LEGACY_DEFAULT_CHECKIN_MESSAGES = [
+  `Welcome to {event}, {name}! You're checked in. Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`,
+  `Thank you for being a part of the celebration at {event}, {name}! You're checked in. Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`,
+];
+
+export function isLegacyDefaultCheckInMessage(message?: string | null): boolean {
+  const clean = (message || '').trim();
+  if (!clean) return false;
+  return LEGACY_DEFAULT_CHECKIN_MESSAGES.includes(clean);
+}
 
 export function getDefaultMessageConfig(event?: Partial<EventItem>): Required<EventMessageConfig> {
   const customCheckIn = event?.messageConfig?.checkInMessage?.trim();
@@ -42,7 +50,7 @@ export function getDefaultMessageConfig(event?: Partial<EventItem>): Required<Ev
       event?.messageConfig?.reminderMessage?.trim() ||
       `Reminder: {event} starts {date} at {time} ({venue}). Present QR token {code} at the gate. Camera: {cameraLink}`,
     checkInMessage:
-      customCheckIn && customCheckIn !== LEGACY_DEFAULT_CHECKIN_MESSAGE
+      customCheckIn && !isLegacyDefaultCheckInMessage(customCheckIn)
         ? customCheckIn
         : DEFAULT_CHECKIN_MESSAGE,
     thankYouMessage:
@@ -100,7 +108,7 @@ export function resolveEventMessage(params: {
   const incomingTemplate = params.template?.trim();
   const rawTemplate =
     (incomingTemplate &&
-    !(params.type === 'checkin' && incomingTemplate === LEGACY_DEFAULT_CHECKIN_MESSAGE)
+    !(params.type === 'checkin' && isLegacyDefaultCheckInMessage(incomingTemplate))
       ? incomingTemplate
       : '') ||
     (params.type === 'checkin'
@@ -146,3 +154,29 @@ export function resolveEventMessage(params: {
 
   return { text: appendPoweredByLine(rendered), cameraUrl, eventUrl };
 }
+
+export const DEFAULT_GIFT_THANK_YOU_MESSAGE =
+  `Thank you, {name}! We appreciate your gift for {event}.`;
+
+export function resolveGiftThankYouMessage(params: {
+  event: Pick<EventItem, 'title'>;
+  giverName?: string;
+  giftType?: 'cash-momo' | 'registry-item' | 'blessing-only';
+  currency?: string;
+  amount?: number;
+  registryItem?: string;
+}): { text: string; smsBody: string } {
+  const giver = params.giverName?.trim() || 'Friend';
+  const giftDetail =
+    params.giftType === 'cash-momo' && params.amount
+      ? ` (${params.currency === 'USD' ? 'USD' : 'GHS'} ${Number(params.amount).toLocaleString()})`
+      : params.giftType === 'registry-item' && params.registryItem?.trim()
+        ? ` (${params.registryItem.trim()})`
+        : '';
+  const smsBody = `Thank you, ${giver}! We appreciate your gift${giftDetail} for ${params.event.title}.`;
+  return {
+    text: appendPoweredByLine(smsBody),
+    smsBody,
+  };
+}
+

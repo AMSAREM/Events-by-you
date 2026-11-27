@@ -1466,6 +1466,9 @@ export default function App() {
     const res = await api.studio.recordGiftTableEntry(eventId, gift);
     setEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
     setPublicEvents((prev) => prev.map((e) => (e.id === eventId ? res.event : e)));
+    if (typeof res.smsCredits === 'number') {
+      setProfile((prev) => ({ ...prev, smsCredits: res.smsCredits! }));
+    }
     return res;
   };
 
@@ -1554,6 +1557,14 @@ export default function App() {
       if (res.smsSkippedReason) {
         setApiBannerError(res.smsSkippedReason);
       }
+      return {
+        checkInMessageSent: res.checkInMessageSent,
+        checkInSmsSent: res.checkInSmsSent,
+        cameraUrl: res.cameraUrl,
+        dispatchedMessage: res.dispatchedMessage,
+        smsCreditsUsed: res.smsCreditsUsed,
+        smsSkippedReason: res.smsSkippedReason,
+      };
     } catch (err) {
       notifyError(err, 'Failed to register attendee in Supabase.');
       throw err;

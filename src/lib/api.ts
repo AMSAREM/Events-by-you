@@ -709,7 +709,15 @@ export const api = {
       slugOrId: string,
       payload: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
     ) =>
-      request<{ gift: GiftTableEntry; event: EventItem }>(
+      request<{
+        gift: GiftTableEntry;
+        event: EventItem;
+        giftSmsSent?: boolean;
+        giftDispatchedMessage?: string;
+        smsCredits?: number;
+        smsCreditsUsed?: number;
+        smsSkippedReason?: string;
+      }>(
         `/api/public/events/${encodeURIComponent(slugOrId)}/gifts`,
         { method: 'POST', body: JSON.stringify(payload) }
       ),
@@ -734,6 +742,11 @@ export const api = {
         gift: GiftTableEntry;
         event: EventItem;
         attendant: Omit<GiftTableAttendantLink, 'token'>;
+        giftSmsSent?: boolean;
+        giftDispatchedMessage?: string;
+        smsCredits?: number;
+        smsCreditsUsed?: number;
+        smsSkippedReason?: string;
       }>(
         `/api/public/events/${encodeURIComponent(slugOrId)}/gift-desk/${encodeURIComponent(token)}`,
         { method: 'POST', body: JSON.stringify(payload) }
@@ -927,6 +940,8 @@ export const api = {
       request<{
         attendee: Attendee;
         event: EventItem;
+        checkInMessageSent?: boolean;
+        checkInSmsSent?: boolean;
         cameraUrl?: string;
         dispatchedMessage?: string;
         smsCredits?: number;
@@ -971,7 +986,15 @@ export const api = {
       eventId: string,
       payload: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
     ) =>
-      request<{ gift: GiftTableEntry; event: EventItem }>(
+      request<{
+        gift: GiftTableEntry;
+        event: EventItem;
+        giftSmsSent?: boolean;
+        giftDispatchedMessage?: string;
+        smsCredits?: number;
+        smsCreditsUsed?: number;
+        smsSkippedReason?: string;
+      }>(
         `/api/studio/events/${encodeURIComponent(eventId)}/gifts`,
         { method: 'POST', body: JSON.stringify(payload) },
         true

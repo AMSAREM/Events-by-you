@@ -39,7 +39,14 @@ interface AttendeesScreenProps {
       } | void>
     | void;
   onRetryPayment: (attendeeId: string) => void;
-  onRegisterAttendee: (eventId: string, attendee: Attendee) => void;
+  onRegisterAttendee: (
+    eventId: string,
+    attendee: Attendee
+  ) => Promise<{
+    checkInMessageSent?: boolean;
+    checkInSmsSent?: boolean;
+    smsSkippedReason?: string;
+  } | void> | void;
   onDeleteAttendee?: (attendeeId: string) => Promise<void> | void;
   onBroadcast?: (payload: {
     eventId?: string;
@@ -264,7 +271,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
     }
 
     try {
-      await Promise.resolve(
+      const regRes = await Promise.resolve(
         onRegisterAttendee(targetEventId, {
           id: `att-${Date.now()}`,
           eventId: targetEventId,
@@ -288,7 +295,15 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
       setWalkInEmail('');
       setWalkInOrg('');
       setWalkInOpen(false);
-      showToast(`Registered ${registeredName} (${code})`);
+      if (walkInCheckedIn && regRes?.checkInSmsSent) {
+        showToast(
+          `Registered & checked in ${registeredName} (${code}) — post-check-in SMS ("Thank you for being a part of the celebration.") sent!`
+        );
+      } else if (walkInCheckedIn && regRes?.smsSkippedReason) {
+        showToast(`Registered & checked in ${registeredName} (${code}). ${regRes.smsSkippedReason}`);
+      } else {
+        showToast(`Registered ${registeredName} (${code})`);
+      }
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Unable to register walk-in guest.');
     }
@@ -663,7 +678,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                                 );
                                 if (res && res.checkInSmsSent) {
                                   showToast(
-                                    `Checked in ${att.name} — SMS + Disposable Camera link sent!`
+                                    `Checked in ${att.name} — post-check-in SMS ("Thank you for being a part of the celebration.") + camera link sent!`
                                   );
                                 } else if (res && res.smsSkippedReason) {
                                   showToast(

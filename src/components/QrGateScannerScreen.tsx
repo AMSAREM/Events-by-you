@@ -74,7 +74,16 @@ interface QrGateScannerScreenProps {
     dispatchedMessage?: string;
     smsSkippedReason?: string;
   } | void> | void;
-  onRegisterAttendee: (eventId: string, attendee: Attendee) => Promise<void> | void;
+  onRegisterAttendee: (
+    eventId: string,
+    attendee: Attendee
+  ) => Promise<{
+    checkInMessageSent?: boolean;
+    checkInSmsSent?: boolean;
+    cameraUrl?: string;
+    dispatchedMessage?: string;
+    smsSkippedReason?: string;
+  } | void> | void;
   onDeleteAttendee?: (attendeeId: string) => Promise<void> | void;
   onToggleQrPassPublished?: (eventId: string, published: boolean) => Promise<void> | void;
   onManageEvent: (event: EventItem) => void;
@@ -433,7 +442,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       .then((res) => {
         if (!res) return;
         const updatedMessage = res.checkInSmsSent
-          ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. Check-in welcome SMS + Disposable Camera link sent.`
+          ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. Post-check-in SMS ("Thank you for being a part of the celebration.") + Disposable Camera link sent.`
           : res.smsSkippedReason
             ? `Access Granted — ${matchAny.name} (${matchAny.tier} Pass) checked in. SMS not sent: ${res.smsSkippedReason}`
             : res.checkInMessageSent
@@ -671,7 +680,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
     };
 
     try {
-      await Promise.resolve(onRegisterAttendee(selectedEvent.id, created));
+      const regRes = await Promise.resolve(onRegisterAttendee(selectedEvent.id, created));
       setWalkInSuccess(created);
       setWalkInName('');
       setWalkInPhone('');
@@ -680,17 +689,24 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
 
       if (walkInAutoCheckIn) {
         triggerCheckInChime();
-        const walkInCameraUrl = buildCameraLinkForOrigin(
-          selectedEvent.slug || selectedEvent.id,
-          undefined,
-          created.name,
-          created.ticketCode
-        );
+        const walkInCameraUrl =
+          regRes?.cameraUrl ||
+          buildCameraLinkForOrigin(
+            selectedEvent.slug || selectedEvent.id,
+            undefined,
+            created.name,
+            created.ticketCode
+          );
+        const walkInOutcomeMsg = regRes?.checkInSmsSent
+          ? `Walk-In Registered & Checked In — QR Pass ${code} & post-check-in SMS ("Thank you for being a part of the celebration.") sent via Arkesel.`
+          : regRes?.smsSkippedReason
+            ? `Walk-In Registered & Checked In — QR Pass ${code}. SMS skipped: ${regRes.smsSkippedReason}`
+            : `Walk-In Registered & Checked In — QR Pass ${code} issued.`;
         const outcome: ScanOutcome = {
           status: 'verified',
           attendee: created,
           eventTitle: selectedEvent.title,
-          message: `Walk-In Registered & Checked In — QR Pass ${code} & Disposable Camera link sent via Arkesel SMS.`,
+          message: walkInOutcomeMsg,
           cameraUrl: walkInCameraUrl,
           timestamp: nowTime,
         };
@@ -1517,7 +1533,46 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
                                 dateIso: todayIso,
                               })
                             : onToggleCheckIn(att.id)
-                        ).catch((err) => {
+                        )
+                          .then((res) => {
+                            if (!checkingInNow) return;
+                            const evtTitle = selectedEvent?.title ?? 'Event Gate';
+                            const timestamp = new Date().toLocaleTimeString('en-GB', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            });
+                            const msg = res?.checkInSmsSent
+                              ? `Access Granted — ${att.name} (${att.tier} Pass) checked in. Post-check-in SMS ("Thank you for being a part of the celebration.") + Disposable Camera link sent.`
+                              : res?.smsSkippedReason
+                                ? `Access Granted — ${att.name} (${att.tier} Pass) checked in. SMS not sent: ${res.smsSkippedReason}`
+                                : res?.checkInMessageSent
+                                  ? `Access Granted — ${att.name} (${att.tier} Pass) checked in. Check-in welcome email + Disposable Camera link sent.`
+                                  : `Access Granted — ${att.name} (${att.tier} Pass) checked in.`;
+                            const manualOutcome: ScanOutcome = {
+                              status: 'verified',
+                              attendee: {
+                                ...att,
+                                checkedIn: true,
+                                checkedInAt: timestamp,
+                              },
+                              eventTitle: evtTitle,
+                              message: msg,
+                              cameraUrl:
+                                res?.cameraUrl ||
+                                (selectedEvent
+                                  ? buildCameraLinkForOrigin(
+                                      selectedEvent.slug || selectedEvent.id,
+                                      undefined,
+                                      att.name,
+                                      att.ticketCode
+                                    )
+                                  : undefined),
+                              timestamp,
+                            };
+                            setLastOutcome(manualOutcome);
+                            setScanHistory((prev) => [manualOutcome, ...prev].slice(0, 8));
+                          })
+                          .catch((err) => {
                           setLastOutcome({
                             status: 'rejected',
                             attendee: att,

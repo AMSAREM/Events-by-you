@@ -106,7 +106,13 @@ interface PublicEventScreenProps {
   onSubmitGiftTableEntry?: (
     eventId: string,
     gift: Omit<GiftTableEntry, 'id' | 'eventId' | 'createdAt' | 'recordedVia'>
-  ) => Promise<{ gift: GiftTableEntry; event: EventItem }> | void;
+  ) => Promise<{
+    gift: GiftTableEntry;
+    event: EventItem;
+    giftSmsSent?: boolean;
+    giftDispatchedMessage?: string;
+    smsSkippedReason?: string;
+  }> | void;
   onOpenDisposableCamera?: (eventId: string, guestName?: string, passCode?: string) => void;
   onOpenLegal?: (doc: 'terms' | 'privacy') => void;
 }
@@ -363,6 +369,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const [giftSubmitting, setGiftSubmitting] = useState(false);
   const [giftError, setGiftError] = useState<string | null>(null);
   const [giftReceipt, setGiftReceipt] = useState<GiftTableEntry | null>(null);
+  const [giftReceiptSmsSent, setGiftReceiptSmsSent] = useState(false);
 
   const [issuedPass, setIssuedPass] = useState<Attendee | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
@@ -615,10 +622,12 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
           onGiftEventSync?.(deskRes.event);
         }
         setGiftReceipt(deskRes.gift);
+        setGiftReceiptSmsSent(Boolean(deskRes.giftSmsSent));
       } else if (onSubmitGiftTableEntry) {
         const result = await onSubmitGiftTableEntry(selectedEvent.id, payload);
         if (result?.gift) {
           setGiftReceipt(result.gift);
+          setGiftReceiptSmsSent(Boolean(result.giftSmsSent));
         } else {
           setGiftReceipt({
             id: `gift-${Date.now()}`,
@@ -627,6 +636,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             recordedVia: 'public-table',
             createdAt: new Date().toISOString(),
           });
+          setGiftReceiptSmsSent(false);
         }
       }
       setGiftMessage('');
@@ -2116,10 +2126,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                               : 'Gift Table Receipt · Standalone Activity'}
                           </span>
                           <h3 className="font-display text-2xl font-bold text-[#0B0B0B]">
-                            Thank you, {giftReceipt.giverName}!
+                            Thank you, {giftReceipt.giverName}! We appreciate your gift.
                           </h3>
                           <p className="text-xs text-[#27272A] max-w-md mx-auto">
-                            Your gift entry has been recorded on the {selectedEvent.title} Gift Ledger. Attendance &amp; gate check-in remain completely separate.
+                            We appreciate your gift — your entry has been recorded on the {selectedEvent.title} Gift Ledger. Attendance &amp; gate check-in remain completely separate.
+                            {giftReceiptSmsSent && giftReceipt.giverPhone
+                              ? ` A thank-you SMS has been sent to ${giftReceipt.giverPhone}.`
+                              : ''}
                           </p>
                         </div>
                         <div className="max-w-md mx-auto p-4 rounded-2xl bg-white/60 backdrop-blur-xs border border-white/70 text-left text-xs space-y-1.5">
