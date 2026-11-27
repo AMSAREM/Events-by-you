@@ -325,7 +325,7 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
         attPhone === cleaned.replace(/\s+/g, '') ||
         (digitsOnly.length >= 9 && attDigits.endsWith(digitsOnly.slice(-9))) ||
         a.name.toLowerCase() === cleaned ||
-        a.email.toLowerCase() === cleaned
+        (a.email?.trim() && a.email.trim().toLowerCase() === cleaned)
       );
     };
 
@@ -604,13 +604,22 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
       minute: '2-digit',
     });
 
+    const cleanEmail = walkInEmail.trim();
+    if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setLastOutcome({
+        status: 'rejected',
+        eventTitle: selectedEvent.title,
+        message: 'Please enter a valid optional email address, or leave it blank.',
+        timestamp: nowTime,
+      });
+      return;
+    }
+
     const created: Attendee = {
       id: `att-${Date.now()}`,
       eventId: selectedEvent.id,
       name: walkInName.trim(),
-      email:
-        walkInEmail.trim() ||
-        `${walkInName.trim().toLowerCase().replace(/\s+/g, '.')}@guest.eventsapp.africa`,
+      email: cleanEmail,
       phone: normalized,
       organization: walkInOrg.trim() || `${selectedEvent.category} Walk-In`,
       tier: walkInTier,

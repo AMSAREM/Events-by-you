@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Clock, Compass, Database, Loader2, LogOut, ShieldCheck, X } from 'lucide-react';
 import { INITIAL_PROFILE } from './data/initialData';
 import type {
@@ -36,9 +37,20 @@ import {
   type StoredAuthSession,
 } from './lib/api';
 import { sanitizePublicExtraDataConfig } from './lib/polls';
+import { NOINDEX_ROUTE_SEO } from './lib/seoConfig';
 import { NavigationRail } from './components/NavigationRail';
 import { LandingScreen } from './components/LandingScreen';
 import { LegalScreen } from './components/LegalScreen';
+import {
+  AboutPage,
+  BlogPage,
+  ContactPage,
+  FaqPage,
+  FeaturesPage,
+  HowItWorksPage,
+  PricingPage,
+} from './components/MarketingPages';
+import { SeoHead } from './components/SeoHead';
 import { SignInScreen } from './components/SignInScreen';
 import { SignUpScreen } from './components/SignUpScreen';
 import { ResetPasswordScreen } from './components/ResetPasswordScreen';
@@ -260,9 +272,14 @@ const EMPTY_PROFILE: OrganizerProfile = {
 };
 
 export default function App() {
-  const initialPathname = typeof window !== 'undefined' ? window.location.pathname : '/';
-  const initialSearch = typeof window !== 'undefined' ? window.location.search : '';
+  const routerLocation = useLocation();
+  const routerNavigate = useNavigate();
+  const initialPathname =
+    routerLocation.pathname || (typeof window !== 'undefined' ? window.location.pathname : '/');
+  const initialSearch =
+    routerLocation.search || (typeof window !== 'undefined' ? window.location.search : '');
   const initialInvite = parseInvitationFromValues(initialPathname, initialSearch);
+  const normalizedRouterPath = normalizePathname(initialPathname);
 
   const [route, setRoute] = useState<AppRoute>(() =>
     resolveRouteFromLocation(initialPathname, initialSearch)
@@ -635,17 +652,16 @@ export default function App() {
     ? safeEvents.find((e) => e.id === workspaceEventId) ?? null
     : null;
 
-  const syncBrowserPath = useCallback((nextPath: string, replace = false) => {
-    if (typeof window === 'undefined') return;
-    const currentFull = `${window.location.pathname}${window.location.search}`;
-    if (currentFull !== nextPath) {
-      if (replace) {
-        window.history.replaceState(null, '', nextPath);
-      } else {
-        window.history.pushState(null, '', nextPath);
+  const syncBrowserPath = useCallback(
+    (nextPath: string, replace = false) => {
+      if (typeof window === 'undefined') return;
+      const currentFull = `${routerLocation.pathname}${routerLocation.search}`;
+      if (currentFull !== nextPath) {
+        routerNavigate(nextPath, { replace });
       }
-    }
-  }, []);
+    },
+    [routerLocation.pathname, routerLocation.search, routerNavigate]
+  );
 
   const applyModuleTarget = (target: PendingModuleTarget) => {
     setWorkspaceEventId(null);
@@ -752,41 +768,36 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const handlePopState = () => {
-      const pathname = window.location.pathname;
-      const search = window.location.search;
-      const nextRoute = resolveRouteFromLocation(pathname, search);
-      const invite = parseInvitationFromValues(pathname, search);
-      if (invite.focus === 'camera') {
-        setCameraEventId(invite.slugOrId);
-        setCameraGuestName(invite.guest);
-        setCameraPassCode(invite.pass);
-        setVerifiedCameraPass(null);
-        setRoute('camera');
-        return;
-      }
-      if (invite.slugOrId) {
-        setPublicPreviewEventId(invite.slugOrId);
-        setPublicPreviewFocus(
-          invite.focus === 'register' ||
-            invite.focus === 'checkin' ||
-            invite.focus === 'walkin' ||
-            invite.focus === 'gifts' ||
-            invite.focus === 'polls'
-            ? invite.focus
-            : 'top'
-        );
-        setPublicPreviewDeskToken(invite.desk);
-        setPublicPreviewPassCode(invite.pass);
-        setRoute('demo-event');
-        return;
-      }
-      setRoute(nextRoute);
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+    const pathname = routerLocation.pathname;
+    const search = routerLocation.search;
+    const nextRoute = resolveRouteFromLocation(pathname, search);
+    const invite = parseInvitationFromValues(pathname, search);
+    if (invite.focus === 'camera') {
+      setCameraEventId(invite.slugOrId);
+      setCameraGuestName(invite.guest);
+      setCameraPassCode(invite.pass);
+      setVerifiedCameraPass(null);
+      setRoute('camera');
+      return;
+    }
+    if (invite.slugOrId) {
+      setPublicPreviewEventId(invite.slugOrId);
+      setPublicPreviewFocus(
+        invite.focus === 'register' ||
+          invite.focus === 'checkin' ||
+          invite.focus === 'walkin' ||
+          invite.focus === 'gifts' ||
+          invite.focus === 'polls'
+          ? invite.focus
+          : 'top'
+      );
+      setPublicPreviewDeskToken(invite.desk);
+      setPublicPreviewPassCode(invite.pass);
+      setRoute('demo-event');
+      return;
+    }
+    setRoute(nextRoute);
+  }, [routerLocation.pathname, routerLocation.search]);
 
   const handleAuthenticated = async (
     session: StoredAuthSession,
@@ -2053,6 +2064,7 @@ export default function App() {
   if (route === 'not-found') {
     return (
       <div className="min-h-dvh w-full bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center px-4 py-10">
+        <SeoHead {...NOINDEX_ROUTE_SEO.notFound} />
         <main className="max-w-md w-full bg-white rounded-[28px] border border-[#E5E5EA] p-6 sm:p-8 shadow-sm text-center space-y-4">
           <p className="text-xs font-mono font-bold uppercase tracking-wider text-[#71717A]">
             404 · Page Not Found
@@ -2078,6 +2090,73 @@ export default function App() {
   }
 
   if (route === 'home') {
+    const marketingProps = {
+      isSignedIn,
+      onNavigateStudio: () =>
+        requireSignedIn({
+          route: 'studio',
+          screen: 'overview',
+          label: 'Creator Studio',
+        }),
+      onSignOut: () => void handleSignOut('manual'),
+    };
+    if (normalizedRouterPath === '/features') {
+      return (
+        <>
+          <FeaturesPage {...marketingProps} />
+          {sessionTimeoutModal}
+        </>
+      );
+    }
+    if (normalizedRouterPath === '/pricing') {
+      return (
+        <>
+          <PricingPage {...marketingProps} />
+          {sessionTimeoutModal}
+        </>
+      );
+    }
+    if (normalizedRouterPath === '/how-it-works') {
+      return (
+        <>
+          <HowItWorksPage {...marketingProps} />
+          {sessionTimeoutModal}
+        </>
+      );
+    }
+    if (normalizedRouterPath === '/faq') {
+      return (
+        <>
+          <FaqPage {...marketingProps} />
+          {sessionTimeoutModal}
+        </>
+      );
+    }
+    if (normalizedRouterPath === '/about') {
+      return (
+        <>
+          <AboutPage {...marketingProps} />
+          {sessionTimeoutModal}
+        </>
+      );
+    }
+    if (normalizedRouterPath === '/contact') {
+      return (
+        <>
+          <ContactPage {...marketingProps} />
+          {sessionTimeoutModal}
+        </>
+      );
+    }
+    if (normalizedRouterPath === '/blog') {
+      return (
+        <>
+          <BlogPage {...marketingProps} />
+          {sessionTimeoutModal}
+        </>
+      );
+    }
+
     return (
       <>
         <LandingScreen
@@ -2440,6 +2519,7 @@ export default function App() {
       cameraEventId && resolvedCamEvent ? [resolvedCamEvent] : camPool;
     return (
       <>
+        <SeoHead {...NOINDEX_ROUTE_SEO.camera} />
         <Suspense fallback={routeLoadingFallback}>
           <DisposableCameraScreen
           mode="public"
@@ -2548,6 +2628,7 @@ export default function App() {
   if (!isStudioAuthorized) {
     return (
       <div className="min-h-dvh w-full bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center px-4 py-10">
+        <SeoHead {...NOINDEX_ROUTE_SEO.studio} />
         <div className="max-w-md w-full bg-white rounded-[28px] border border-[#E5E5EA] p-6 sm:p-8 shadow-sm text-center space-y-4">
           <div className="w-12 h-12 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
             <ShieldCheck className="w-6 h-6" />
@@ -2588,6 +2669,7 @@ export default function App() {
 
   return (
     <div className="min-h-dvh w-full max-w-full bg-white text-[#0B0B0B] overflow-x-clip">
+      <SeoHead {...NOINDEX_ROUTE_SEO.studio} />
       <div
         className={
           isStudioFullscreenCheckIn

@@ -1,16 +1,29 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "bun run build",
+  "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "cleanUrls": true,
   "functions": {
     "api/index.ts": {
       "maxDuration": 30,
-      "includeFiles": "dist/index.html"
+      "includeFiles": "dist/**"
     }
   },
   "rewrites": [
     {
       "source": "/api/(.*)",
+      "destination": "/api"
+    },
+    {
+      "source": "/sitemap.xml",
+      "destination": "/api"
+    },
+    {
+      "source": "/robots.txt",
+      "destination": "/api"
+    },
+    {
+      "source": "/robot.txt",
       "destination": "/api"
     },
     {

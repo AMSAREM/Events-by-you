@@ -27,8 +27,10 @@ import {
 import { api, saveStoredSession, type StoredAuthSession } from '../lib/api';
 import { startGoogleOAuthPopup } from '../lib/googleAuthClient';
 import type { AppRole, OrganizerProfile } from '../types/events';
+import { NOINDEX_ROUTE_SEO } from '../lib/seoConfig';
 import { BrandLogo } from './BrandLogo';
 import { GoogleAuthButton } from './GoogleAuthButton';
+import { SeoHead } from './SeoHead';
 
 interface SignUpScreenProps {
   initialEmail?: string;
@@ -227,6 +229,7 @@ export const SignUpScreen: React.FC<SignUpScreenProps> = ({
 
   return (
     <div className="bg-[#F5F5F7] text-[#1A1C1D] min-h-dvh w-full max-w-full flex flex-col justify-between overflow-x-clip selection:bg-[#0B0B0B] selection:text-white">
+      <SeoHead {...NOINDEX_ROUTE_SEO.signup} />
       {/* Header */}
       <header className="fixed top-0 inset-x-0 w-full z-50 bg-[#F5F5F7]/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] pt-[env(safe-area-inset-top)]">
         <div className="h-16 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3">

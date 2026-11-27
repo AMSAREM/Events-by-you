@@ -5,12 +5,13 @@ import path from 'path';
 import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
-export default defineConfig(() => {
+export default defineConfig(({ command, isSsrBuild }) => {
   return {
     plugins: [
       react(),
       tailwindcss(),
       VitePWA({
+        disable: command === 'serve' && process.env.DISABLE_HMR === 'true',
         registerType: 'autoUpdate',
         includeAssets: [
           'icon.svg',
@@ -160,39 +161,68 @@ export default defineConfig(() => {
         'lucide-react',
       ],
     },
-    build: {
-      rolldownOptions: {
-        output: {
-          codeSplitting: {
-            groups: [
-              {
-                name: 'vendor-react',
-                test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/,
-                priority: 30,
+    build: isSsrBuild
+      ? {}
+      : {
+          rolldownOptions: {
+            output: {
+              codeSplitting: {
+                groups: [
+                  {
+                    name: 'vendor-react',
+                    test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+                    priority: 30,
+                  },
+                  {
+                    name: 'vendor-motion',
+                    test: /node_modules[\\/](motion|framer-motion)[\\/]/,
+                    priority: 25,
+                  },
+                  {
+                    name: 'vendor-supabase',
+                    test: /node_modules[\\/]@supabase[\\/]/,
+                    priority: 20,
+                  },
+                  {
+                    name: 'vendor-icons',
+                    test: /node_modules[\\/]lucide-react[\\/]/,
+                    priority: 15,
+                  },
+                  {
+                    name: 'vendor',
+                    test: /node_modules[\\/]/,
+                    priority: 10,
+                  },
+                ],
               },
-              {
-                name: 'vendor-motion',
-                test: /node_modules[\\/](motion|framer-motion)[\\/]/,
-                priority: 25,
-              },
-              {
-                name: 'vendor-supabase',
-                test: /node_modules[\\/]@supabase[\\/]/,
-                priority: 20,
-              },
-              {
-                name: 'vendor-icons',
-                test: /node_modules[\\/]lucide-react[\\/]/,
-                priority: 15,
-              },
-              {
-                name: 'vendor',
-                test: /node_modules[\\/]/,
-                priority: 10,
-              },
-            ],
+            },
           },
         },
+    ssgOptions: {
+      dirStyle: 'flat',
+      includedRoutes: () => [
+        '/',
+        '/features',
+        '/pricing',
+        '/how-it-works',
+        '/faq',
+        '/about',
+        '/contact',
+        '/blog',
+        '/terms',
+        '/privacy',
+      ],
+      onPageRendered: (_route, renderedHTML) => {
+        if (!renderedHTML.includes('data-rh="true"')) {
+          return renderedHTML;
+        }
+        // Keep only the per-route data-rh="true" tags injected by SeoHead during SSG
+        return renderedHTML
+          .replace(/<title>[\s\S]*?<\/title>\s*/gi, '')
+          .replace(/<meta\s+name=["'](?:description|robots)["'][^>]*>\s*/gi, '')
+          .replace(/<link\s+rel=["']canonical["'][^>]*>\s*/gi, '')
+          .replace(/<meta\s+(?:property|name)=["'](?:og:|twitter:)[^"']+["'][^>]*>\s*/gi, '')
+          .replace(/<script\s+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>\s*/gi, '');
       },
     },
     server: {

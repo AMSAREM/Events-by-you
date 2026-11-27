@@ -1,6 +1,12 @@
 import type { DesignTheme, EventItem } from '../src/types/events.ts';
 import { getCategoryPreset } from '../src/data/initialData.ts';
 import { getContrastTextColor, normalizeHexColor } from '../src/lib/themeColors.ts';
+import {
+  buildEventSeoPayload,
+  formatPriceGhsLabel,
+  isPublicIndexableEvent,
+  NOINDEX_ROUTE_SEO,
+} from '../src/lib/seoConfig.ts';
 
 export function escapeXml(str: string): string {
   return String(str)
@@ -9,6 +15,19 @@ export function escapeXml(str: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+function escapeHtml(str: string): string {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function serializeJsonLdSafe(data: Record<string, unknown> | Record<string, unknown>[]): string {
+  return JSON.stringify(data).replace(/</g, '\\u003c');
 }
 
 function wrapLines(text: string, maxChars: number, maxLines: number): string[] {
@@ -101,7 +120,7 @@ export function buildEventOgSvg(event: EventItem, baseUrl: string): string {
   const titleLines = wrapLines(event.title, 30, 3);
   const subtitleLines = wrapLines(event.subtitle || 'Hosted with Events By You', 58, 2);
   const inviteShort = `${baseUrl.replace(/^https?:\/\//, '')}/e/${event.slug || event.id}`;
-  const priceLabel = event.ticketPrice > 0 ? `$${event.ticketPrice} PASS` : 'FREE RSVP PASS';
+  const priceLabel = event.ticketPrice > 0 ? `GHS ${event.ticketPrice} PASS` : 'FREE RSVP PASS';
   const extraFeatureLabel =
     event.extraDataConfig?.enableGiftTable
       ? 'VALIDATION + GIFT TABLE + QR'
@@ -214,39 +233,93 @@ export function buildEventOgSvg(event: EventItem, baseUrl: string): string {
 </svg>`;
 }
 
-export function injectEventMetaTags(html: string, event: EventItem, baseUrl: string): string {
-  const cleanSlug = encodeURIComponent(event.slug || event.id);
-  const inviteUrl = `${baseUrl}/e/${cleanSlug}`;
-  const ogImageUrl = `${baseUrl}/api/og/event/${cleanSlug}`;
-  const title = `${event.title} — ${event.date} · ${event.city} | Events By You`;
-  const description =
-    `${event.organizer} invites you to ${event.title} on ${event.date} (${event.time}) at ${event.venue}, ${event.city}. ` +
-    (event.subtitle || 'Validate your invitation and claim your QR Gate Pass.');
+export type PublicEventSubPath = 'top' | 'checkin' | 'gifts' | 'camera';
 
-  const safeTitle = escapeXml(title);
-  const safeDesc = escapeXml(description);
-  const safeUrl = escapeXml(inviteUrl);
-  const safeImg = escapeXml(ogImageUrl);
+function replaceRootContainer(html: string, innerHtml: string): string {
+  const openMatch = /<div\b[^>]*\bid=["']root["'][^>]*>/i.exec(html);
+  if (!openMatch || openMatch.index === undefined) return html;
+  const openStart = openMatch.index;
+  const contentStart = openStart + openMatch[0].length;
+  const tagRegex = /<\/?div\b[^>]*>/gi;
+  tagRegex.lastIndex = contentStart;
+  let depth = 1;
+  let match: RegExpExecArray | null;
+  while ((match = tagRegex.exec(html)) !== null) {
+    if (match[0].startsWith('</')) {
+      depth -= 1;
+      if (depth === 0) {
+        const closeEnd = match.index + match[0].length;
+        return `${html.slice(0, openStart)}<div id="root">${innerHtml}</div>${html.slice(closeEnd)}`;
+      }
+    } else if (!match[0].endsWith('/>')) {
+      depth += 1;
+    }
+  }
+  return html;
+}
+
+function replaceHeadAndRoot(
+  html: string,
+  opts: {
+    title: string;
+    description: string;
+    robots: string;
+    canonicalUrl: string;
+    ogTags: string[];
+    jsonLd?: Record<string, unknown> | Record<string, unknown>[];
+    rootInnerHtml: string;
+  }
+): string {
+  const safeTitle = escapeXml(opts.title);
+  const safeDesc = escapeXml(opts.description);
+  const safeRobots = escapeXml(opts.robots);
+  const safeUrl = escapeXml(opts.canonicalUrl);
 
   let updated = html;
 
-  // Replace <title>
-  updated = updated.replace(/<title>[\s\S]*?<\/title>/i, `<title>${safeTitle}</title>`);
+  // Strip ALL pre-existing title, description, robots, canonical, OG, Twitter, and JSON-LD tags
+  // (including data-rh="true" tags produced by vite-react-ssg / react-helmet-async)
+  updated = updated.replace(/<title\b[^>]*>[\s\S]*?<\/title>\s*/gi, '');
+  updated = updated.replace(/<meta\b[^>]*\bname=["'](?:description|robots)["'][^>]*>\s*/gi, '');
+  updated = updated.replace(/<link\b[^>]*\brel=["']canonical["'][^>]*>\s*/gi, '');
+  updated = updated.replace(/<meta\b[^>]*\b(?:property|name)=["'](?:og:|twitter:)[^"']+["'][^>]*>\s*/gi, '');
+  updated = updated.replace(/<script\b[^>]*\btype=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>\s*/gi, '');
 
-  // Replace meta description
-  updated = updated.replace(
-    /<meta\s+name=["']description["'][^>]*>/i,
-    `<meta name="description" content="${safeDesc}" />`
-  );
+  const headInjections = [
+    `    <title>${safeTitle}</title>`,
+    `    <meta name="description" content="${safeDesc}" />`,
+    `    <meta name="robots" content="${safeRobots}" />`,
+    `    <link rel="canonical" href="${safeUrl}" />`,
+    ...opts.ogTags,
+    opts.jsonLd ? `    <script type="application/ld+json">${serializeJsonLdSafe(opts.jsonLd)}</script>` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 
-  // Replace canonical
-  updated = updated.replace(
-    /<link\s+rel=["']canonical["'][^>]*>/i,
-    `<link rel="canonical" href="${safeUrl}" />`
-  );
+  updated = updated.replace(/<\/head>/i, `${headInjections}\n  </head>`);
+  updated = replaceRootContainer(updated, opts.rootInnerHtml);
 
-  // Remove any existing og:/twitter: tags cleanly and inject fresh event OG + Twitter card tags
-  updated = updated.replace(/<meta\s+(property|name)=["'](og:|twitter:)[^"']+["'][^>]*>\s*/gi, '');
+  return updated;
+}
+
+export function injectEventMetaTags(
+  html: string,
+  event: EventItem & { unlisted?: boolean; visibility?: string },
+  baseUrl: string,
+  subPath: PublicEventSubPath = 'top'
+): string {
+  const cleanOrigin = baseUrl.replace(/\/+$/, '');
+  const cleanSlug = encodeURIComponent(event.slug || event.id);
+  const seo = buildEventSeoPayload(event, cleanOrigin, subPath);
+  const canonicalUrl = `${cleanOrigin}${seo.path}`;
+  const ogImageUrl = seo.ogImage || `${cleanOrigin}/api/og/event/${cleanSlug}`;
+  const priceGhs = formatPriceGhsLabel(event.ticketPrice);
+  const indexable = isPublicIndexableEvent(event) && subPath !== 'camera';
+
+  const safeTitle = escapeXml(seo.title);
+  const safeDesc = escapeXml(seo.description);
+  const safeUrl = escapeXml(canonicalUrl);
+  const safeImg = escapeXml(ogImageUrl);
 
   const ogTags = [
     `    <meta property="og:title" content="${safeTitle}" />`,
@@ -254,16 +327,106 @@ export function injectEventMetaTags(html: string, event: EventItem, baseUrl: str
     `    <meta property="og:type" content="website" />`,
     `    <meta property="og:url" content="${safeUrl}" />`,
     `    <meta property="og:site_name" content="Events By You" />`,
+    `    <meta property="og:locale" content="en_GH" />`,
     `    <meta property="og:image" content="${safeImg}" />`,
-    `    <meta property="og:image:type" content="image/svg+xml" />`,
-    `    <meta property="og:image:width" content="1200" />`,
-    `    <meta property="og:image:height" content="630" />`,
     `    <meta name="twitter:card" content="summary_large_image" />`,
     `    <meta name="twitter:title" content="${safeTitle}" />`,
     `    <meta name="twitter:description" content="${safeDesc}" />`,
     `    <meta name="twitter:image" content="${safeImg}" />`,
-  ].join('\n');
+  ];
 
-  updated = updated.replace(/<\/head>/i, `${ogTags}\n  </head>`);
-  return updated;
+  // Semantic plain HTML block (strictly public event metadata; never attendee PII)
+  const venueDisplay =
+    event.venueFormat === 'virtual'
+      ? `Online (${event.city || 'Ghana'})`
+      : [event.venue, event.city].filter(Boolean).join(', ');
+
+  const subheading =
+    subPath === 'checkin'
+      ? 'Gate Check-In & Pass Lookup'
+      : subPath === 'gifts'
+        ? 'Event Gift Table & Registry Portal'
+        : subPath === 'camera'
+          ? '35mm Event Disposable Camera'
+          : 'Official Event Invitation & Registration';
+
+  const rootInnerHtml = [
+    `<main data-ssr-event="true" style="max-width:760px;margin:48px auto;padding:24px;font-family:system-ui,-apple-system,sans-serif;color:#0B0B0B;">`,
+    `<p style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#52525B;margin:0 0 8px;">${escapeHtml(event.category || 'Event')} · ${escapeHtml(subheading)}</p>`,
+    `<h1 style="font-size:32px;line-height:1.15;margin:0 0 12px;">${escapeHtml(event.title)}</h1>`,
+    event.subtitle
+      ? `<p style="font-size:16px;line-height:1.6;color:#3F3F46;margin:0 0 20px;">${escapeHtml(event.subtitle)}</p>`
+      : '',
+    `<dl style="display:grid;gap:10px;background:#F5F5F7;padding:16px 20px;border-radius:16px;margin:0 0 20px;">`,
+    `<div><dt style="font-size:12px;color:#71717A;">Hosted By</dt><dd style="margin:2px 0 0;font-weight:600;">${escapeHtml(event.organizer || 'Events By You Organiser')}</dd></div>`,
+    `<div><dt style="font-size:12px;color:#71717A;">Date &amp; Time</dt><dd style="margin:2px 0 0;font-weight:600;">${escapeHtml([event.date, event.time].filter(Boolean).join(' · ') || 'Upcoming')}</dd></div>`,
+    `<div><dt style="font-size:12px;color:#71717A;">Venue</dt><dd style="margin:2px 0 0;font-weight:600;">${escapeHtml(venueDisplay || 'TBA')}</dd></div>`,
+    `<div><dt style="font-size:12px;color:#71717A;">Ticket Price</dt><dd style="margin:2px 0 0;font-weight:600;">${escapeHtml(priceGhs)}</dd></div>`,
+    `</dl>`,
+    `<nav aria-label="Event links" style="display:flex;flex-wrap:wrap;gap:12px;font-size:14px;">`,
+    `<a href="/e/${cleanSlug}">Event Overview &amp; Registration</a>`,
+    `<a href="/e/${cleanSlug}/checkin">Check-In</a>`,
+    event.extraDataConfig?.enableGiftTable !== false
+      ? `<a href="/e/${cleanSlug}/gifts">Gift Table</a>`
+      : '',
+    `<a href="/">Events By You Home</a>`,
+    `</nav>`,
+    !indexable ? `<p style="margin-top:16px;font-size:12px;color:#71717A;">Unlisted or private preview.</p>` : '',
+    `</main>`,
+  ]
+    .filter(Boolean)
+    .join('');
+
+  return replaceHeadAndRoot(html, {
+    title: seo.title,
+    description: seo.description,
+    robots: seo.robots,
+    canonicalUrl,
+    ogTags,
+    jsonLd: seo.jsonLd,
+    rootInnerHtml,
+  });
+}
+
+export function injectNotFoundSsrHtml(
+  html: string,
+  baseUrl: string,
+  requestedPath = '/404'
+): string {
+  const cleanOrigin = baseUrl.replace(/\/+$/, '');
+  const cleanPath = requestedPath.startsWith('/') ? requestedPath : `/${requestedPath}`;
+  const canonicalUrl = `${cleanOrigin}${cleanPath}`;
+  const seo = NOINDEX_ROUTE_SEO.notFound;
+  const fallbackImg = `${cleanOrigin}/src/assets/images/flyer_corporate_gala_1795075792816.jpg`;
+
+  const ogTags = [
+    `    <meta property="og:title" content="${escapeXml(seo.title)}" />`,
+    `    <meta property="og:description" content="${escapeXml(seo.description)}" />`,
+    `    <meta property="og:type" content="website" />`,
+    `    <meta property="og:url" content="${escapeXml(canonicalUrl)}" />`,
+    `    <meta property="og:site_name" content="Events By You" />`,
+    `    <meta property="og:locale" content="en_GH" />`,
+    `    <meta property="og:image" content="${escapeXml(fallbackImg)}" />`,
+    `    <meta name="twitter:card" content="summary_large_image" />`,
+    `    <meta name="twitter:title" content="${escapeXml(seo.title)}" />`,
+    `    <meta name="twitter:description" content="${escapeXml(seo.description)}" />`,
+  ];
+
+  const rootInnerHtml = [
+    `<main data-ssr-not-found="true" style="max-width:560px;margin:64px auto;padding:24px;font-family:system-ui,-apple-system,sans-serif;color:#0B0B0B;text-align:center;">`,
+    `<p style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#71717A;text-transform:uppercase;">404 · Not Found</p>`,
+    `<h1 style="font-size:28px;margin:8px 0 12px;">Event Not Found (404)</h1>`,
+    `<p style="font-size:15px;line-height:1.6;color:#52525B;margin:0 0 20px;">${escapeHtml(seo.description)}</p>`,
+    `<a href="/" style="display:inline-block;padding:10px 20px;border-radius:999px;background:#0B0B0B;color:#FFFFFF;text-decoration:none;font-size:13px;font-weight:600;">Back to Events By You Home</a>`,
+    `</main>`,
+  ].join('');
+
+  return replaceHeadAndRoot(html, {
+    title: seo.title,
+    description: seo.description,
+    robots: 'noindex, nofollow',
+    canonicalUrl,
+    ogTags,
+    rootInnerHtml,
+  });
 }

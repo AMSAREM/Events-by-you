@@ -80,7 +80,8 @@ import {
   signCreatorSessionToken,
   type AuthedRequest,
 } from './server/helpers.ts';
-import { buildEventOgSvg, injectEventMetaTags } from './server/ogImage.ts';
+import { buildEventOgSvg, injectEventMetaTags, injectNotFoundSsrHtml, type PublicEventSubPath } from './server/ogImage.ts';
+import { CANONICAL_ORIGIN, isPublicIndexableEvent, STATIC_MARKETING_PATHS } from './src/lib/seoConfig.ts';
 import {
   isResendConfigured,
   sendAuthOtpEmail,
@@ -1092,22 +1093,35 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
     if (process.env.APP_URL) return process.env.APP_URL.replace(/\/+$/, '');
     const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
     if (host.includes('localhost') || host.includes('127.0.0.1')) {
-      return 'https://eventsbyyou.xyz';
+      return CANONICAL_ORIGIN;
     }
     return `${proto}://${host}`.replace(/\/+$/, '');
   };
 
   app.get(['/robots.txt', '/robot.txt'], (req, res) => {
     const baseUrl = resolveBaseUrl(req);
+    res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
     res.type('text/plain; charset=utf-8').send(
       [
         'User-agent: *',
         'Allow: /',
+        'Allow: /features',
+        'Allow: /pricing',
+        'Allow: /how-it-works',
+        'Allow: /faq',
+        'Allow: /about',
+        'Allow: /contact',
+        'Allow: /blog',
         'Allow: /terms',
         'Allow: /privacy',
+        'Allow: /e/',
         'Disallow: /api/',
         'Disallow: /studio',
         'Disallow: /camera',
+        'Disallow: /signin',
+        'Disallow: /signup',
+        'Disallow: /reset-password',
+        'Disallow: /verify-otp',
         '',
         `Sitemap: ${baseUrl}/sitemap.xml`,
         '',
@@ -1136,6 +1150,10 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       publicEvents = [];
     }
 
+    const indexableEvents = publicEvents.filter((evt) =>
+      isPublicIndexableEvent(evt as EventItem & { unlisted?: boolean; visibility?: string })
+    );
+
     const escapeXml = (str: string) =>
       str
         .replace(/&/g, '&amp;')
@@ -1144,28 +1162,35 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&apos;');
 
-    const staticPaths = [
-      { path: '/', changefreq: 'daily', priority: '1.0' },
-      { path: '/signin', changefreq: 'monthly', priority: '0.6' },
-      { path: '/signup', changefreq: 'monthly', priority: '0.7' },
-      { path: '/terms', changefreq: 'monthly', priority: '0.5' },
-      { path: '/privacy', changefreq: 'monthly', priority: '0.5' },
-    ];
+    const staticMeta: Record<string, { changefreq: string; priority: string }> = {
+      '/': { changefreq: 'daily', priority: '1.0' },
+      '/features': { changefreq: 'weekly', priority: '0.9' },
+      '/pricing': { changefreq: 'weekly', priority: '0.9' },
+      '/how-it-works': { changefreq: 'monthly', priority: '0.8' },
+      '/faq': { changefreq: 'weekly', priority: '0.8' },
+      '/about': { changefreq: 'monthly', priority: '0.7' },
+      '/contact': { changefreq: 'monthly', priority: '0.7' },
+      '/blog': { changefreq: 'weekly', priority: '0.8' },
+      '/terms': { changefreq: 'monthly', priority: '0.4' },
+      '/privacy': { changefreq: 'monthly', priority: '0.4' },
+    };
 
     const urlEntries = [
-      ...staticPaths.map(
-        (u) => `  <url>\n    <loc>${escapeXml(baseUrl + u.path)}</loc>\n    <lastmod>${today}</lastmod>\n    <changefreq>${u.changefreq}</changefreq>\n    <priority>${u.priority}</priority>\n  </url>`
-      ),
-      ...publicEvents.map(
-        (evt) =>
-          `  <url>\n    <loc>${escapeXml(`${baseUrl}/?event=${encodeURIComponent(evt.slug || evt.id)}`)}</loc>\n    <lastmod>${escapeXml(evt.isoDate || today)}</lastmod>\n    <changefreq>daily</changefreq>\n    <priority>0.8</priority>\n  </url>`
-      ),
+      ...STATIC_MARKETING_PATHS.map((p) => {
+        const meta = staticMeta[p] ?? { changefreq: 'weekly', priority: '0.7' };
+        return `  <url>\n    <loc>${escapeXml(`${baseUrl}${p}`)}</loc>\n    <lastmod>${today}</lastmod>\n    <changefreq>${meta.changefreq}</changefreq>\n    <priority>${meta.priority}</priority>\n  </url>`;
+      }),
+      ...indexableEvents.map((evt) => {
+        const cleanSlug = encodeURIComponent(evt.slug || evt.id);
+        return `  <url>\n    <loc>${escapeXml(`${baseUrl}/e/${cleanSlug}`)}</loc>\n    <lastmod>${escapeXml(evt.isoDate || today)}</lastmod>\n    <changefreq>daily</changefreq>\n    <priority>0.8</priority>\n  </url>`;
+      }),
     ];
 
+    res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
     res
       .type('application/xml; charset=utf-8')
       .send(
-        `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.w3.org/2000/svg" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n${urlEntries.join('\n')}\n</urlset>\n`.replace('xmlns="http://www.w3.org/2000/svg" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"', 'xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"')
+        `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urlEntries.join('\n')}\n</urlset>\n`
       );
   });
 
@@ -2750,6 +2775,9 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       }
 
       const cleanEmail = email?.trim() || '';
+      if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+        return res.status(400).json({ error: 'Please enter a valid email address or leave it blank.' });
+      }
       const normalizedPhone = normalizePhoneE164(phone.trim());
       const attendeeId = `att-${Date.now()}-${Math.floor(100 + Math.random() * 899)}`;
       const finalCode = ticketCode?.trim() || `#EVT-2026-${Math.floor(1000 + Math.random() * 8999)}`;
@@ -2772,6 +2800,16 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           }
         }
 
+        let normalizedValidationGroup: string | null = null;
+        if (typeof validationGroup === 'string' && validationGroup.trim()) {
+          const trimmedGroup = validationGroup.trim().slice(0, 120);
+          const allowedOptions = Array.isArray(valCfg?.options) ? valCfg.options : [];
+          const matchedOpt = allowedOptions.find(
+            (opt) => opt.trim().toLowerCase() === trimmedGroup.toLowerCase()
+          );
+          normalizedValidationGroup = matchedOpt ? matchedOpt.trim() : trimmedGroup;
+        }
+
         let usedExtendedRpcFallback = false;
         let { data: rpcData, error: rpcErr } = await supabase.rpc('register_public_attendee', {
           p_id: attendeeId,
@@ -2782,7 +2820,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           p_organization: organization?.trim() || 'Fast Pass Attendee',
           p_tier: tier || 'General',
           p_ticket_code: finalCode,
-          p_validation_group: validationGroup ?? null,
+          p_validation_group: normalizedValidationGroup,
           p_invite_code_used: inviteCodeUsed ?? null,
           p_gift_entry: giftEntry ?? null,
           p_custom_responses: customResponses ?? null,
@@ -2828,13 +2866,13 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
 
         if (
           usedExtendedRpcFallback ||
-          (validationGroup && payload.attendee.validation_group === undefined) ||
+          (normalizedValidationGroup && payload.attendee.validation_group === undefined) ||
           (inviteCodeUsed && payload.attendee.invite_code_used === undefined) ||
           (giftEntry && payload.attendee.gift_entry === undefined) ||
           (customResponses && Object.keys(customResponses).length > 0 && payload.attendee.custom_responses === undefined)
         ) {
           await mergeEventAttendeeMeta(supabase, eventId, attendeeId, {
-            validationGroup: validationGroup?.trim() || undefined,
+            validationGroup: normalizedValidationGroup || undefined,
             inviteCodeUsed: inviteCodeUsed?.trim() || undefined,
             giftEntry,
             customResponses,
@@ -2951,7 +2989,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         const attendee = mapAttendeeRow({
           ...payload.attendee,
           sms_status: finalDeliveryStatus,
-          validation_group: payload.attendee.validation_group ?? validationGroup ?? null,
+          validation_group: payload.attendee.validation_group ?? normalizedValidationGroup ?? null,
           invite_code_used: payload.attendee.invite_code_used ?? inviteCodeUsed ?? null,
           gift_entry: payload.attendee.gift_entry ?? giftEntry ?? null,
           custom_responses: payload.attendee.custom_responses ?? customResponses ?? null,
@@ -3005,13 +3043,13 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         const matchedRow = (attRes.data ?? []).find((row) => {
           const rec = row as Record<string, unknown>;
           const code = String(rec.ticket_code ?? '').toLowerCase().replace(/^#/, '');
-          const email = String(rec.email ?? '').toLowerCase();
+          const email = String(rec.email ?? '').trim().toLowerCase();
           const phone = String(rec.phone ?? '');
           const cleanPhone = phone.replace(/\s+/g, '');
           const phoneDigits = phone.replace(/\D/g, '');
           return (
-            code === cleanCode ||
-            email === cleanLower ||
+            Boolean(cleanCode && code === cleanCode) ||
+            Boolean(email && email === cleanLower) ||
             (normalizedLookupPhone && cleanPhone === normalizedLookupPhone) ||
             (digitsOnly.length >= 9 && phoneDigits.endsWith(digitsOnly.slice(-9)))
           );
@@ -3351,13 +3389,13 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           const matchedAtt = (attRows ?? []).find((row) => {
             const rec = row as Record<string, unknown>;
             const attCode = String(rec.ticket_code ?? '').toUpperCase().replace(/^#/, '');
-            const attEmail = String(rec.email ?? '').toLowerCase();
+            const attEmail = String(rec.email ?? '').trim().toLowerCase();
             const attPhoneRaw = String(rec.phone ?? '');
             const attPhone = normalizePhoneE164(attPhoneRaw);
             const attDigits = attPhoneRaw.replace(/\D/g, '');
             return (
-              attCode === cleanCode ||
-              attEmail === cleanLower ||
+              Boolean(cleanCode && attCode === cleanCode) ||
+              Boolean(attEmail && attEmail === cleanLower) ||
               (normalizedPassPhone && attPhone === normalizedPassPhone) ||
               (digitsOnly.length >= 9 && attDigits.endsWith(digitsOnly.slice(-9)))
             );
@@ -5642,8 +5680,21 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         });
       }
 
+      const cleanAttEmail = (attendee.email || '').trim();
+      if (cleanAttEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanAttEmail)) {
+        return res.status(400).json({ error: 'Please enter a valid email address or leave it blank.' });
+      }
       const normalizedPhone = normalizePhoneE164(attendee.phone);
       const evtMapped = mapEventRow(evtCheckRec);
+      let normalizedStudioValidationGroup: string | null = null;
+      if (typeof attendee.validationGroup === 'string' && attendee.validationGroup.trim()) {
+        const trimmedGroup = attendee.validationGroup.trim().slice(0, 120);
+        const allowedOptions = evtMapped.validationConfig?.options ?? [];
+        const matchedOpt = allowedOptions.find(
+          (opt) => opt.trim().toLowerCase() === trimmedGroup.toLowerCase()
+        );
+        normalizedStudioValidationGroup = matchedOpt ? matchedOpt.trim() : trimmedGroup;
+      }
       let replyTo: string | undefined;
       let orgSenderId: string | undefined;
       const { data: orgProf } = await client
@@ -5746,7 +5797,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         id: attendee.id,
         event_id: eventId,
         name: attendee.name,
-        email: (attendee.email || '').trim(),
+        email: cleanAttEmail,
         phone: normalizedPhone,
         organization: attendee.organization || 'General Guest',
         tier: attendee.tier || 'General',
@@ -5755,7 +5806,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         ticket_code: attendee.ticketCode,
         sms_status: resolvedSmsStatus,
         payment_status: attendee.paymentStatus || 'paid',
-        validation_group: attendee.validationGroup ?? null,
+        validation_group: normalizedStudioValidationGroup,
         invite_code_used: attendee.inviteCodeUsed ?? null,
         gift_entry: attendee.giftEntry ?? null,
         custom_responses: attendee.customResponses ?? null,
@@ -7062,11 +7113,53 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
   // VITE DEV MIDDLEWARE / PRODUCTION STATIC ASSETS WITH SSR OG INJECTION
   // =========================================================================
 
+  const resolvePublicEventSubPath = (pathname: string): PublicEventSubPath => {
+    if (/\/(?:checkin|walk-?in)\/?$/i.test(pathname)) return 'checkin';
+    if (/\/(?:gifts|gift-desk)\/?$/i.test(pathname)) return 'gifts';
+    if (/\/camera\/?$/i.test(pathname) || pathname.toLowerCase() === '/camera') return 'camera';
+    return 'top';
+  };
+
+  const applySsrEventResponse = (
+    res: Response,
+    html: string,
+    evt: EventItem | null,
+    baseUrl: string,
+    pathname: string
+  ) => {
+    if (!evt) {
+      return res
+        .status(404)
+        .set({
+          'Content-Type': 'text/html; charset=utf-8',
+          'X-Robots-Tag': 'noindex, nofollow',
+          'Cache-Control': 'no-store',
+        })
+        .send(injectNotFoundSsrHtml(html, baseUrl, pathname));
+    }
+    const subPath = resolvePublicEventSubPath(pathname);
+    const indexable =
+      isPublicIndexableEvent(evt as EventItem & { unlisted?: boolean; visibility?: string }) &&
+      subPath !== 'camera';
+    const withOg = injectEventMetaTags(html, evt, baseUrl, subPath);
+    const headers: Record<string, string> = {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': indexable
+        ? 'public, max-age=60, s-maxage=300, stale-while-revalidate=60'
+        : 'private, no-store',
+    };
+    if (!indexable) {
+      headers['X-Robots-Tag'] = 'noindex, nofollow';
+    }
+    return res.status(200).set(headers).send(withOg);
+  };
+
   const isProd =
     process.env.NODE_ENV === 'production' ||
     process.env.npm_lifecycle_event === 'start' ||
     Boolean(process.env.VERCEL) ||
     Boolean(options?.serverless);
+
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -7092,25 +7185,23 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         '/',
       ],
       async (req, res, next) => {
-      const slugOrId =
-        req.params.slug ||
-        (typeof req.query.event === 'string' ? req.query.event.trim() : '');
-      if (!slugOrId) return next();
-      const evt = await resolveEventForPublicOrOg(slugOrId);
-      if (!evt) return next();
-      try {
-        const indexPath = path.resolve(__dirname, 'index.html');
-        const rawHtml = fs.readFileSync(indexPath, 'utf-8');
-        const transformed = await vite.transformIndexHtml(req.originalUrl, rawHtml);
-        const withOg = injectEventMetaTags(transformed, evt, resolveBaseUrl(req));
-        res
-          .status(200)
-          .set({ 'Content-Type': 'text/html', 'Cache-Control': 'no-cache, must-revalidate' })
-          .end(withOg);
-      } catch (err) {
-        next(err);
+        const isDirectEventRoute = req.path.startsWith('/e/');
+        const slugOrId =
+          req.params.slug ||
+          (typeof req.query.event === 'string' ? req.query.event.trim() : '');
+        if (!slugOrId && !isDirectEventRoute) return next();
+        const evt = slugOrId ? await resolveEventForPublicOrOg(slugOrId) : null;
+        if (!evt && !isDirectEventRoute) return next();
+        try {
+          const indexPath = path.resolve(__dirname, 'index.html');
+          const rawHtml = fs.readFileSync(indexPath, 'utf-8');
+          const transformed = await vite.transformIndexHtml(req.originalUrl, rawHtml);
+          return applySsrEventResponse(res, transformed, evt, resolveBaseUrl(req), req.path);
+        } catch (err) {
+          next(err);
+        }
       }
-    });
+    );
 
     app.use(vite.middlewares);
   } else {
@@ -7119,6 +7210,18 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       const candidates = [
         path.join(distDir, 'index.html'),
         path.resolve(process.cwd(), 'dist', 'index.html'),
+      ];
+      return candidates.find((p) => fs.existsSync(p)) ?? null;
+    };
+    const resolvePrerenderedHtmlPath = (reqPath: string) => {
+      const clean = reqPath.replace(/^\/+|\/+$/g, '');
+      if (!clean) return resolveIndexHtmlPath();
+      if (clean.includes('..') || clean.includes('.')) return null;
+      const candidates = [
+        path.join(distDir, `${clean}.html`),
+        path.join(distDir, clean, 'index.html'),
+        path.resolve(process.cwd(), 'dist', `${clean}.html`),
+        path.resolve(process.cwd(), 'dist', clean, 'index.html'),
       ];
       return candidates.find((p) => fs.existsSync(p)) ?? null;
     };
@@ -7146,6 +7249,29 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       );
     }
     app.get('*', async (req, res) => {
+      const slugMatch = req.path.match(
+        /^\/e\/([^/]+)(?:\/(?:checkin|walk-?in|gifts|gift-desk|polls|camera))?\/?$/i
+      );
+      const isDirectEventRoute = req.path.startsWith('/e/');
+      const slugOrId =
+        (slugMatch ? decodeURIComponent(slugMatch[1]) : '') ||
+        (typeof req.query.event === 'string' ? req.query.event.trim() : '');
+
+      // Serve prerendered static HTML page when available for marketing/legal routes
+      if (!slugOrId && !isDirectEventRoute) {
+        const prerenderPath = resolvePrerenderedHtmlPath(req.path);
+        if (prerenderPath) {
+          const ssgHtml = fs.readFileSync(prerenderPath, 'utf-8');
+          return res
+            .status(200)
+            .set({
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'public, max-age=300, stale-while-revalidate=60',
+            })
+            .send(ssgHtml);
+        }
+      }
+
       const indexPath = resolveIndexHtmlPath();
       let rawHtml: string | null = indexPath ? fs.readFileSync(indexPath, 'utf-8') : null;
 
@@ -7169,21 +7295,13 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           .send('Production build not found. Run "npm run build" before starting the server.');
       }
 
-      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
-      const slugMatch = req.path.match(
-        /^\/e\/([^/]+)(?:\/(?:checkin|walk-?in|gifts|gift-desk|polls|camera))?$/i
-      );
-      const slugOrId =
-        (slugMatch ? decodeURIComponent(slugMatch[1]) : '') ||
-        (typeof req.query.event === 'string' ? req.query.event.trim() : '');
-      if (slugOrId) {
-        const evt = await resolveEventForPublicOrOg(slugOrId);
-        if (evt) {
-          const withOg = injectEventMetaTags(rawHtml, evt, resolveBaseUrl(req));
-          return res.status(200).set({ 'Content-Type': 'text/html' }).send(withOg);
-        }
+      if (slugOrId || isDirectEventRoute) {
+        const evt = slugOrId ? await resolveEventForPublicOrOg(slugOrId) : null;
+        return applySsrEventResponse(res, rawHtml, evt, resolveBaseUrl(req), req.path);
       }
-      return res.status(200).set({ 'Content-Type': 'text/html' }).send(rawHtml);
+
+      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+      return res.status(200).set({ 'Content-Type': 'text/html; charset=utf-8' }).send(rawHtml);
     });
   }
 

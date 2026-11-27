@@ -22,6 +22,7 @@ import {
   DesignTheme,
   EventItem,
   EventStatus,
+  EventValidationConfig,
   OrganizerProfile,
   ScheduleBlock,
 } from '../types/events';
@@ -41,6 +42,7 @@ import {
   STARTER_MAX_ATTENDEES_PER_EVENT,
   SUBSCRIPTION_PLAN_CATALOG,
 } from '../lib/subscriptionPlans';
+import { GuestCircleValidationEditor } from './GuestCircleValidationEditor';
 import { CircularGauge, MonochromePoster } from './MonochromeArtwork';
 import { ThemeColorPicker } from './ThemeColorPicker';
 
@@ -525,9 +527,16 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
-  const [validationInput, setValidationInput] = useState(
-    (event.validationConfig?.options ?? preset.validationConfig.options).join(', ')
-  );
+  const [validationDraft, setValidationDraft] = useState<EventValidationConfig>(() => {
+    const base = event.validationConfig ?? preset.validationConfig;
+    return {
+      enabled: base.enabled,
+      label: base.label,
+      options: [...(base.options ?? preset.validationConfig.options)],
+      requireInviteCode: Boolean(base.requireInviteCode),
+      inviteCode: base.inviteCode ?? '',
+    };
+  });
   const [momoDraft, setMomoDraft] = useState(
     event.extraDataConfig?.momoNumber ?? preset.extraDataConfig.momoNumber ?? ''
   );
@@ -550,7 +559,15 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     setBrandColorDraft(event.brandColor ?? event.extraDataConfig?.brandColor);
     setCapacityDraft(event.capacity);
     setPollsEnabledDraft(isPollsEnabledForEvent(event));
-  }, [event, preset.flyerUrl, preset.designTheme]);
+    const base = event.validationConfig ?? preset.validationConfig;
+    setValidationDraft({
+      enabled: base.enabled,
+      label: base.label,
+      options: [...(base.options ?? preset.validationConfig.options)],
+      requireInviteCode: Boolean(base.requireInviteCode),
+      inviteCode: base.inviteCode ?? '',
+    });
+  }, [event, preset.flyerUrl, preset.designTheme, preset.validationConfig]);
 
   const pct = Math.round((event.registered / Math.max(1, event.capacity)) * 100);
   const isAtCeiling = pct >= capacityThreshold;
@@ -666,8 +683,7 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   };
 
   const handleSaveFormsAndTheme = async () => {
-    const parsedOptions = validationInput
-      .split(',')
+    const parsedOptions = validationDraft.options
       .map((s) => s.trim())
       .filter(Boolean);
     try {
@@ -678,12 +694,14 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
           brandColor: brandColorDraft,
           flyerUrl: flyerSrc,
           validationConfig: {
-            ...(event.validationConfig ?? preset.validationConfig),
-            enabled: true,
+            enabled: validationDraft.enabled,
+            label: validationDraft.label.trim() || preset.validationConfig.label,
             options:
               parsedOptions.length > 0
                 ? parsedOptions
                 : preset.validationConfig.options,
+            requireInviteCode: Boolean(validationDraft.requireInviteCode),
+            inviteCode: validationDraft.inviteCode?.trim() || undefined,
           },
           extraDataConfig: {
             ...(event.extraDataConfig ?? preset.extraDataConfig),
@@ -1069,18 +1087,12 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
             onChangeBrandColor={setBrandColorDraft}
             title="Poster Theme & Brand Accent Color"
           />
-          <div>
-            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-              Guest Validation Circles (comma separated)
-            </label>
-            <input
-              type="text"
-              value={validationInput}
-              onChange={(e) => setValidationInput(e.target.value)}
-              placeholder="Bride's Family, Groom's Family, Mutual Friends"
-              className="w-full h-9 px-3.5 rounded-xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B]"
-            />
-          </div>
+          <GuestCircleValidationEditor
+            compact
+            category={event.category}
+            value={validationDraft}
+            onChange={setValidationDraft}
+          />
           {(event.category === 'Wedding' || event.extraDataConfig?.enableGiftTable) && (
             <div>
               <label className="text-[11px] font-semibold text-[#0B0B0B] mb-1 flex items-center gap-1">

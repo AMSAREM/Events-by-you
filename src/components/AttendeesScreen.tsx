@@ -247,6 +247,11 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
       minute: '2-digit',
     });
     const registeredName = walkInName.trim();
+    const cleanEmail = walkInEmail.trim();
+    if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      showToast('Please enter a valid email address, or leave the Email field blank.');
+      return;
+    }
 
     try {
       await Promise.resolve(
@@ -254,9 +259,7 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
           id: `att-${Date.now()}`,
           eventId: targetEventId,
           name: registeredName,
-          email:
-            walkInEmail.trim() ||
-            `${registeredName.toLowerCase().replace(/\s+/g, '.')}@guest.africa`,
+          email: cleanEmail,
           phone: normalizedPhone,
           organization: walkInOrg.trim() || 'Gate Walk-In',
           tier: walkInTier,
@@ -543,7 +546,8 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                       <td className="py-3.5 px-5">
                         <p className="text-xs font-semibold text-[#0B0B0B]">{att.name}</p>
                         <p className="text-[11px] text-[#71717A]">
-                          {att.organization} · {att.email}
+                          {att.organization}
+                          {att.email?.trim() ? ` · ${att.email.trim()}` : ''}
                         </p>
                         <p className="text-[11px] font-mono text-[#0B0B0B] mt-0.5 tabular-nums">
                           {att.phone}
@@ -758,12 +762,14 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">Email</label>
+                  <label className="block text-xs font-semibold text-[#0B0B0B] mb-1">
+                    Email <span className="font-normal text-[#71717A]">(Optional)</span>
+                  </label>
                   <input
                     type="email"
                     value={walkInEmail}
                     onChange={(e) => setWalkInEmail(e.target.value)}
-                    placeholder="guest@company.com"
+                    placeholder="Optional (e.g. guest@example.com)"
                     className="w-full h-10 px-4 rounded-2xl bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] focus:outline-none"
                   />
                 </div>

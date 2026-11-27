@@ -1,6 +1,8 @@
 import React from 'react';
 import { ArrowLeft, ArrowRight, FileText, Lock, ShieldCheck } from 'lucide-react';
+import { MARKETING_SEO } from '../lib/seoConfig';
 import { BrandLogo } from './BrandLogo';
+import { SeoHead } from './SeoHead';
 
 interface LegalScreenProps {
   doc: 'terms' | 'privacy';
@@ -20,9 +22,11 @@ export const LegalScreen: React.FC<LegalScreenProps> = ({
   onNavigateStudio,
 }) => {
   const isTerms = doc === 'terms';
+  const seo = isTerms ? MARKETING_SEO['/terms'] : MARKETING_SEO['/privacy'];
 
   return (
     <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#0B0B0B] flex flex-col justify-between overflow-x-clip">
+      <SeoHead {...seo} />
       <header className="sticky top-0 z-40 w-full bg-[#F5F5F7]/90 backdrop-blur-xl border-b border-[#E5E5EA]">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">

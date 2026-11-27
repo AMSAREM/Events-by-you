@@ -56,11 +56,17 @@ import {
   downloadQrSvg,
 } from '../lib/qr';
 import { appendPoweredByLine } from '../lib/eventMessages';
+import {
+  CANONICAL_ORIGIN,
+  NOINDEX_ROUTE_SEO,
+  buildEventSeoPayload,
+} from '../lib/seoConfig';
 import { getContrastTextColor, hexWithAlpha, normalizeHexColor } from '../lib/themeColors';
 import { CheckInFlyerSidePanel } from './CheckInFlyerSidePanel';
 import { MonochromePoster } from './MonochromeArtwork';
 import { PublicPollsView } from './PublicPollsView';
 import { PWAInstallButton } from './PWAInstallButton';
+import { SeoHead } from './SeoHead';
 
 interface PublicEventScreenProps {
   events: EventItem[];
@@ -288,6 +294,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const [phoneInput, setPhoneInput] = useState('');
   const [email, setEmail] = useState('');
   const [validationGroup, setValidationGroup] = useState('');
+  const [circleSearch, setCircleSearch] = useState('');
   const [inviteCodeInput, setInviteCodeInput] = useState('');
   const [customResponses, setCustomResponses] = useState<Record<string, string>>({});
 
@@ -318,9 +325,20 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [lookingUpPass, setLookingUpPass] = useState(false);
 
+  const filteredValidationOptions = useMemo(() => {
+    const q = circleSearch.trim().toLowerCase();
+    if (!q) return validationConfig.options;
+    return validationConfig.options.filter((opt) => opt.toLowerCase().includes(q));
+  }, [validationConfig.options, circleSearch]);
+
   useEffect(() => {
     setHeroFailed(false);
-    setValidationGroup('');
+    setCircleSearch('');
+    setValidationGroup(
+      validationConfig.enabled && validationConfig.options.length === 1
+        ? validationConfig.options[0]
+        : ''
+    );
     setInviteCodeInput('');
     setGiftGiverName('');
     setGiftGiverPhone('');
@@ -333,7 +351,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     setCustomResponses({});
     setDuplicateError(null);
     setLookupError(null);
-  }, [selectedEvent?.id, selectedEvent?.flyerUrl]);
+  }, [selectedEvent?.id, selectedEvent?.flyerUrl, validationConfig.enabled, validationConfig.options]);
 
   const normalizedPhone = useMemo(() => {
     const trimmed = phoneInput.trim();
@@ -630,7 +648,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       const attDigits = att.phone.replace(/\D/g, '');
       return (
         attCode === cleanCode ||
-        att.email.toLowerCase() === cleanLower ||
+        (Boolean(att.email?.trim()) && att.email.trim().toLowerCase() === cleanLower) ||
         (normalizedLookupPhone && attPhone === normalizedLookupPhone) ||
         (digitsOnly.length >= 9 && attDigits.endsWith(digitsOnly.slice(-9)))
       );
@@ -733,8 +751,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       setDuplicateError('Please enter a valid mobile number for your SMS QR pass.');
       return;
     }
-    if (!email.trim()) {
-      setDuplicateError('Please enter your email address for pass confirmation.');
+    const cleanEmail = email.trim();
+    if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setDuplicateError('Please enter a valid email address, or leave the email field blank.');
       return;
     }
 
@@ -817,6 +836,12 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     }
     return (
       <div className="min-h-screen bg-[#F5F5F7] text-[#1A1C1D] flex flex-col items-center justify-center px-4 text-center">
+        <SeoHead
+          title={NOINDEX_ROUTE_SEO.notFound.title}
+          description={NOINDEX_ROUTE_SEO.notFound.description}
+          path={initialEventId ? `/e/${encodeURIComponent(initialEventId)}` : '/404'}
+          robots="noindex, nofollow"
+        />
         <div className="max-w-md w-full bg-white rounded-[28px] p-8 shadow-sm space-y-4">
           <div className="w-12 h-12 rounded-2xl bg-[#F5F5F7] flex items-center justify-center mx-auto">
             <CalendarDays className="w-6 h-6 text-[#0B0B0B]" />
@@ -863,6 +888,12 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       </div>
     );
   }
+
+  const eventSeoPayload = buildEventSeoPayload(
+    selectedEvent,
+    CANONICAL_ORIGIN,
+    standaloneCheckin ? 'checkin' : standaloneGifts ? 'gifts' : 'top'
+  );
 
   const spotsRemaining = Math.max(0, selectedEvent.capacity - selectedEvent.registered);
   const canCheckInRegister = selectedEvent.status !== 'draft';
@@ -1090,33 +1121,68 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                         </span>
                       </div>
                       <span className="text-[10px] font-mono uppercase tracking-wider text-[#71717A]">
-                        {selectedEvent.category} Validation
+                        {validationConfig.options.length} Options
                       </span>
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {validationConfig.options.map((opt) => {
-                        const active = validationGroup === opt;
-                        return (
+                    {validationConfig.options.length > 6 && (
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-[#71717A] absolute left-3.5 top-2.5 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={circleSearch}
+                          onChange={(e) => setCircleSearch(e.target.value)}
+                          placeholder={`Filter ${validationConfig.label.toLowerCase()}...`}
+                          className="w-full h-9 pl-9 pr-8 rounded-full bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] placeholder:text-[#71717A] focus:border-[#0B0B0B] focus:outline-none"
+                        />
+                        {circleSearch && (
                           <button
-                            key={opt}
                             type="button"
-                            onClick={() => {
-                              setValidationGroup(opt);
-                              if (!giftSide) setGiftSide(opt);
-                              setDuplicateError(null);
-                            }}
-                            className={`px-3 py-2 rounded-xl text-xs font-semibold text-left border transition-all flex items-center justify-between gap-1.5 ${
-                              active
-                                ? 'bg-[#0B0B0B] text-white border-[#0B0B0B] shadow-sm'
-                                : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
-                            }`}
+                            onClick={() => setCircleSearch('')}
+                            aria-label="Clear circle filter"
+                            className="absolute right-2.5 top-2 text-[#71717A] hover:text-[#0B0B0B]"
                           >
-                            <span className="truncate">{opt}</span>
-                            {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                            <X className="w-3.5 h-3.5" />
                           </button>
-                        );
-                      })}
-                    </div>
+                        )}
+                      </div>
+                    )}
+                    {filteredValidationOptions.length === 0 ? (
+                      <p className="text-xs text-[#71717A] py-2">
+                        No circle or table matches &ldquo;{circleSearch}&rdquo;.{' '}
+                        <button
+                          type="button"
+                          onClick={() => setCircleSearch('')}
+                          className="underline font-semibold text-[#0B0B0B]"
+                        >
+                          Show all
+                        </button>
+                      </p>
+                    ) : (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-56 overflow-y-auto pr-0.5">
+                        {filteredValidationOptions.map((opt) => {
+                          const active = validationGroup === opt;
+                          return (
+                            <button
+                              key={opt}
+                              type="button"
+                              onClick={() => {
+                                setValidationGroup(opt);
+                                if (!giftSide) setGiftSide(opt);
+                                setDuplicateError(null);
+                              }}
+                              className={`px-3 py-2 rounded-xl text-xs font-semibold text-left border transition-all flex items-center justify-between gap-1.5 ${
+                                active
+                                  ? 'bg-[#0B0B0B] text-white border-[#0B0B0B] shadow-sm'
+                                  : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                              }`}
+                            >
+                              <span className="truncate">{opt}</span>
+                              {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
 
                     {validationConfig.requireInviteCode && (
                       <div className="pt-1 space-y-1">
@@ -1128,7 +1194,10 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           type="text"
                           required
                           value={inviteCodeInput}
-                          onChange={(e) => setInviteCodeInput(e.target.value)}
+                          onChange={(e) => {
+                            setInviteCodeInput(e.target.value);
+                            setDuplicateError(null);
+                          }}
                           placeholder="Enter host invitation code (e.g. ROYAL2026)"
                           className="w-full h-10 px-4 rounded-full bg-white border border-[#E5E5EA] text-xs font-mono uppercase text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
                         />
@@ -1211,22 +1280,24 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   </div>
                 </div>
 
-                {/* Email Address */}
+                {/* Email Address (Optional) */}
                 <div className="space-y-1.5">
                   <label
                     className="block text-xs font-semibold text-[#0B0B0B]"
                     htmlFor="checkout-email"
                   >
-                    Email Address *
+                    Email Address <span className="font-normal text-[#71717A]">(Optional)</span>
                   </label>
                   <div className="relative">
                     <input
                       id="checkout-email"
                       type="email"
-                      required
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="e.g. ama@eventsbyyou.xyz"
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                        setDuplicateError(null);
+                      }}
+                      placeholder="Optional — receive an email PDF & calendar copy"
                       className="w-full h-12 px-4 pr-10 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
                     />
                     <Mail className="w-4 h-4 text-[#71717A] absolute right-4 top-4 pointer-events-none" />
@@ -1395,6 +1466,15 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
   return (
     <div className="min-h-dvh w-full max-w-full bg-[#F5F5F7] text-[#1A1C1D] antialiased flex flex-col overflow-x-clip selection:bg-[#0B0B0B] selection:text-white">
+      <SeoHead
+        title={eventSeoPayload.title}
+        description={eventSeoPayload.description}
+        path={eventSeoPayload.path}
+        robots={eventSeoPayload.robots}
+        ogType={eventSeoPayload.ogType}
+        ogImage={eventSeoPayload.ogImage}
+        jsonLd={eventSeoPayload.jsonLd}
+      />
       {/* Fullscreen Kiosk Check-In & QR Pass Modal */}
       {showCheckinModal && (
         <div
@@ -3091,24 +3171,26 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     </div>
                   </div>
 
-                  <div className="p-3 bg-[#F5F5F7] rounded-2xl flex items-start gap-3">
-                    <div className="w-7 h-7 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center shrink-0 mt-0.5">
-                      <Mail className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-[#0B0B0B]">
-                          Official Receipt &amp; PDF
-                        </span>
-                        <span className="text-[11px] text-emerald-600 font-semibold">
-                          Delivered
-                        </span>
+                  {issuedPass.email?.trim() ? (
+                    <div className="p-3 bg-[#F5F5F7] rounded-2xl flex items-start gap-3">
+                      <div className="w-7 h-7 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center shrink-0 mt-0.5">
+                        <Mail className="w-3.5 h-3.5" />
                       </div>
-                      <p className="text-[11px] text-[#71717A] truncate">
-                        Confirmation &amp; calendar invite sent to {issuedPass.email}
-                      </p>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-[#0B0B0B]">
+                            Official Receipt &amp; PDF
+                          </span>
+                          <span className="text-[11px] text-emerald-600 font-semibold">
+                            Delivered
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-[#71717A] truncate">
+                          Confirmation &amp; calendar invite sent to {issuedPass.email}
+                        </p>
+                      </div>
                     </div>
-                  </div>
+                  ) : null}
                 </div>
               </div>
 

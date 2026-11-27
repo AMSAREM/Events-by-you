@@ -26,6 +26,7 @@ import {
   CustomFormField,
   DesignTheme,
   EventItem,
+  EventValidationConfig,
   OrganizerProfile,
   ScheduleBlock,
 } from '../types/events';
@@ -46,6 +47,7 @@ import {
 import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
 import { createStarterPlanningConfig } from '../lib/planningTemplates';
 import { EventFlyerCard } from './EventFlyerCard';
+import { GuestCircleValidationEditor } from './GuestCircleValidationEditor';
 import { MonochromePoster } from './MonochromeArtwork';
 import { ThemeColorPicker } from './ThemeColorPicker';
 
@@ -106,13 +108,12 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const [artwork, setArtwork] = useState<ArtworkVariant>('architecture');
 
   // Event-specific Validation & Standalone Gift Table / Custom Data config
-  const [validationEnabled, setValidationEnabled] = useState(true);
-  const [validationLabel, setValidationLabel] = useState(initialPreset.validationConfig.label);
-  const [validationOptionsText, setValidationOptionsText] = useState(
-    initialPreset.validationConfig.options.join(', ')
-  );
-  const [requireInviteCode, setRequireInviteCode] = useState(false);
-  const [inviteCode, setInviteCode] = useState('');
+  const [validationConfig, setValidationConfig] = useState<EventValidationConfig>(() => ({
+    ...initialPreset.validationConfig,
+    options: [...initialPreset.validationConfig.options],
+    requireInviteCode: false,
+    inviteCode: '',
+  }));
 
   const [enableGiftTable, setEnableGiftTable] = useState(false);
   const [giftTitle, setGiftTitle] = useState('Event Gift Table & Registry');
@@ -240,11 +241,13 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     setFlyerFailed(false);
     setDesignTheme(catPreset.designTheme);
     setBrandColor(undefined);
-    setValidationEnabled(catPreset.validationConfig.enabled);
-    setValidationLabel(catPreset.validationConfig.label);
-    setValidationOptionsText(catPreset.validationConfig.options.join(', '));
-    setRequireInviteCode(Boolean(catPreset.validationConfig.requireInviteCode));
-    setInviteCode('');
+    setValidationConfig({
+      enabled: catPreset.validationConfig.enabled,
+      label: catPreset.validationConfig.label,
+      options: [...catPreset.validationConfig.options],
+      requireInviteCode: Boolean(catPreset.validationConfig.requireInviteCode),
+      inviteCode: '',
+    });
     setEnableGiftTable(Boolean(catPreset.extraDataConfig.enableGiftTable));
     if (catPreset.extraDataConfig.giftTitle) setGiftTitle(catPreset.extraDataConfig.giftTitle);
     setEnablePolls(Boolean(catPreset.extraDataConfig.enablePolls) || nextCat === 'Corporate');
@@ -282,8 +285,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
       const finalCap = entitlements.maxAttendeesPerEvent
         ? Math.min(entitlements.maxAttendeesPerEvent, Math.max(10, capacity))
         : Math.max(10, capacity);
-      const parsedOptions = validationOptionsText
-        .split(',')
+      const parsedOptions = validationConfig.options
         .map((s) => s.trim())
         .filter(Boolean);
       const preset = getCategoryPreset(category || 'Events');
@@ -318,11 +320,11 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
         designTheme,
         brandColor,
         validationConfig: {
-          enabled: validationEnabled,
-          label: validationLabel.trim() || preset.validationConfig.label,
+          enabled: validationConfig.enabled,
+          label: validationConfig.label.trim() || preset.validationConfig.label,
           options: parsedOptions.length > 0 ? parsedOptions : preset.validationConfig.options,
-          requireInviteCode,
-          inviteCode: inviteCode.trim() || undefined,
+          requireInviteCode: Boolean(validationConfig.requireInviteCode),
+          inviteCode: validationConfig.inviteCode?.trim() || undefined,
         },
         extraDataConfig: {
           enableGiftTable,
@@ -410,12 +412,11 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     designTheme,
     brandColor,
     validationConfig: {
-      enabled: validationEnabled,
-      label: validationLabel,
-      options: validationOptionsText
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
+      enabled: validationConfig.enabled,
+      label: validationConfig.label,
+      options: validationConfig.options.map((s) => s.trim()).filter(Boolean),
+      requireInviteCode: validationConfig.requireInviteCode,
+      inviteCode: validationConfig.inviteCode,
     },
     extraDataConfig: {
       enableGiftTable,
@@ -932,73 +933,11 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 </div>
 
                 {/* Validation Form */}
-                <div className="p-4 rounded-2xl bg-white space-y-3 border border-[#E5E5EA]">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-bold text-[#0B0B0B]">
-                        Guest Circle Validation Form
-                      </p>
-                      <p className="text-[11px] text-[#71717A]">
-                        Require guests to identify their circle (e.g. Bride&apos;s Family, Groom&apos;s Family, Friends) before check-in.
-                      </p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={validationEnabled}
-                      onChange={(e) => setValidationEnabled(e.target.checked)}
-                      className="w-4 h-4 accent-[#0B0B0B]"
-                    />
-                  </div>
-                  {validationEnabled && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                      <div>
-                        <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                          Validation Prompt Title
-                        </label>
-                        <input
-                          type="text"
-                          value={validationLabel}
-                          onChange={(e) => setValidationLabel(e.target.value)}
-                          className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                          Selectable Circles (comma separated)
-                        </label>
-                        <input
-                          type="text"
-                          value={validationOptionsText}
-                          onChange={(e) => setValidationOptionsText(e.target.value)}
-                          className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
-                        />
-                      </div>
-                      <label className="sm:col-span-2 flex items-center gap-2 text-xs text-[#0B0B0B] cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={requireInviteCode}
-                          onChange={(e) => setRequireInviteCode(e.target.checked)}
-                          className="w-4 h-4 accent-[#0B0B0B]"
-                        />
-                        <span>Require private invitation passcode ({inviteCode.trim() || 'GUEST2026'})</span>
-                      </label>
-                      {requireInviteCode && (
-                        <div className="sm:col-span-2">
-                          <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                            Custom Invitation Passcode
-                          </label>
-                          <input
-                            type="text"
-                            value={inviteCode}
-                            onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
-                            placeholder="GUEST2026"
-                            className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B]"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
+                <GuestCircleValidationEditor
+                  category={category}
+                  value={validationConfig}
+                  onChange={setValidationConfig}
+                />
 
                 {/* Wedding Gift Table */}
                 <div className="p-4 rounded-2xl bg-white space-y-3 border border-[#E5E5EA]">

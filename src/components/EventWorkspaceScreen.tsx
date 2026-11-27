@@ -38,6 +38,7 @@ import {
   EventPlanningConfig,
   EventPoll,
   EventPollStatus,
+  EventValidationConfig,
   GiftTableAttendantLink,
   GiftTableEntry,
   OrganizerProfile,
@@ -73,6 +74,7 @@ import {
 import { CheckInFlyerSidePanel } from './CheckInFlyerSidePanel';
 import { resolveEventBrandColor } from '../lib/themeColors';
 import { GiftAttendantLinksCard } from './GiftAttendantLinksCard';
+import { GuestCircleValidationEditor } from './GuestCircleValidationEditor';
 import { EventPollsManager } from './EventPollsManager';
 import { EventPlanningPanel } from './EventPlanningPanel';
 import { computeEventReadiness } from '../lib/planningTemplates';
@@ -217,6 +219,19 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const [copiedToast, setCopiedToast] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [attendeeFilter, setAttendeeFilter] = useState<'all' | 'checked' | 'pending'>('all');
+  const [circleFilter, setCircleFilter] = useState<string>('all');
+  const [editingCircles, setEditingCircles] = useState(false);
+  const [savingCircles, setSavingCircles] = useState(false);
+  const [circleDraft, setCircleDraft] = useState<EventValidationConfig>(() => {
+    const base = event.validationConfig ?? getCategoryPreset(event.category).validationConfig;
+    return {
+      enabled: base.enabled,
+      label: base.label,
+      options: [...(base.options ?? [])],
+      requireInviteCode: Boolean(base.requireInviteCode),
+      inviteCode: base.inviteCode ?? '',
+    };
+  });
   const [timeRange, setTimeRange] = useState<TimeRange>('7D');
   const [flyerFailed, setFlyerFailed] = useState(false);
   const [uploadingFlyer, setUploadingFlyer] = useState(false);
@@ -245,6 +260,29 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const [walkInPhone, setWalkInPhone] = useState('');
   const [walkInEmail, setWalkInEmail] = useState('');
   const [walkInTier, setWalkInTier] = useState<AttendeeTier>('General');
+  const workspaceCircles = useMemo<string[]>(() => {
+    const base = event.validationConfig ?? getCategoryPreset(event.category).validationConfig;
+    return Array.isArray(base.options) && base.options.length > 0 ? base.options : [];
+  }, [event.validationConfig, event.category]);
+  const [walkInValidationGroup, setWalkInValidationGroup] = useState<string>(
+    workspaceCircles[0] ?? ''
+  );
+  useEffect(() => {
+    const base = event.validationConfig ?? getCategoryPreset(event.category).validationConfig;
+    setCircleDraft({
+      enabled: base.enabled,
+      label: base.label,
+      options: [...(base.options ?? [])],
+      requireInviteCode: Boolean(base.requireInviteCode),
+      inviteCode: base.inviteCode ?? '',
+    });
+    setCircleFilter('all');
+  }, [event.id, event.category, event.validationConfig]);
+  useEffect(() => {
+    if (workspaceCircles.length > 0 && !workspaceCircles.includes(walkInValidationGroup)) {
+      setWalkInValidationGroup(workspaceCircles[0]);
+    }
+  }, [workspaceCircles, walkInValidationGroup]);
 
   // Standalone Gift Table desk entry state
   const [giftGiverName, setGiftGiverName] = useState('');
@@ -402,20 +440,49 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     totalRegistered > 0 ? Math.min(100, Math.round((totalCheckedIn / totalRegistered) * 100)) : 0;
   const spotsLeft = Math.max(0, event.capacity - totalRegistered);
 
+  const circleBreakdown = useMemo(() => {
+    const counts = new Map<string, { label: string; registered: number; checkedIn: number }>();
+    for (const opt of workspaceCircles) {
+      counts.set(opt, { label: opt, registered: 0, checkedIn: 0 });
+    }
+    let unassignedReg = 0;
+    let unassignedChecked = 0;
+    for (const att of eventAttendees) {
+      const grp = att.validationGroup?.trim();
+      if (!grp) {
+        unassignedReg += 1;
+        if (att.checkedIn) unassignedChecked += 1;
+        continue;
+      }
+      const existing = counts.get(grp) ?? { label: grp, registered: 0, checkedIn: 0 };
+      existing.registered += 1;
+      if (att.checkedIn) existing.checkedIn += 1;
+      counts.set(grp, existing);
+    }
+    const items = Array.from(counts.values());
+    if (unassignedReg > 0) {
+      items.push({ label: 'Unassigned', registered: unassignedReg, checkedIn: unassignedChecked });
+    }
+    return items;
+  }, [workspaceCircles, eventAttendees]);
+
   const filteredAttendees = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return eventAttendees.filter((a) => {
       const matchesFilter =
         attendeeFilter === 'all' ||
         (attendeeFilter === 'checked' ? a.checkedIn : !a.checkedIn);
+      const grp = a.validationGroup?.trim() || 'Unassigned';
+      const matchesCircle = circleFilter === 'all' || grp === circleFilter;
       const matchesSearch =
         !q ||
         a.name.toLowerCase().includes(q) ||
         a.email.toLowerCase().includes(q) ||
-        a.phone.toLowerCase().includes(q);
-      return matchesFilter && matchesSearch;
+        a.phone.toLowerCase().includes(q) ||
+        (a.validationGroup?.toLowerCase().includes(q) ?? false);
+      return matchesFilter && matchesCircle && matchesSearch;
     });
-  }, [eventAttendees, attendeeFilter, searchQuery]);
+  }, [eventAttendees, attendeeFilter, circleFilter, searchQuery]);
 
   const invitationUrl = useMemo(
     () => buildEventInvitationUrl(event.slug || event.id),
@@ -591,9 +658,41 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     }
   };
 
+  const handleSaveCircleSettings = async () => {
+    if (!onUpdateEvent || savingCircles) return;
+    const presetCfg = getCategoryPreset(event.category).validationConfig;
+    const cleanedOptions = circleDraft.options.map((o) => o.trim()).filter(Boolean);
+    setSavingCircles(true);
+    try {
+      await Promise.resolve(
+        onUpdateEvent({
+          ...event,
+          validationConfig: {
+            enabled: circleDraft.enabled,
+            label: circleDraft.label.trim() || presetCfg.label,
+            options: cleanedOptions.length > 0 ? cleanedOptions : presetCfg.options,
+            requireInviteCode: Boolean(circleDraft.requireInviteCode),
+            inviteCode: circleDraft.inviteCode?.trim() || undefined,
+          },
+        })
+      );
+      setEditingCircles(false);
+      triggerToast('Guest circle & table settings saved');
+    } catch (err) {
+      triggerToast(err instanceof Error ? err.message : 'Unable to save circle validation rules.');
+    } finally {
+      setSavingCircles(false);
+    }
+  };
+
   const handleWalkInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!onRegisterAttendee || !walkInName.trim() || !walkInPhone.trim()) return;
+    const cleanEmail = walkInEmail.trim();
+    if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      triggerToast('Please enter a valid optional email address, or leave it blank.');
+      return;
+    }
     const normalizedPhone = normalizePhoneE164(walkInPhone);
     const code = `EV-${Math.floor(1000 + Math.random() * 9000)}`;
     const nowTime = new Date().toLocaleTimeString('en-GB', {
@@ -607,9 +706,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           id: `att-${Date.now()}`,
           eventId: event.id,
           name: guestName,
-          email:
-            walkInEmail.trim() ||
-            `${guestName.toLowerCase().replace(/\s+/g, '.')}@guest.africa`,
+          email: cleanEmail,
           phone: normalizedPhone,
           organization: 'Gate Walk-In',
           tier: walkInTier,
@@ -618,6 +715,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           checkedInAt: nowTime,
           paymentStatus: 'paid',
           smsStatus: 'Arkesel Sent',
+          validationGroup: walkInValidationGroup || workspaceCircles[0] || undefined,
         })
       );
       setWalkInName('');
@@ -1376,10 +1474,24 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       type="email"
                       value={walkInEmail}
                       onChange={(e) => setWalkInEmail(e.target.value)}
-                      placeholder="Email (optional)"
+                      placeholder="Email (optional — SMS pass still sends)"
                       className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] placeholder:text-[#71717A] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
                     />
-                    <div className="flex items-center gap-2">
+                    {workspaceCircles.length > 0 && (
+                      <select
+                        aria-label="Guest Circle or Table"
+                        value={walkInValidationGroup}
+                        onChange={(e) => setWalkInValidationGroup(e.target.value)}
+                        className="h-10 px-3.5 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                      >
+                        {workspaceCircles.map((circle) => (
+                          <option key={circle} value={circle}>
+                            {circle}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    <div className="flex items-center gap-2 sm:col-span-2">
                       <select
                         value={walkInTier}
                         onChange={(e) => setWalkInTier(e.target.value as AttendeeTier)}
@@ -1399,6 +1511,97 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       </button>
                     </div>
                   </form>
+                </div>
+              )}
+
+              {/* Guest Circle & Table Breakdown + Live Editor */}
+              {(circleBreakdown.length > 0 || isEventCreator) && (
+                <div className="p-4 rounded-2xl bg-white border border-[#E5E5EA] space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-[#0B0B0B]" />
+                      <span className="text-xs font-bold text-[#0B0B0B]">
+                        {event.validationConfig?.label || 'Guest Circles & Tables'}
+                      </span>
+                    </div>
+                    {isEventCreator && onUpdateEvent && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingCircles((p) => !p)}
+                        className="px-3 py-1 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-[11px] font-semibold text-[#0B0B0B] transition-colors"
+                      >
+                        {editingCircles ? 'Close Editor' : 'Edit Circles & Tables'}
+                      </button>
+                    )}
+                  </div>
+
+                  {circleBreakdown.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setCircleFilter('all')}
+                        className={`px-3 py-1.5 rounded-full text-[11px] font-semibold transition-colors ${
+                          circleFilter === 'all'
+                            ? 'bg-[#0B0B0B] text-white'
+                            : 'bg-[#F5F5F7] text-[#0B0B0B] hover:bg-[#E8E8EA]'
+                        }`}
+                      >
+                        All Circles ({eventAttendees.length})
+                      </button>
+                      {circleBreakdown.map((item) => {
+                        const active = circleFilter === item.label;
+                        return (
+                          <button
+                            key={item.label}
+                            type="button"
+                            onClick={() => setCircleFilter(active ? 'all' : item.label)}
+                            className={`px-3 py-1.5 rounded-full text-[11px] font-semibold transition-colors inline-flex items-center gap-1.5 ${
+                              active
+                                ? 'bg-[#0B0B0B] text-white'
+                                : 'bg-[#F5F5F7] text-[#0B0B0B] hover:bg-[#E8E8EA]'
+                            }`}
+                          >
+                            <span>{item.label}</span>
+                            <span
+                              className={`font-mono text-[10px] tabular-nums ${
+                                active ? 'text-zinc-300' : 'text-[#71717A]'
+                              }`}
+                            >
+                              {item.checkedIn}/{item.registered}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {editingCircles && isEventCreator && onUpdateEvent && (
+                    <div className="pt-2 space-y-3 border-t border-[#E5E5EA]">
+                      <GuestCircleValidationEditor
+                        compact
+                        category={event.category}
+                        value={circleDraft}
+                        onChange={setCircleDraft}
+                      />
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEditingCircles(false)}
+                          className="px-4 py-2 rounded-full border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B] hover:bg-[#F5F5F7]"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingCircles}
+                          onClick={() => void handleSaveCircleSettings()}
+                          className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 disabled:opacity-50"
+                        >
+                          {savingCircles ? 'Saving...' : 'Save Circle Settings'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1497,7 +1700,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                               )}
                             </div>
                             <div className="text-[13px] text-[#71717A] truncate font-mono">
-                              {att.phone} · {att.email}
+                              {att.phone}
+                              {att.email?.trim() ? ` · ${att.email.trim()}` : ''}
                             </div>
                           </div>
                         </div>

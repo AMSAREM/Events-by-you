@@ -139,8 +139,10 @@ function formatPhone(raw: string, format: PhoneFormatType, maskPii: boolean): st
 }
 
 function formatEmail(email: string, maskPii: boolean): string {
-  if (!maskPii) return email;
-  const parts = email.split('@');
+  const clean = (email || '').trim();
+  if (!clean) return '';
+  if (!maskPii) return clean;
+  const parts = clean.split('@');
   if (parts.length !== 2) return '••••';
   return `${parts[0].slice(0, 1)}••••@${parts[1]}`;
 }

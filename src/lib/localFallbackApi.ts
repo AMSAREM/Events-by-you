@@ -860,6 +860,9 @@ export async function localFallbackRequest<T>(
     if (!name || !phone) {
       throw new LocalApiError('Full name and mobile phone number are required.', 400);
     }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new LocalApiError('Please enter a valid email address, or leave it blank.', 400);
+    }
     const evt = db.events.find(
       (e) => e.id === eventId && (e.status === 'live' || e.status === 'upcoming')
     );
@@ -945,7 +948,14 @@ export async function localFallbackRequest<T>(
       ticketCode: finalCode,
       smsStatus,
       paymentStatus: 'paid',
-      validationGroup: body.validationGroup ? String(body.validationGroup).trim() : undefined,
+      validationGroup: (() => {
+        const rawGroup = body.validationGroup ? String(body.validationGroup).trim().slice(0, 120) : '';
+        if (!rawGroup) return undefined;
+        const matchedOpt = evt.validationConfig?.options?.find(
+          (opt) => opt.trim().toLowerCase() === rawGroup.toLowerCase()
+        );
+        return matchedOpt ?? rawGroup;
+      })(),
       inviteCodeUsed: body.inviteCodeUsed ? String(body.inviteCodeUsed).trim() : undefined,
       giftEntry: body.giftEntry as Attendee['giftEntry'],
       customResponses: body.customResponses as Record<string, string> | undefined,
@@ -985,7 +995,7 @@ export async function localFallbackRequest<T>(
       const attDigits = att.phone.replace(/\D/g, '');
       return (
         attCode === cleanCode ||
-        att.email.toLowerCase() === cleanLower ||
+        (Boolean(att.email?.trim()) && att.email.trim().toLowerCase() === cleanLower) ||
         (normalizedLookupPhone && attPhone === normalizedLookupPhone) ||
         (digitsOnly.length >= 9 && attDigits.endsWith(digitsOnly.slice(-9)))
       );
@@ -1175,7 +1185,7 @@ export async function localFallbackRequest<T>(
         const attDigits = att.phone.replace(/\D/g, '');
         return (
           attCode === cleanCode ||
-          att.email.toLowerCase() === cleanLower ||
+          (Boolean(att.email?.trim()) && att.email.trim().toLowerCase() === cleanLower) ||
           (normalizedPassPhone && attPhone === normalizedPassPhone) ||
           (digitsOnly.length >= 9 && attDigits.endsWith(digitsOnly.slice(-9)))
         );

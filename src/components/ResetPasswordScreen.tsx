@@ -16,8 +16,10 @@ import {
 } from 'lucide-react';
 
 import { validateStrictEmail, validateStrictPhoneE164 } from '../data/initialData';
+import { NOINDEX_ROUTE_SEO } from '../lib/seoConfig';
 import { api } from '../lib/api';
 import { BrandLogo } from './BrandLogo';
+import { SeoHead } from './SeoHead';
 
 interface ResetPasswordScreenProps {
   initialEmail?: string;
@@ -123,6 +125,7 @@ export const ResetPasswordScreen: React.FC<ResetPasswordScreenProps> = ({
 
   return (
     <div className="bg-[#F9F9FB] text-[#1A1C1D] min-h-dvh w-full max-w-full flex flex-col justify-between overflow-x-clip selection:bg-[#0B0B0B] selection:text-white">
+      <SeoHead {...NOINDEX_ROUTE_SEO.resetPassword} />
       {/* Header */}
       <header className="fixed top-0 inset-x-0 z-50 bg-white/80 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] pt-[env(safe-area-inset-top)]">
         <div className="h-16 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3">
