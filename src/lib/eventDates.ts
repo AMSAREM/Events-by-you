@@ -1,4 +1,4 @@
-import type { Attendee, EventCheckInPolicy, EventItem, ScheduleBlock } from '../types/events';
+import type { Attendee, EventCheckInPolicy, EventItem, ScheduleBlock } from '../types/events.ts';
 
 export const SCHEDULE_WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 export const SCHEDULE_EVENT_DAYS = [

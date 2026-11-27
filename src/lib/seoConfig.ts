@@ -1,5 +1,5 @@
-import type { EventItem } from '../types/events';
-import { formatEventDateSpan, isMultiDayEvent } from './eventDates';
+import type { EventItem } from '../types/events.ts';
+import { formatEventDateSpan, isMultiDayEvent } from './eventDates.ts';
 
 export const CANONICAL_ORIGIN = 'https://www.eventsbyyou.xyz';
 
