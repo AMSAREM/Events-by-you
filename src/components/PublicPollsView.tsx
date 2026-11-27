@@ -13,6 +13,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import type { EventItem, EventPoll } from '../types/events';
+import { getCategoryPreset } from '../data/initialData';
 import { api } from '../lib/api';
 import {
   buildEventInvitationUrl,
@@ -20,6 +21,7 @@ import {
   downloadQrSvg,
 } from '../lib/qr';
 import { getContrastTextColor, normalizeHexColor } from '../lib/themeColors';
+import { MonochromePoster } from './MonochromeArtwork';
 
 interface PublicPollsViewProps {
   event: EventItem;
@@ -83,11 +85,18 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
   const [errorByPoll, setErrorByPoll] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [flyerFailed, setFlyerFailed] = useState(false);
 
+  const preset = getCategoryPreset(event.category);
+  const flyerSrc = event.flyerUrl || preset.flyerUrl;
   const pollsUrl = buildEventInvitationUrl(event.slug || event.id, 'polls');
   const customBrand = normalizeHexColor(event.brandColor || event.extraDataConfig?.brandColor);
   const customBrandText = customBrand ? getContrastTextColor(customBrand) : undefined;
   const voterKey = useMemo(() => getOrCreateVoterKey(), []);
+
+  useEffect(() => {
+    setFlyerFailed(false);
+  }, [flyerSrc, event.id]);
 
   useEffect(() => {
     setPolls(
@@ -277,11 +286,28 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
         </div>
       </section>
 
-      {/* Main Content Grid: Left Polls + Right Scan-to-Vote QR Stage Card */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+      {/* Main Content Grid with Event Flyer Peeking Through Frosted Voting Forms */}
+      <section className="relative rounded-[32px] overflow-hidden bg-[#0B0B0B] shadow-xl border border-black/15 p-4 sm:p-6">
+        {flyerSrc && !flyerFailed ? (
+          <img
+            src={flyerSrc}
+            alt={`${event.title} official event flyer`}
+            referrerPolicy="no-referrer"
+            onError={() => setFlyerFailed(true)}
+            className="absolute inset-0 w-full h-full object-cover object-center scale-[1.02]"
+          />
+        ) : (
+          <MonochromePoster
+            variant={event.artwork}
+            className="absolute inset-0 w-full h-full opacity-90"
+          />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-br from-black/42 via-black/15 to-black/48" />
+
+        <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         <div className="lg:col-span-8 space-y-4">
           {requiresVerifiedPass && (
-            <section className="bg-white rounded-[24px] p-4 sm:p-5 border border-[#E5E5EA] space-y-2.5">
+            <section className="bg-white/66 backdrop-blur-md rounded-[24px] p-4 sm:p-5 border border-white/65 shadow-[0_20px_50px_-14px_rgba(11,11,11,0.35)] ring-1 ring-inset ring-white/40 space-y-2.5">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="w-4 h-4 text-[#0B0B0B] shrink-0" />
@@ -299,7 +325,7 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
                   </button>
                 )}
               </div>
-              <p className="text-[11px] text-[#71717A]">
+              <p className="text-[11px] text-[#3F3F46]">
                 One or more governance polls require a registered attendee pass. Enter your ticket code (e.g. #EVT-2026-...), email, or mobile number once below.
               </p>
               <input
@@ -307,20 +333,20 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
                 value={passCodeInput}
                 onChange={(e) => setPassCodeInput(e.target.value)}
                 placeholder="Enter Pass Code (#...), registered email, or +233..."
-                className="w-full h-11 px-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] text-xs font-medium text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                className="w-full h-11 px-4 rounded-2xl bg-white/68 border border-black/12 text-xs font-medium text-[#0B0B0B] placeholder:text-[#52525B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none"
               />
             </section>
           )}
 
           {polls.length === 0 ? (
-            <section className="bg-white rounded-[28px] p-8 sm:p-10 border border-[#E5E5EA] text-center space-y-3">
-              <div className="w-12 h-12 rounded-2xl bg-[#F5F5F7] text-[#0B0B0B] flex items-center justify-center mx-auto">
+            <section className="bg-white/66 backdrop-blur-md rounded-[28px] p-8 sm:p-10 border border-white/65 shadow-[0_20px_50px_-14px_rgba(11,11,11,0.35)] ring-1 ring-inset ring-white/40 text-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-white/75 text-[#0B0B0B] flex items-center justify-center mx-auto">
                 <BarChart3 className="w-6 h-6" />
               </div>
               <h2 className="text-lg font-bold text-[#0B0B0B]">
                 No Live Polls Active Right Now
               </h2>
-              <p className="text-xs sm:text-sm text-[#71717A] max-w-md mx-auto leading-relaxed">
+              <p className="text-xs sm:text-sm text-[#27272A] max-w-md mx-auto leading-relaxed">
                 This screen updates automatically every few seconds as soon as the host launches a corporate poll, panel Q&amp;A vote, or AGM motion.
               </p>
             </section>
@@ -340,7 +366,7 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
               return (
                 <section
                   key={poll.id}
-                  className="bg-white rounded-[28px] p-5 sm:p-6 border border-[#E5E5EA] space-y-4"
+                  className="bg-white/66 backdrop-blur-md rounded-[28px] p-5 sm:p-6 border border-white/65 shadow-[0_20px_50px_-14px_rgba(11,11,11,0.35)] ring-1 ring-inset ring-white/40 space-y-4"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="space-y-1 min-w-0">
@@ -398,8 +424,8 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
                           onClick={() => handleToggleOption(poll, opt.id)}
                           className={`w-full min-h-[48px] relative overflow-hidden rounded-2xl border text-left transition-all px-4 py-3 flex items-center justify-between gap-3 ${
                             isSelected
-                              ? 'border-[#0B0B0B] bg-[#F5F5F7]'
-                              : 'border-[#E5E5EA] bg-white hover:border-[#0B0B0B]/50'
+                              ? 'border-[#0B0B0B] bg-white/88 shadow-sm'
+                              : 'border-black/12 bg-white/62 hover:bg-white/84 hover:border-[#0B0B0B]/60'
                           } ${!canClick ? 'cursor-default' : 'cursor-pointer'}`}
                         >
                           {showPercentages && (
@@ -506,18 +532,18 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
         </div>
 
         {/* Right Side Stage Scan-to-Vote QR Card */}
-        <aside className="lg:col-span-4 bg-white rounded-[28px] p-5 sm:p-6 border border-[#E5E5EA] flex flex-col items-center text-center gap-4">
+        <aside className="lg:col-span-4 bg-white/66 backdrop-blur-md rounded-[28px] p-5 sm:p-6 border border-white/65 shadow-[0_20px_50px_-14px_rgba(11,11,11,0.35)] ring-1 ring-inset ring-white/40 flex flex-col items-center text-center gap-4">
           <div className="w-full flex items-center justify-between">
             <span className="text-xs font-bold text-[#0B0B0B] inline-flex items-center gap-1.5">
               <QrCode className="w-4 h-4" />
               Scan to Join Live Polls
             </span>
-            <span className="text-[11px] font-mono text-[#71717A]">/polls</span>
+            <span className="text-[11px] font-mono text-[#3F3F46]">/polls</span>
           </div>
           <div
             className={`w-[min(56vw,220px)] ${
               isFullscreen ? 'lg:w-[min(24vw,280px)]' : 'lg:w-[min(22vw,210px)]'
-            } aspect-square p-3.5 sm:p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] flex items-center justify-center`}
+            } aspect-square p-3.5 sm:p-4 rounded-2xl bg-white/90 border border-white/75 shadow-sm flex items-center justify-center`}
           >
             <DeterministicQrSvg
               value={pollsUrl}
@@ -530,7 +556,7 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
             <p className="text-xs font-semibold text-[#0B0B0B]">
               Project on Auditorium Screens
             </p>
-            <p className="text-[11px] text-[#71717A] leading-relaxed">
+            <p className="text-[11px] text-[#3F3F46] leading-relaxed">
               Delegates scan with their phone camera to cast live votes during keynotes, townhalls &amp; board motions.
             </p>
           </div>
@@ -538,7 +564,7 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
             <button
               type="button"
               onClick={() => void handleSharePollsLink()}
-              className="min-h-[42px] px-3 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B]"
+              className="min-h-[42px] px-3 rounded-full bg-white/75 hover:bg-white border border-black/10 text-xs font-semibold text-[#0B0B0B] transition-colors"
             >
               {copiedLink ? 'Copied!' : 'Copy Link'}
             </button>
@@ -552,7 +578,8 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
             </button>
           </div>
         </aside>
-      </div>
+        </div>
+      </section>
     </div>
   );
 };

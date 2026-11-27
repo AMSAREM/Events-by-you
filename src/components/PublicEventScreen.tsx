@@ -939,33 +939,33 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
           className="absolute inset-0 w-full h-full opacity-90"
         />
       )}
-      <div className="absolute inset-0 bg-gradient-to-br from-black/72 via-black/45 to-black/78" />
+      <div className="absolute inset-0 bg-gradient-to-br from-black/42 via-black/15 to-black/48" />
     </>
   );
 
   const registerFormContent = (
     <>
       {!canCheckInRegister ? (
-        <div className="p-5 rounded-2xl bg-[#F5F5F7]/90 border border-[#E5E5EA] space-y-2.5 text-center">
+        <div className="p-5 rounded-2xl bg-white/55 backdrop-blur-xs border border-white/65 space-y-2.5 text-center">
           <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
             <ShieldCheck className="w-5 h-5" />
           </div>
           <h3 className="font-display text-lg font-bold text-[#0B0B0B] tracking-tight">
             Event Is In Draft Mode
           </h3>
-          <p className="text-xs text-[#52525B] leading-relaxed max-w-md mx-auto">
+          <p className="text-xs text-[#27272A] leading-relaxed max-w-md mx-auto">
             Publish this event from Creator Studio to open guest validation and QR pass registration.
           </p>
         </div>
       ) : !isQrPassPublished ? (
-        <div className="p-5 rounded-2xl bg-[#F5F5F7]/90 border border-[#E5E5EA] space-y-3 text-center">
+        <div className="p-5 rounded-2xl bg-white/55 backdrop-blur-xs border border-white/65 space-y-3 text-center">
           <div className="w-11 h-11 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
             <ShieldCheck className="w-5 h-5" />
           </div>
           <h3 className="font-display text-lg font-bold text-[#0B0B0B] tracking-tight">
             Live Check-In QR Passes Pending Activation
           </h3>
-          <p className="text-xs text-[#52525B] leading-relaxed max-w-md mx-auto">
+          <p className="text-xs text-[#27272A] leading-relaxed max-w-md mx-auto">
             Guest registration and scannable QR pass delivery will open once the event creator activates live QR passes for this event.
           </p>
           {canOpenStudio && onToggleQrPassPublished && (
@@ -1000,7 +1000,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => switchScreenMode('checkin')}
-                    className="text-[11px] font-semibold text-[#0B0B0B] bg-[#F5F5F7] hover:bg-[#E8E8EA] px-3 py-1 rounded-full inline-flex items-center gap-1 transition-colors"
+                    className="text-[11px] font-semibold text-[#0B0B0B] bg-white/65 hover:bg-white/90 border border-black/10 px-3 py-1 rounded-full inline-flex items-center gap-1 transition-colors"
                   >
                     <span>Open Validate &amp; Check-In Screen</span>
                     <ExternalLink className="w-3 h-3" />
@@ -1021,7 +1021,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       ? 'Validate & Get QR Check-In Pass'
                       : 'Join Priority Waitlist'}
               </h3>
-              <p className="text-[13px] text-[#71717A] mt-0.5">
+              <p className="text-[13px] text-[#3F3F46] mt-0.5">
                 {checkinSubMode === 'lookup'
                   ? 'Already registered? Enter your ticket code, mobile number, or email to pull up your QR pass immediately.'
                   : standaloneWalkin
@@ -1031,7 +1031,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             </div>
 
             {/* Standalone Process Tabs: New Guest Check-In vs Retrieve Existing Pass */}
-            <div className="grid grid-cols-2 gap-1.5 p-1 bg-[#F5F5F7] rounded-2xl border border-[#E5E5EA]">
+            <div className="grid grid-cols-2 gap-1.5 p-1 bg-white/48 backdrop-blur-xs rounded-2xl border border-white/60">
               <button
                 type="button"
                 onClick={() => {
@@ -1041,7 +1041,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 className={`py-2 px-3 rounded-xl text-xs font-semibold transition-all ${
                   checkinSubMode === 'register'
                     ? 'bg-[#0B0B0B] text-white shadow-sm'
-                    : 'text-[#71717A] hover:text-[#0B0B0B]'
+                    : 'text-[#27272A] hover:text-[#0B0B0B] hover:bg-white/45'
                 }`}
               >
                 New Guest Check-In
@@ -1055,7 +1055,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 className={`py-2 px-3 rounded-xl text-xs font-semibold transition-all ${
                   checkinSubMode === 'lookup'
                     ? 'bg-[#0B0B0B] text-white shadow-sm'
-                    : 'text-[#71717A] hover:text-[#0B0B0B]'
+                    : 'text-[#27272A] hover:text-[#0B0B0B] hover:bg-white/45'
                 }`}
               >
                 Find My Existing QR Pass
@@ -1086,9 +1086,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     value={lookupQuery}
                     onChange={(e) => setLookupQuery(e.target.value)}
                     placeholder="e.g. #TSL-2026-8801 or +233 24 123 4567"
-                    className="w-full h-12 px-4 pr-10 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm font-mono placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
+                    className="w-full h-12 px-4 pr-10 rounded-full bg-white/68 border border-black/12 text-[#0B0B0B] text-sm font-mono placeholder:text-[#52525B] focus:outline-none focus:bg-white/95 focus:border-[#0B0B0B] focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
                   />
-                  <QrCode className="w-4 h-4 text-[#71717A] absolute right-4 top-4 pointer-events-none" />
+                  <QrCode className="w-4 h-4 text-[#52525B] absolute right-4 top-4 pointer-events-none" />
                 </div>
               </div>
               <button
@@ -1112,7 +1112,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               <form onSubmit={handleSubmit} className="space-y-5">
                 {/* STEP 1: EVENT VALIDATION FORM */}
                 {validationConfig.enabled && validationConfig.options.length > 0 && (
-                  <div className="p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-3">
+                  <div className="p-4 rounded-2xl bg-white/48 backdrop-blur-xs border border-white/65 space-y-3">
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5">
                         <ShieldCheck className="w-4 h-4 text-[#0B0B0B]" />
@@ -1120,26 +1120,26 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           {validationConfig.label} *
                         </span>
                       </div>
-                      <span className="text-[10px] font-mono uppercase tracking-wider text-[#71717A]">
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-[#3F3F46]">
                         {validationConfig.options.length} Options
                       </span>
                     </div>
                     {validationConfig.options.length > 6 && (
                       <div className="relative">
-                        <Search className="w-3.5 h-3.5 text-[#71717A] absolute left-3.5 top-2.5 pointer-events-none" />
+                        <Search className="w-3.5 h-3.5 text-[#52525B] absolute left-3.5 top-2.5 pointer-events-none" />
                         <input
                           type="text"
                           value={circleSearch}
                           onChange={(e) => setCircleSearch(e.target.value)}
                           placeholder={`Filter ${validationConfig.label.toLowerCase()}...`}
-                          className="w-full h-9 pl-9 pr-8 rounded-full bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] placeholder:text-[#71717A] focus:border-[#0B0B0B] focus:outline-none"
+                          className="w-full h-9 pl-9 pr-8 rounded-full bg-white/68 border border-black/12 text-xs text-[#0B0B0B] placeholder:text-[#52525B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none"
                         />
                         {circleSearch && (
                           <button
                             type="button"
                             onClick={() => setCircleSearch('')}
                             aria-label="Clear circle filter"
-                            className="absolute right-2.5 top-2 text-[#71717A] hover:text-[#0B0B0B]"
+                            className="absolute right-2.5 top-2 text-[#52525B] hover:text-[#0B0B0B]"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
@@ -1147,7 +1147,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       </div>
                     )}
                     {filteredValidationOptions.length === 0 ? (
-                      <p className="text-xs text-[#71717A] py-2">
+                      <p className="text-xs text-[#3F3F46] py-2">
                         No circle or table matches &ldquo;{circleSearch}&rdquo;.{' '}
                         <button
                           type="button"
@@ -1173,7 +1173,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                               className={`px-3 py-2 rounded-xl text-xs font-semibold text-left border transition-all flex items-center justify-between gap-1.5 ${
                                 active
                                   ? 'bg-[#0B0B0B] text-white border-[#0B0B0B] shadow-sm'
-                                  : 'bg-white text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                                  : 'bg-white/68 text-[#0B0B0B] border-black/12 hover:bg-white/92 hover:border-[#0B0B0B]'
                               }`}
                             >
                               <span className="truncate">{opt}</span>
@@ -1199,7 +1199,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                             setDuplicateError(null);
                           }}
                           placeholder="Enter host invitation code (e.g. ROYAL2026)"
-                          className="w-full h-10 px-4 rounded-full bg-white border border-[#E5E5EA] text-xs font-mono uppercase text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                          className="w-full h-10 px-4 rounded-full bg-white/68 border border-black/12 text-xs font-mono uppercase text-[#0B0B0B] placeholder:text-[#52525B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none"
                         />
                       </div>
                     )}
@@ -1222,9 +1222,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       placeholder="e.g. Ama Serwaa"
-                      className="w-full h-12 px-4 pr-10 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
+                      className="w-full h-12 px-4 pr-10 rounded-full bg-white/68 border border-black/12 text-[#0B0B0B] text-sm placeholder:text-[#52525B] focus:outline-none focus:bg-white/95 focus:border-[#0B0B0B] focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
                     />
-                    <User className="w-4 h-4 text-[#71717A] absolute right-4 top-4 pointer-events-none" />
+                    <User className="w-4 h-4 text-[#52525B] absolute right-4 top-4 pointer-events-none" />
                   </div>
                 </div>
 
@@ -1245,7 +1245,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           setCountryPrefix(e.target.value);
                           setDuplicateError(null);
                         }}
-                        className="h-12 pl-3.5 pr-8 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-xs font-semibold appearance-none focus:outline-none focus:ring-1 focus:ring-[#0B0B0B] cursor-pointer"
+                        className="h-12 pl-3.5 pr-8 rounded-full bg-white/68 border border-black/12 text-[#0B0B0B] text-xs font-semibold appearance-none focus:outline-none focus:bg-white/95 focus:border-[#0B0B0B] focus:ring-1 focus:ring-[#0B0B0B] cursor-pointer"
                       >
                         {COUNTRY_CODES.map((c) => (
                           <option key={c.code} value={c.code}>
@@ -1253,7 +1253,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           </option>
                         ))}
                       </select>
-                      <ChevronDown className="w-3.5 h-3.5 text-[#71717A] absolute right-2.5 top-4 pointer-events-none" />
+                      <ChevronDown className="w-3.5 h-3.5 text-[#52525B] absolute right-2.5 top-4 pointer-events-none" />
                     </div>
                     <div className="relative flex-1">
                       <input
@@ -1266,15 +1266,15 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           setDuplicateError(null);
                         }}
                         placeholder="024 123 4567"
-                        className="w-full h-12 px-4 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm font-mono placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
+                        className="w-full h-12 px-4 rounded-full bg-white/68 border border-black/12 text-[#0B0B0B] text-sm font-mono placeholder:text-[#52525B] focus:outline-none focus:bg-white/95 focus:border-[#0B0B0B] focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
                       />
                     </div>
                   </div>
                   <div className="flex items-center justify-between text-[11px] px-2">
-                    <span className="text-[#71717A]">
+                    <span className="text-[#3F3F46]">
                       Accepts local format (024XXXXXXX) or E.164
                     </span>
-                    <span className="font-mono font-semibold text-emerald-700 tabular-nums">
+                    <span className="font-mono font-semibold text-emerald-800 tabular-nums">
                       {normalizedPhone || 'Waiting...'}
                     </span>
                   </div>
@@ -1286,7 +1286,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     className="block text-xs font-semibold text-[#0B0B0B]"
                     htmlFor="checkout-email"
                   >
-                    Email Address <span className="font-normal text-[#71717A]">(Optional)</span>
+                    Email Address <span className="font-normal text-[#3F3F46]">(Optional)</span>
                   </label>
                   <div className="relative">
                     <input
@@ -1298,20 +1298,20 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                         setDuplicateError(null);
                       }}
                       placeholder="Optional — receive an email PDF & calendar copy"
-                      className="w-full h-12 px-4 pr-10 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-sm placeholder:text-[#71717A] focus:outline-none focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
+                      className="w-full h-12 px-4 pr-10 rounded-full bg-white/68 border border-black/12 text-[#0B0B0B] text-sm placeholder:text-[#52525B] focus:outline-none focus:bg-white/95 focus:border-[#0B0B0B] focus:ring-1 focus:ring-[#0B0B0B] transition-colors"
                     />
-                    <Mail className="w-4 h-4 text-[#71717A] absolute right-4 top-4 pointer-events-none" />
+                    <Mail className="w-4 h-4 text-[#52525B] absolute right-4 top-4 pointer-events-none" />
                   </div>
                 </div>
 
                 {/* EVENT-SPECIFIC EXTRA DATA COLLECTION FIELDS */}
                 {(extraDataConfig.customFields?.length ?? 0) > 0 && (
-                  <div className="p-4 rounded-2xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-3">
+                  <div className="p-4 rounded-2xl bg-white/48 backdrop-blur-xs border border-white/65 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-[#0B0B0B]">
                         Additional {selectedEvent.category} Details
                       </span>
-                      <span className="text-[10px] font-mono uppercase text-[#71717A]">
+                      <span className="text-[10px] font-mono uppercase text-[#3F3F46]">
                         Organizer Form
                       </span>
                     </div>
@@ -1334,7 +1334,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                                     [field.id]: e.target.value,
                                   }))
                                 }
-                                className="w-full h-11 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs font-medium text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                                className="w-full h-11 px-4 rounded-2xl bg-white/68 border border-black/12 text-xs font-medium text-[#0B0B0B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none"
                               >
                                 <option value="">Select an option...</option>
                                 {field.options.map((opt) => (
@@ -1355,7 +1355,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                                   }))
                                 }
                                 placeholder={field.placeholder || 'Enter response...'}
-                                className="w-full p-3 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none resize-none"
+                                className="w-full p-3 rounded-2xl bg-white/68 border border-black/12 text-xs text-[#0B0B0B] placeholder:text-[#52525B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none resize-none"
                               />
                             ) : (
                               <input
@@ -1369,7 +1369,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                                   }))
                                 }
                                 placeholder={field.placeholder || 'Enter response...'}
-                                className="w-full h-11 px-4 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#0B0B0B] focus:border-[#0B0B0B] focus:outline-none"
+                                className="w-full h-11 px-4 rounded-2xl bg-white/68 border border-black/12 text-xs text-[#0B0B0B] placeholder:text-[#52525B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none"
                               />
                             )}
                           </div>
@@ -1380,7 +1380,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 )}
 
                 {/* Instant Notification Callout */}
-                <div className="p-3 rounded-2xl bg-[#F3F3F5] flex items-start gap-2 text-[#444748]">
+                <div className="p-3 rounded-2xl bg-white/50 backdrop-blur-xs border border-white/60 flex items-start gap-2 text-[#1A1C1D]">
                   <ShieldCheck className="w-4 h-4 text-[#0B0B0B] shrink-0 mt-0.5" />
                   <span className="text-[11px] leading-relaxed">
                     Instant SMS with QR entry code and calendar invitation will be dispatched
@@ -1428,7 +1428,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
   const registerSectionCard = isStandaloneSideLayout ? (
     <section id="register-section" className="scroll-mt-24 space-y-5">
-      <div className="bg-white/88 backdrop-blur-md rounded-[24px] sm:rounded-[28px] p-5 sm:p-7 border border-white/70 shadow-2xl space-y-5">
+      <div className="bg-white/64 backdrop-blur-md rounded-[24px] sm:rounded-[28px] p-5 sm:p-7 border border-white/65 shadow-[0_24px_56px_-14px_rgba(11,11,11,0.38)] ring-1 ring-inset ring-white/40 space-y-5">
         {registerFormContent}
       </div>
     </section>
@@ -1439,8 +1439,8 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     >
       {eventBackdropMedia}
       <div className="relative z-10 grid grid-cols-1 md:grid-cols-12 items-stretch gap-5 p-4 sm:p-6">
-        <div className="md:col-span-5 flex flex-col justify-end text-white p-2 sm:p-4 space-y-2 drop-shadow-[0_2px_12px_rgba(0,0,0,0.85)]">
-          <span className="text-[11px] font-mono uppercase tracking-[0.16em] text-white/85">
+        <div className="md:col-span-5 flex flex-col justify-end text-white p-2 sm:p-4 space-y-2 drop-shadow-[0_2px_14px_rgba(0,0,0,0.92)]">
+          <span className="text-[11px] font-mono uppercase tracking-[0.16em] text-white/90">
             {selectedEvent.organizer} · {selectedEvent.category}
           </span>
           <h3 className="font-display text-2xl sm:text-3xl font-bold tracking-[-0.02em] leading-tight text-white text-balance">
@@ -1457,7 +1457,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             </span>
           </div>
         </div>
-        <div className="md:col-span-7 bg-white/88 backdrop-blur-md rounded-[24px] sm:rounded-[28px] p-5 sm:p-7 border border-white/70 shadow-2xl space-y-5 min-w-0 flex flex-col justify-center">
+        <div className="md:col-span-7 bg-white/64 backdrop-blur-md rounded-[24px] sm:rounded-[28px] p-5 sm:p-7 border border-white/65 shadow-[0_24px_56px_-14px_rgba(11,11,11,0.38)] ring-1 ring-inset ring-white/40 space-y-5 min-w-0 flex flex-col justify-center">
           {registerFormContent}
         </div>
       </div>
@@ -2054,14 +2054,14 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 {(!deskToken || deskAttendant) && (
                   <section className="relative rounded-[32px] overflow-hidden bg-[#0B0B0B] shadow-xl border border-black/15 p-4 sm:p-6">
                     {eventBackdropMedia}
-                    <div className="relative z-10 bg-white/88 backdrop-blur-md rounded-[24px] sm:rounded-[28px] p-5 sm:p-7 border border-white/70 shadow-2xl space-y-5">
+                    <div className="relative z-10 bg-white/64 backdrop-blur-md rounded-[24px] sm:rounded-[28px] p-5 sm:p-7 border border-white/65 shadow-[0_24px_56px_-14px_rgba(11,11,11,0.38)] ring-1 ring-inset ring-white/40 space-y-5">
                     {giftReceipt ? (
                       <div className="text-center space-y-4 py-2">
                         <div className="w-14 h-14 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center mx-auto">
                           <Check className="w-7 h-7" />
                         </div>
                         <div className="space-y-1">
-                          <span className="inline-block px-3 py-1 rounded-full bg-[#F5F5F7] text-[11px] font-semibold text-[#0B0B0B]">
+                          <span className="inline-block px-3 py-1 rounded-full bg-white/65 border border-black/10 text-[11px] font-semibold text-[#0B0B0B]">
                             {giftReceipt.recordedBy
                               ? `Gift Desk Receipt · Recorded by ${giftReceipt.recordedBy}`
                               : 'Gift Table Receipt · Standalone Activity'}
@@ -2069,13 +2069,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           <h3 className="font-display text-2xl font-bold text-[#0B0B0B]">
                             Thank you, {giftReceipt.giverName}!
                           </h3>
-                          <p className="text-xs text-[#71717A] max-w-md mx-auto">
+                          <p className="text-xs text-[#27272A] max-w-md mx-auto">
                             Your gift entry has been recorded on the {selectedEvent.title} Gift Ledger. Attendance &amp; gate check-in remain completely separate.
                           </p>
                         </div>
-                        <div className="max-w-md mx-auto p-4 rounded-2xl bg-[#FBF9F5] border border-[#E6DDD0] text-left text-xs space-y-1.5">
+                        <div className="max-w-md mx-auto p-4 rounded-2xl bg-white/60 backdrop-blur-xs border border-white/70 text-left text-xs space-y-1.5">
                           <div className="flex items-center justify-between">
-                            <span className="text-[#71717A]">Gift Type</span>
+                            <span className="text-[#3F3F46]">Gift Type</span>
                             <span className="font-bold text-[#0B0B0B]">
                               {giftReceipt.giftType === 'cash-momo'
                                 ? `${giftReceipt.currency || 'GHS'} ${giftReceipt.amount?.toLocaleString()}`
@@ -2086,7 +2086,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           </div>
                           {giftReceipt.recordedBy && (
                             <div className="flex items-center justify-between">
-                              <span className="text-[#71717A]">Desk Attendant</span>
+                              <span className="text-[#3F3F46]">Desk Attendant</span>
                               <span className="font-semibold text-[#0B0B0B]">
                                 {giftReceipt.recordedBy}
                               </span>
@@ -2094,12 +2094,12 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           )}
                           {giftReceipt.side && (
                             <div className="flex items-center justify-between">
-                              <span className="text-[#71717A]">Side / Honoring</span>
+                              <span className="text-[#3F3F46]">Side / Honoring</span>
                               <span className="font-semibold text-[#0B0B0B]">{giftReceipt.side}</span>
                             </div>
                           )}
                           {giftReceipt.message && (
-                            <p className="pt-1 text-[11px] text-[#444748] italic">
+                            <p className="pt-1 text-[11px] text-[#27272A] italic">
                               &ldquo;{giftReceipt.message}&rdquo;
                             </p>
                           )}
@@ -2116,7 +2116,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                             <button
                               type="button"
                               onClick={() => switchScreenMode('top')}
-                              className="px-5 py-2.5 rounded-full bg-[#F5F5F7] text-[#0B0B0B] text-xs font-semibold"
+                              className="px-5 py-2.5 rounded-full bg-white/70 hover:bg-white/90 border border-black/10 text-[#0B0B0B] text-xs font-semibold transition-colors"
                             >
                               Back to Event Page
                             </button>
@@ -2131,13 +2131,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                               ? `Log Physical Envelope, MoMo or Gift (${deskAttendant.attendantName})`
                               : 'Record a Gift, Envelope or Well-Wishes'}
                           </h3>
-                          <p className="text-xs text-[#71717A] mt-0.5">
+                          <p className="text-xs text-[#3F3F46] mt-0.5">
                             No gate registration or attendee ticket is required to leave or log a gift.
                           </p>
                         </div>
 
                         {giftError && (
-                          <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 flex items-start gap-2.5 text-xs text-red-700">
+                          <div className="p-3.5 rounded-2xl bg-red-50/90 border border-red-200 flex items-start gap-2.5 text-xs text-red-700">
                             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                             <span>{giftError}</span>
                           </div>
@@ -2158,7 +2158,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                               className={`py-2.5 px-3 rounded-xl text-xs font-semibold border transition-colors ${
                                 giftMode === opt.id
                                   ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
-                                  : 'bg-[#F5F5F7] text-[#0B0B0B] border-[#E5E5EA] hover:border-[#0B0B0B]'
+                                  : 'bg-white/65 text-[#0B0B0B] border-black/12 hover:bg-white/90 hover:border-[#0B0B0B]'
                               }`}
                             >
                               {opt.label}
@@ -2169,7 +2169,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
                             <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-                              Giver / Family Name <span className="text-red-500">*</span>
+                              Giver / Family Name <span className="text-red-600">*</span>
                             </label>
                             <input
                               type="text"
@@ -2177,7 +2177,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                               value={giftGiverName}
                               onChange={(e) => setGiftGiverName(e.target.value)}
                               placeholder="Giver full name or family name"
-                              className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-medium text-[#0B0B0B]"
+                              className="w-full h-11 px-4 rounded-xl bg-white/68 border border-black/12 text-xs font-medium text-[#0B0B0B] placeholder:text-[#52525B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none transition-colors"
                             />
                           </div>
                           <div>
@@ -2189,7 +2189,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                               value={giftGiverPhone}
                               onChange={(e) => setGiftGiverPhone(e.target.value)}
                               placeholder="+233 XX XXX XXXX"
-                              className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B]"
+                              className="w-full h-11 px-4 rounded-xl bg-white/68 border border-black/12 text-xs font-mono text-[#0B0B0B] placeholder:text-[#52525B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none transition-colors"
                             />
                           </div>
                         </div>
@@ -2200,7 +2200,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                               value={giftCurrency}
                               onChange={(e) => setGiftCurrency(e.target.value as 'GHS' | 'USD')}
                               aria-label="Gift currency"
-                              className="h-11 px-3 rounded-xl bg-[#F5F5F7] text-xs font-bold text-[#0B0B0B]"
+                              className="h-11 px-3 rounded-xl bg-white/68 border border-black/12 text-xs font-bold text-[#0B0B0B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none"
                             >
                               <option value="GHS">GHS</option>
                               <option value="USD">USD</option>
@@ -2212,7 +2212,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                               value={giftAmount}
                               onChange={(e) => setGiftAmount(e.target.value)}
                               placeholder="Envelope / MoMo amount"
-                              className="flex-1 h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-mono font-semibold text-[#0B0B0B]"
+                              className="flex-1 h-11 px-4 rounded-xl bg-white/68 border border-black/12 text-xs font-mono font-semibold text-[#0B0B0B] placeholder:text-[#52525B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none transition-colors"
                             />
                           </div>
                         )}
@@ -2225,7 +2225,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                             <select
                               value={giftItem}
                               onChange={(e) => setGiftItem(e.target.value)}
-                              className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs font-medium text-[#0B0B0B]"
+                              className="w-full h-11 px-4 rounded-xl bg-white/68 border border-black/12 text-xs font-medium text-[#0B0B0B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none"
                             >
                               {(
                                 extraDataConfig.giftRegistryItems &&
@@ -2251,7 +2251,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                               value={giftSide}
                               onChange={(e) => setGiftSide(e.target.value)}
                               placeholder="e.g. Bride's Family, Friends, Colleagues"
-                              className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                              className="w-full h-11 px-4 rounded-xl bg-white/68 border border-black/12 text-xs text-[#0B0B0B] placeholder:text-[#52525B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none transition-colors"
                             />
                           </div>
                           <div>
@@ -2263,7 +2263,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                               value={giftMessage}
                               onChange={(e) => setGiftMessage(e.target.value)}
                               placeholder="Write a personal note or blessing..."
-                              className="w-full h-11 px-4 rounded-xl bg-[#F5F5F7] text-xs text-[#0B0B0B]"
+                              className="w-full h-11 px-4 rounded-xl bg-white/68 border border-black/12 text-xs text-[#0B0B0B] placeholder:text-[#52525B] focus:bg-white/95 focus:border-[#0B0B0B] focus:outline-none transition-colors"
                             />
                           </div>
                         </div>
@@ -2447,8 +2447,8 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
                     {/* Floating Frosted Validate & Check-In Form Card Directly Over Event Picture */}
                     <div className="order-1 lg:order-2 lg:col-span-7 xl:col-span-7 flex flex-col justify-center gap-4 min-w-0">
-                      <div className="flex flex-wrap items-center justify-between gap-3 bg-white/90 backdrop-blur-xl rounded-2xl px-4 py-3 border border-white/70 shadow-lg">
-                        <div className="text-xs text-[#52525B] tabular-nums">
+                      <div className="flex flex-wrap items-center justify-between gap-3 bg-white/68 backdrop-blur-md rounded-2xl px-4 py-3 border border-white/65 shadow-lg">
+                        <div className="text-xs text-[#27272A] tabular-nums">
                           {canOpenStudio ? (
                             <>
                               <strong className="text-[#0B0B0B]">{selectedEvent.checkedIn}</strong> checked in ·{' '}
