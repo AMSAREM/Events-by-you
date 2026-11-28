@@ -387,11 +387,14 @@ create policy "Organizers can update attendee check-ins" on public.attendees
 drop policy if exists "Event creators can remove attendees" on public.attendees;
 create policy "Event creators can remove attendees" on public.attendees
   for delete using (
-    public.current_app_role() in ('creator', 'organizer')
-    and exists (
-      select 1 from public.events e
-      where e.id = attendees.event_id and e.organizer_id = auth.uid()
+    (
+      public.current_app_role() in ('creator', 'organizer')
+      and exists (
+        select 1 from public.events e
+        where e.id = attendees.event_id and e.organizer_id = auth.uid()
+      )
     )
+    or public.is_creator()
   );
 
 -- Schedule Blocks RLS

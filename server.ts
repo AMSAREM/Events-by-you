@@ -7016,48 +7016,74 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
     async (req: AuthedRequest, res) => {
       try {
         const client = req.supabase!;
-        const { data: existing, error: fetchErr } = await client
+        const db = createServiceSupabaseClient() ?? client;
+        const { data: existing, error: fetchErr } = await db
           .from('attendees')
           .select('*')
           .eq('id', req.params.id)
           .maybeSingle();
-        if (fetchErr || !existing) {
-          return res.status(404).json({ error: 'Attendee not found.' });
+        if (fetchErr) {
+          return res.status(400).json({ error: fetchErr.message });
+        }
+        if (!existing) {
+          return res.status(404).json({ error: 'Attendee not found in Supabase.' });
         }
 
         const attRec = existing as Record<string, unknown>;
         const eventId = String(attRec.event_id);
-        const { data: evtRow, error: evtErr } = await client
+        const { data: evtRow, error: evtErr } = await db
           .from('events')
           .select('*')
           .eq('id', eventId)
           .maybeSingle();
-        if (evtErr || !evtRow) {
+        if (evtErr) {
+          return res.status(400).json({ error: evtErr.message });
+        }
+        if (!evtRow) {
           return res.status(404).json({ error: 'Parent event not found.' });
         }
         const evtRec = evtRow as Record<string, unknown>;
-        if (String(evtRec.organizer_id) !== req.user!.id) {
+        if (String(evtRec.organizer_id) !== req.user!.id && req.appRole !== 'creator') {
           return res.status(403).json({
             error: 'Only the event creator can delete attendees from this event.',
           });
         }
 
-        const { error: delErr } = await client
+        const { data: deletedRows, error: delErr } = await db
           .from('attendees')
           .delete()
           .eq('id', req.params.id)
-          .eq('event_id', eventId);
+          .eq('event_id', eventId)
+          .select('id');
         if (delErr) {
           return res.status(400).json({ error: delErr.message });
+        }
+        if (!deletedRows || deletedRows.length === 0) {
+          return res.status(403).json({
+            error:
+              'Attendee was not deleted from Supabase (blocked by RLS delete policy or missing record). Apply the latest supabase/schema.sql delete policy or configure SUPABASE_SERVICE_ROLE_KEY.',
+          });
         }
 
         const wasCheckedIn = Boolean(attRec.checked_in);
         const wasPaid = attRec.payment_status === 'paid';
         const ticketPrice = Number(evtRec.ticket_price ?? 0);
-        const nextRegistered = Math.max(0, Number(evtRec.registered ?? 0) - 1);
-        const nextCheckedIn = wasCheckedIn
-          ? Math.max(0, Number(evtRec.checked_in ?? 0) - 1)
-          : Math.max(0, Number(evtRec.checked_in ?? 0));
+
+        const { data: remainingAttRows, error: recountErr } = await db
+          .from('attendees')
+          .select('id, checked_in')
+          .eq('event_id', eventId);
+
+        const nextRegistered =
+          !recountErr && Array.isArray(remainingAttRows)
+            ? remainingAttRows.length
+            : Math.max(0, Number(evtRec.registered ?? 0) - 1);
+        const nextCheckedIn =
+          !recountErr && Array.isArray(remainingAttRows)
+            ? remainingAttRows.filter((r) => Boolean((r as Record<string, unknown>).checked_in)).length
+            : wasCheckedIn
+              ? Math.max(0, Number(evtRec.checked_in ?? 0) - 1)
+              : Math.max(0, Number(evtRec.checked_in ?? 0));
         const nextRevenue = wasPaid
           ? Math.max(0, Number(evtRec.revenue ?? 0) - ticketPrice)
           : Math.max(0, Number(evtRec.revenue ?? 0));
@@ -7085,11 +7111,10 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           }
         }
 
-        const { data: updatedEvt } = await client
+        const { data: updatedEvt } = await db
           .from('events')
           .update(updateFields)
           .eq('id', eventId)
-          .eq('organizer_id', req.user!.id)
           .select('*')
           .maybeSingle();
 
