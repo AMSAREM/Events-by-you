@@ -100,6 +100,8 @@ export interface EventValidationConfig {
   options: string[];
   requireInviteCode?: boolean;
   inviteCode?: string;
+  includeProgramSections?: boolean;
+  displayStyle?: 'dropdown' | 'buttons';
 }
 
 export interface CustomFormField {

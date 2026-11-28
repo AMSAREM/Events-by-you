@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Lock, Plus, RotateCcw, ShieldCheck, X } from 'lucide-react';
+import { Check, Layers, Lock, Plus, RotateCcw, ShieldCheck, Sparkles, X } from 'lucide-react';
 import type { EventValidationConfig } from '../types/events';
 import { getCategoryPreset } from '../data/initialData';
 
@@ -7,6 +7,7 @@ interface GuestCircleValidationEditorProps {
   category: string;
   value: EventValidationConfig;
   onChange: (next: EventValidationConfig) => void;
+  programSections?: string[];
   compact?: boolean;
 }
 
@@ -14,9 +15,12 @@ export const GuestCircleValidationEditor: React.FC<GuestCircleValidationEditorPr
   category,
   value,
   onChange,
+  programSections = [],
   compact = false,
 }) => {
   const [newOption, setNewOption] = useState('');
+  const includeProgramSections = value.includeProgramSections !== false;
+  const displayStyle = value.displayStyle === 'buttons' ? 'buttons' : 'dropdown';
 
   const addOptions = (incoming: string[]) => {
     const existingLower = new Set(value.options.map((o) => o.trim().toLowerCase()));
@@ -56,6 +60,10 @@ export const GuestCircleValidationEditor: React.FC<GuestCircleValidationEditorPr
     });
   };
 
+  const unmergedSections = programSections.filter(
+    (sec) => !value.options.some((o) => o.trim().toLowerCase() === sec.trim().toLowerCase())
+  );
+
   return (
     <div className={`${compact ? 'p-4' : 'p-4 sm:p-5'} rounded-2xl bg-white space-y-3.5 border border-[#E5E5EA]`}>
       <div className="flex items-start justify-between gap-3">
@@ -63,10 +71,10 @@ export const GuestCircleValidationEditor: React.FC<GuestCircleValidationEditorPr
           <ShieldCheck className="w-4 h-4 text-[#0B0B0B] shrink-0 mt-0.5" />
           <div>
             <p className="text-xs font-bold text-[#0B0B0B]">
-              Guest Circle &amp; Table Validation
+              Guest Circle, Table &amp; Section Validation
             </p>
             <p className="text-[11px] text-[#71717A] leading-relaxed">
-              Guests select their family circle, delegation, or assigned table during check-in &amp; QR pass registration.
+              Guests select their family circle, table, or program section during check-in &amp; QR pass registration.
             </p>
           </div>
         </div>
@@ -85,17 +93,88 @@ export const GuestCircleValidationEditor: React.FC<GuestCircleValidationEditorPr
 
       {value.enabled && (
         <div className="space-y-3 pt-1">
-          <div>
-            <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
-              Validation Section Title
-            </label>
-            <input
-              type="text"
-              value={value.label}
-              onChange={(e) => onChange({ ...value, label: e.target.value })}
-              placeholder="Guest Circle & Table Validation"
-              className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-medium text-[#0B0B0B] focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] focus:outline-none"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div className="sm:col-span-2">
+              <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                Validation Section Title
+              </label>
+              <input
+                type="text"
+                value={value.label}
+                onChange={(e) => onChange({ ...value, label: e.target.value })}
+                placeholder="Guest Circle & Table Validation"
+                className="w-full h-10 px-3.5 rounded-xl bg-[#F5F5F7] text-xs font-medium text-[#0B0B0B] focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-[#0B0B0B] mb-1">
+                Public Form Style
+              </label>
+              <select
+                value={displayStyle}
+                onChange={(e) =>
+                  onChange({
+                    ...value,
+                    displayStyle: e.target.value === 'buttons' ? 'buttons' : 'dropdown',
+                  })
+                }
+                aria-label="Validation input display style"
+                className="w-full h-10 px-3 rounded-xl bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] focus:bg-white focus:ring-1 focus:ring-[#0B0B0B] focus:outline-none cursor-pointer"
+              >
+                <option value="dropdown">Dropdown Menu</option>
+                <option value="buttons">Quick Buttons</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="p-3 rounded-xl bg-[#F5F5F7] border border-[#E5E5EA] space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="flex items-center gap-2 text-[11px] font-semibold text-[#0B0B0B] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeProgramSections}
+                  onChange={(e) =>
+                    onChange({
+                      ...value,
+                      includeProgramSections: e.target.checked,
+                    })
+                  }
+                  className="w-3.5 h-3.5 accent-[#0B0B0B]"
+                />
+                <Layers className="w-3.5 h-3.5 text-[#0B0B0B]" />
+                <span>Auto-include created Program Sections in validation dropdown</span>
+              </label>
+              {unmergedSections.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => addOptions(unmergedSections)}
+                  className="px-2.5 py-1 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[10px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1 transition-colors"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  <span>+ Copy {unmergedSections.length} Section{unmergedSections.length === 1 ? '' : 's'} into List</span>
+                </button>
+              )}
+            </div>
+            {programSections.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] text-[#71717A] mr-1">
+                  {includeProgramSections ? 'Synced live into dropdown:' : 'Detected sections:'}
+                </span>
+                {programSections.map((sec) => (
+                  <span
+                    key={sec}
+                    className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white border border-[#E5E5EA] text-[10px] font-semibold text-[#0B0B0B]"
+                  >
+                    <Layers className="w-2.5 h-2.5 text-[#71717A]" />
+                    {sec}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[10px] text-[#71717A]">
+                Any sections created in Program Schedule or imported outlines will run straight into this validation dropdown automatically.
+              </p>
+            )}
           </div>
 
           <div className="space-y-2">

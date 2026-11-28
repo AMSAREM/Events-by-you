@@ -1123,6 +1123,13 @@ export const api = {
         true
       ),
 
+    bulkDeleteScheduleBlocks: (blockIds: string[]) =>
+      request<{ ok: boolean; deletedIds: string[]; count: number }>(
+        '/api/studio/schedule/bulk-delete',
+        { method: 'POST', body: JSON.stringify({ blockIds }) },
+        true
+      ),
+
     resolveAlert: (alertId: string) =>
       request<{ alert: SystemAlert }>(
         `/api/studio/alerts/${encodeURIComponent(alertId)}/resolve`,

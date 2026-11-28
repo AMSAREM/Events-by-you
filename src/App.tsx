@@ -152,7 +152,7 @@ function getWalkthroughStorageKey(profile?: Pick<OrganizerProfile, 'email' | 'ph
 
 function parseInvitationFromValues(pathname: string, search: string): {
   slugOrId?: string;
-  focus?: 'top' | 'register' | 'checkin' | 'walkin' | 'camera' | 'gifts' | 'polls';
+  focus?: 'top' | 'register' | 'checkin' | 'walkin' | 'camera' | 'gifts' | 'polls' | 'program';
   guest?: string;
   pass?: string;
   desk?: string;
@@ -173,6 +173,11 @@ function parseInvitationFromValues(pathname: string, search: string): {
   const cameraQuery = params.get('camera')?.trim();
   if (cameraQuery) {
     return { slugOrId: cameraQuery, focus: 'camera', guest, pass };
+  }
+
+  const programMatch = pathname.match(/^\/e\/([^/]+)\/(?:program|schedule)\/?$/i);
+  if (programMatch && programMatch[1]) {
+    return { slugOrId: decodeURIComponent(programMatch[1]), focus: 'program', guest, pass };
   }
 
   const giftsMatch = pathname.match(/^\/e\/([^/]+)\/(?:gifts|gift-desk)\/?$/i);
@@ -196,20 +201,22 @@ function parseInvitationFromValues(pathname: string, search: string): {
   }
   const match = pathname.match(/^\/e\/([^/]+)\/?$/i);
   const tab = (params.get('tab') || '').toLowerCase();
-  const focus: 'top' | 'register' | 'checkin' | 'walkin' | 'camera' | 'gifts' | 'polls' =
+  const focus: 'top' | 'register' | 'checkin' | 'walkin' | 'camera' | 'gifts' | 'polls' | 'program' =
     tab === 'camera'
       ? 'camera'
-      : tab === 'gifts' || tab === 'gift' || Boolean(desk)
-        ? 'gifts'
-        : tab === 'polls' || tab === 'poll'
-          ? 'polls'
-          : tab === 'walkin' || tab === 'walk-in'
-            ? 'walkin'
-            : tab === 'checkin' || tab === 'qr'
-              ? 'checkin'
-              : tab === 'register'
-                ? 'register'
-                : 'top';
+      : tab === 'program' || tab === 'outline' || tab === 'schedule'
+        ? 'program'
+        : tab === 'gifts' || tab === 'gift' || Boolean(desk)
+          ? 'gifts'
+          : tab === 'polls' || tab === 'poll'
+            ? 'polls'
+            : tab === 'walkin' || tab === 'walk-in'
+              ? 'walkin'
+              : tab === 'checkin' || tab === 'qr'
+                ? 'checkin'
+                : tab === 'register'
+                  ? 'register'
+                  : 'top';
   if (match && match[1]) {
     return { slugOrId: decodeURIComponent(match[1]), focus, guest, pass, desk };
   }
@@ -367,13 +374,14 @@ export default function App() {
     initialInvite.focus === 'camera' ? undefined : initialInvite.slugOrId
   );
   const [publicPreviewFocus, setPublicPreviewFocus] = useState<
-    'top' | 'register' | 'checkin' | 'walkin' | 'gifts' | 'polls'
+    'top' | 'register' | 'checkin' | 'walkin' | 'gifts' | 'polls' | 'program'
   >(() =>
     initialInvite.focus === 'register' ||
     initialInvite.focus === 'checkin' ||
     initialInvite.focus === 'walkin' ||
     initialInvite.focus === 'gifts' ||
-    initialInvite.focus === 'polls'
+    initialInvite.focus === 'polls' ||
+    initialInvite.focus === 'program'
       ? initialInvite.focus
       : 'top'
   );
@@ -729,7 +737,7 @@ export default function App() {
   const openEventInvitation = useCallback(
     (
       evtOrSlug?: EventItem | string,
-      focus: 'top' | 'register' | 'checkin' | 'walkin' | 'gifts' | 'polls' = 'top',
+      focus: 'top' | 'register' | 'checkin' | 'walkin' | 'gifts' | 'polls' | 'program' = 'top',
       deskToken?: string
     ) => {
       const slugOrId =
@@ -748,21 +756,24 @@ export default function App() {
             ? `/e/${cleanSlug}/checkin`
             : focus === 'walkin'
               ? `/e/${cleanSlug}/walkin`
-              : focus === 'gifts'
-                ? deskToken
-                  ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(deskToken)}`
-                  : `/e/${cleanSlug}/gifts`
-                : focus === 'polls'
-                  ? `/e/${cleanSlug}/polls`
-                  : focus === 'register'
-                    ? `/e/${cleanSlug}?tab=register`
-                    : `/e/${cleanSlug}`;
+              : focus === 'program'
+                ? `/e/${cleanSlug}/program`
+                : focus === 'gifts'
+                  ? deskToken
+                    ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(deskToken)}`
+                    : `/e/${cleanSlug}/gifts`
+                  : focus === 'polls'
+                    ? `/e/${cleanSlug}/polls`
+                    : focus === 'register'
+                      ? `/e/${cleanSlug}?tab=register`
+                      : `/e/${cleanSlug}`;
         syncBrowserPath(nextPath);
       }
       if (
         (focus === 'top' ||
           focus === 'checkin' ||
           focus === 'walkin' ||
+          focus === 'program' ||
           focus === 'gifts' ||
           focus === 'polls') &&
         typeof window !== 'undefined'
@@ -792,6 +803,7 @@ export default function App() {
         invite.focus === 'register' ||
           invite.focus === 'checkin' ||
           invite.focus === 'walkin' ||
+          invite.focus === 'program' ||
           invite.focus === 'gifts' ||
           invite.focus === 'polls'
           ? invite.focus
@@ -1827,6 +1839,21 @@ export default function App() {
     }
   };
 
+  const handleBulkDeleteScheduleBlocks = async (blockIds: string[]) => {
+    const cleanIds = Array.from(new Set(blockIds.filter(Boolean)));
+    if (cleanIds.length === 0) return;
+    const idSet = new Set(cleanIds);
+    const previous = scheduleBlocks;
+    setScheduleBlocks((prev) => prev.filter((b) => !idSet.has(b.id)));
+    try {
+      await api.studio.bulkDeleteScheduleBlocks(cleanIds);
+    } catch (err) {
+      setScheduleBlocks(previous);
+      notifyError(err, 'Failed to delete selected schedule blocks.');
+      throw err;
+    }
+  };
+
   const handleOpenWorkspace = (evt: EventItem) => {
     setStudioSubScreen(null);
     setWorkspaceEventId(evt.id);
@@ -2484,13 +2511,15 @@ export default function App() {
                 ? `/e/${cleanSlug}/checkin`
                 : publicPreviewFocus === 'walkin'
                   ? `/e/${cleanSlug}/walkin`
-                  : publicPreviewFocus === 'gifts'
-                    ? publicPreviewDeskToken
-                      ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(publicPreviewDeskToken)}`
-                      : `/e/${cleanSlug}/gifts`
-                    : publicPreviewFocus === 'polls'
-                      ? `/e/${cleanSlug}/polls`
-                      : `/e/${cleanSlug}`
+                  : publicPreviewFocus === 'program'
+                    ? `/e/${cleanSlug}/program`
+                    : publicPreviewFocus === 'gifts'
+                      ? publicPreviewDeskToken
+                        ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(publicPreviewDeskToken)}`
+                        : `/e/${cleanSlug}/gifts`
+                      : publicPreviewFocus === 'polls'
+                        ? `/e/${cleanSlug}/polls`
+                        : `/e/${cleanSlug}`
             );
           }}
           onFocusModeChange={(mode, evt) => {
@@ -2504,13 +2533,15 @@ export default function App() {
                 ? `/e/${cleanSlug}/checkin`
                 : mode === 'walkin'
                   ? `/e/${cleanSlug}/walkin`
-                  : mode === 'gifts'
-                    ? publicPreviewDeskToken && mode === 'gifts'
-                      ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(publicPreviewDeskToken)}`
-                      : `/e/${cleanSlug}/gifts`
-                    : mode === 'polls'
-                      ? `/e/${cleanSlug}/polls`
-                      : `/e/${cleanSlug}`
+                  : mode === 'program'
+                    ? `/e/${cleanSlug}/program`
+                    : mode === 'gifts'
+                      ? publicPreviewDeskToken && mode === 'gifts'
+                        ? `/e/${cleanSlug}/gifts?desk=${encodeURIComponent(publicPreviewDeskToken)}`
+                        : `/e/${cleanSlug}/gifts`
+                      : mode === 'polls'
+                        ? `/e/${cleanSlug}/polls`
+                        : `/e/${cleanSlug}`
             );
           }}
           onGiftEventSync={(updatedEvt) => {
@@ -2867,6 +2898,7 @@ export default function App() {
             <CreateEventWizardScreen
               profile={profile}
               events={safeEvents}
+              existingScheduleBlocks={safeScheduleBlocks}
               onCancel={() => {
                 setStudioSubScreen(null);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2907,7 +2939,7 @@ export default function App() {
               onSavePlanning={handleUpdateEventPlanning}
               onOpenPlans={openBillingScreen}
               onPreviewPublicEvent={(
-                focus?: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls'
+                focus?: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls' | 'program'
               ) => {
                 openEventInvitation(workspaceEvent, focus ?? 'top');
               }}
@@ -2929,6 +2961,7 @@ export default function App() {
               onAddScheduleBlock={handleAddScheduleBlock}
               onUpdateScheduleBlock={handleUpdateScheduleBlock}
               onDeleteScheduleBlock={handleDeleteScheduleBlock}
+              onBulkDeleteScheduleBlocks={handleBulkDeleteScheduleBlocks}
               onToggleQrPassPublished={handleToggleQrPassPublished}
               onNavigateSettings={() => {
                 setWorkspaceEventId(null);
@@ -2989,6 +3022,7 @@ export default function App() {
                 <QrGateScannerScreen
                   events={safeEvents}
                   attendees={safeAttendees}
+                  scheduleBlocks={safeScheduleBlocks}
                   alerts={safeAlerts}
                   profile={profile}
                   initialEventId={checkinEventId}
@@ -3072,6 +3106,7 @@ export default function App() {
                   onAddBlock={handleAddScheduleBlock}
                   onUpdateBlock={handleUpdateScheduleBlock}
                   onDeleteBlock={handleDeleteScheduleBlock}
+                  onBulkDeleteBlocks={handleBulkDeleteScheduleBlocks}
                   onUpdateEvent={handleUpdateEvent}
                   onManageEvent={handleOpenWorkspace}
                   onNavigateSettings={() => setActiveScreen('settings')}
@@ -3083,6 +3118,7 @@ export default function App() {
                 <AttendeesScreen
                   attendees={safeAttendees}
                   events={safeEvents}
+                  scheduleBlocks={safeScheduleBlocks}
                   alerts={safeAlerts}
                   profile={profile}
                   initialEventFilter={attendeeEventFilter}

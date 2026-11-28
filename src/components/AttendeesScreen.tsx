@@ -5,16 +5,19 @@ import {
   AttendeeTier,
   EventItem,
   OrganizerProfile,
+  ScheduleBlock,
   SystemAlert,
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
 import {
   getAttendeeCheckedInDaysCount,
   getEventCheckInPolicy,
+  getResolvedValidationOptions,
   getTodayIsoDate,
   isAttendeeCheckedInForDate,
 } from '../lib/eventDates';
 import { appendPoweredByLine, calculateSmsCredits, POWERED_BY_LINE } from '../lib/eventMessages';
+import { buildEventProgramUrl } from '../lib/qr';
 import { getPlanEntitlements } from '../lib/subscriptionPlans';
 import { CheckInFlyerSidePanel } from './CheckInFlyerSidePanel';
 import { CircularGauge } from './MonochromeArtwork';
@@ -23,6 +26,7 @@ import { TopUtilityBar } from './TopUtilityBar';
 interface AttendeesScreenProps {
   attendees: Attendee[];
   events: EventItem[];
+  scheduleBlocks?: ScheduleBlock[];
   alerts: SystemAlert[];
   profile: OrganizerProfile;
   initialEventFilter?: string;
@@ -72,6 +76,7 @@ interface AttendeesScreenProps {
 export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
   attendees,
   events,
+  scheduleBlocks = [],
   alerts,
   profile,
   initialEventFilter = 'all',
@@ -157,13 +162,21 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
   }, [events]);
 
   const selectedWalkInEvent = eventMap.get(walkInEventId || events[0]?.id || '');
+  const walkInEventBlocks = useMemo(
+    () =>
+      selectedWalkInEvent
+        ? scheduleBlocks.filter((b) => b.eventId === selectedWalkInEvent.id)
+        : [],
+    [scheduleBlocks, selectedWalkInEvent]
+  );
   const walkInCircles = useMemo<string[]>(() => {
     if (!selectedWalkInEvent) return ['Invited Guest'];
-    return (
-      selectedWalkInEvent.validationConfig?.options ??
-      getCategoryPreset(selectedWalkInEvent.category).validationConfig.options
+    return getResolvedValidationOptions(
+      selectedWalkInEvent.validationConfig ??
+        getCategoryPreset(selectedWalkInEvent.category).validationConfig,
+      walkInEventBlocks
     );
-  }, [selectedWalkInEvent]);
+  }, [selectedWalkInEvent, walkInEventBlocks]);
   const [walkInValidationGroup, setWalkInValidationGroup] = useState<string>(
     walkInCircles[0] ?? 'Invited Guest'
   );
@@ -1038,17 +1051,39 @@ export const AttendeesScreen: React.FC<AttendeesScreenProps> = ({
                 </div>
               </div>
 
-              <textarea
-                rows={4}
-                value={broadcastMsg}
-                onChange={(e) => {
-                  setBroadcastMsg(e.target.value);
-                  if (broadcastError) setBroadcastError(null);
-                }}
-                className="w-full p-4 rounded-2xl bg-[#F5F5F7] text-sm text-[#0B0B0B] border border-transparent focus:bg-white focus:border-[#0B0B0B] focus:outline-none"
-              />
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-[#0B0B0B]">Broadcast Message</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetEvt =
+                        (eventFilter !== 'all' ? eventMap.get(eventFilter) : undefined) ??
+                        events[0];
+                      const link = targetEvt
+                        ? buildEventProgramUrl(targetEvt.slug || targetEvt.id)
+                        : '{programLink}';
+                      setBroadcastMsg((prev) =>
+                        prev.includes(link) ? prev : `${prev} Program: ${link}`.trim()
+                      );
+                    }}
+                    className="px-2.5 py-0.5 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[10px] font-mono font-semibold text-[#0B0B0B]"
+                  >
+                    + Insert Program Outline Link
+                  </button>
+                </div>
+                <textarea
+                  rows={4}
+                  value={broadcastMsg}
+                  onChange={(e) => {
+                    setBroadcastMsg(e.target.value);
+                    if (broadcastError) setBroadcastError(null);
+                  }}
+                  className="w-full p-4 rounded-2xl bg-[#F5F5F7] text-sm text-[#0B0B0B] border border-transparent focus:bg-white focus:border-[#0B0B0B] focus:outline-none"
+                />
+              </div>
               <p className="text-[11px] text-[#71717A] -mt-2">
-                Every message automatically includes:{' '}
+                Program Outline link is automatically included per guest event, plus:{' '}
                 <span className="font-mono text-[#0B0B0B]">{POWERED_BY_LINE}</span>
               </p>
 

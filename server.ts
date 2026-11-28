@@ -95,6 +95,7 @@ import {
 import {
   appendPoweredByLine,
   calculateSmsCredits,
+  ensureProgramLinkInMessage,
   MAX_SHOTS_PER_USER,
   resolveEventMessage,
   resolveGiftThankYouMessage,
@@ -1147,6 +1148,7 @@ async function fetchSortedEventScheduleItems(
       lead: b.lead,
       date: b.date,
       day: b.day,
+      ...(b.section ? { section: b.section } : {}),
     }));
   } catch {
     return [];
@@ -7209,19 +7211,29 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
             : undefined;
 
         const baseUrl = resolveBaseUrl(req);
+        const scheduleByEventId = new Map<string, EmailScheduleItem[]>();
+        for (const [evtId, rawEvt] of eventById.entries()) {
+          const evtMapped = mapEventRow(rawEvt);
+          const items = await fetchSortedEventScheduleItems(client, evtMapped, rawEvt.extra_data_config);
+          scheduleByEventId.set(evtId, items);
+        }
+
         const prepared = ownedAttendees.map((att) => {
           const rawEvt = eventById.get(att.eventId)!;
           const evtMapped = mapEventRow(rawEvt);
           const cleanSlug = encodeURIComponent(evtMapped.slug || evtMapped.id);
           const eventUrl = `${baseUrl}/e/${cleanSlug}`;
           const programUrl = `${baseUrl}/e/${cleanSlug}/program`;
-          const personalizedRaw = cleanMessage
-            .replace(/\{name\}/gi, att.name)
-            .replace(/\{event\}/gi, evtMapped.title)
-            .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode)
-            .replace(/\{programLink\}|\{program_link\}|\{outlineLink\}/gi, programUrl)
-            .replace(/\{eventLink\}|\{event_link\}/gi, eventUrl);
-          const personalizedText = appendPoweredByLine(personalizedRaw);
+          const personalizedWithProgram = ensureProgramLinkInMessage(
+            cleanMessage
+              .replace(/\{name\}/gi, att.name)
+              .replace(/\{event\}/gi, evtMapped.title)
+              .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode)
+              .replace(/\{programLink\}|\{program_link\}|\{outlineLink\}|\{outline_link\}/gi, programUrl)
+              .replace(/\{eventLink\}|\{event_link\}|\{schedule_link\}/gi, eventUrl),
+            programUrl
+          );
+          const personalizedText = appendPoweredByLine(personalizedWithProgram);
           const smsCost = att.phone ? calculateSmsCredits(personalizedText) : 0;
           const cameraUrl = `${baseUrl}/e/${cleanSlug}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
           return { att, evtMapped, personalizedText, smsCost, cameraUrl, eventUrl, programUrl };
@@ -7273,6 +7285,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                       evtMapped.extraDataConfig?.programOutline?.title ||
                       evtMapped.extraDataConfig?.programOutline?.fileName,
                     programOutlineFileName: evtMapped.extraDataConfig?.programOutline?.fileName,
+                    scheduleBlocks: scheduleByEventId.get(evtMapped.id),
                     replyTo,
                   })
                 : Promise.resolve({ ok: false, skipped: true }),
@@ -7545,6 +7558,88 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       return res.json({ block: mapScheduleRow(updated as Record<string, unknown>, meta) });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to toggle schedule block.';
+      return res.status(500).json({ error: message });
+    }
+  });
+
+  app.post('/api/studio/schedule/bulk-delete', requireSupabaseAuth, requireRole('creator', 'organizer'), async (req: AuthedRequest, res) => {
+    const rawIds = (req.body as { blockIds?: unknown })?.blockIds;
+    if (!Array.isArray(rawIds) || rawIds.length === 0) {
+      return res.status(400).json({ error: 'Provide a non-empty blockIds list to delete.' });
+    }
+    if (rawIds.length > 500) {
+      return res.status(400).json({ error: 'Cannot delete more than 500 schedule blocks in a single request.' });
+    }
+    const uniqueIds = Array.from(
+      new Set(
+        rawIds
+          .filter((id): id is string => typeof id === 'string')
+          .map((id) => id.trim())
+          .filter(Boolean)
+      )
+    );
+    if (uniqueIds.length === 0) {
+      return res.status(400).json({ error: 'No valid schedule block IDs provided.' });
+    }
+
+    try {
+      const client = req.supabase!;
+      const { data: matchingBlocks, error: lookupErr } = await client
+        .from('schedule_blocks')
+        .select('id, event_id')
+        .in('id', uniqueIds);
+      if (lookupErr) return res.status(400).json({ error: lookupErr.message });
+
+      const rows = (matchingBlocks ?? []) as Array<{ id: unknown; event_id: unknown }>;
+      if (rows.length === 0) {
+        return res.json({ ok: true, deletedIds: [], count: 0 });
+      }
+
+      const distinctEventIds = Array.from(
+        new Set(rows.map((r) => String(r.event_id || '')).filter(Boolean))
+      );
+      const { data: eventOwners, error: evtErr } = await client
+        .from('events')
+        .select('id, organizer_id')
+        .in('id', distinctEventIds);
+      if (evtErr) return res.status(400).json({ error: evtErr.message });
+
+      const ownedEventSet = new Set(
+        ((eventOwners ?? []) as Array<{ id: unknown; organizer_id: unknown }>)
+          .filter((e) => String(e.organizer_id) === req.user!.id)
+          .map((e) => String(e.id))
+      );
+
+      for (const row of rows) {
+        if (!ownedEventSet.has(String(row.event_id || ''))) {
+          return res.status(403).json({
+            error: 'Unauthorized to delete one or more selected schedule blocks.',
+          });
+        }
+      }
+
+      const ownedBlockIds = rows.map((r) => String(r.id));
+      const { error: delErr } = await client
+        .from('schedule_blocks')
+        .delete()
+        .in('id', ownedBlockIds);
+      if (delErr) return res.status(400).json({ error: delErr.message });
+
+      const idsByEvent = new Map<string, Record<string, null>>();
+      for (const row of rows) {
+        const evtId = String(row.event_id);
+        const blockId = String(row.id);
+        const mapForEvt = idsByEvent.get(evtId) ?? {};
+        mapForEvt[blockId] = null;
+        idsByEvent.set(evtId, mapForEvt);
+      }
+      for (const [evtId, nullPatch] of idsByEvent.entries()) {
+        await mergeEventScheduleDatesMeta(client, evtId, nullPatch);
+      }
+
+      return res.json({ ok: true, deletedIds: ownedBlockIds, count: ownedBlockIds.length });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to bulk-delete schedule blocks.';
       return res.status(500).json({ error: message });
     }
   });

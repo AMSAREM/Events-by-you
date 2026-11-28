@@ -75,6 +75,7 @@ import { sanitizeEventLogoUrl, type ParsedProgramOutlineBlock } from '../lib/pro
 interface CreateEventWizardScreenProps {
   profile: OrganizerProfile;
   events: EventItem[];
+  existingScheduleBlocks?: ScheduleBlock[];
   onCancel: () => void;
   onNavigateBilling: () => void;
   onCreateEvent: (event: EventItem, blocks: ScheduleBlock[]) => Promise<void> | void;
@@ -101,6 +102,7 @@ const ARTWORK_OPTIONS: { id: ArtworkVariant; label: string }[] = [
 export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = ({
   profile,
   events,
+  existingScheduleBlocks = [],
   onCancel,
   onNavigateBilling,
   onCreateEvent,
@@ -139,6 +141,8 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const [validationConfig, setValidationConfig] = useState<EventValidationConfig>(() => ({
     ...initialPreset.validationConfig,
     options: [...initialPreset.validationConfig.options],
+    includeProgramSections: initialPreset.validationConfig.includeProgramSections !== false,
+    displayStyle: initialPreset.validationConfig.displayStyle === 'buttons' ? 'buttons' : 'dropdown',
     requireInviteCode: false,
     inviteCode: '',
   }));
@@ -181,6 +185,9 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const [logoUrl, setLogoUrl] = useState<string | undefined>(() =>
     sanitizeEventLogoUrl(profile.avatarUrl)
   );
+  const [selectDraftBlocksMode, setSelectDraftBlocksMode] = useState(false);
+  const [selectedDraftBlockIds, setSelectedDraftBlockIds] = useState<string[]>([]);
+  const [confirmClearDrafts, setConfirmClearDrafts] = useState<'selected' | 'all' | null>(null);
 
   useEffect(() => {
     const cleanStart = sanitizeIsoDate(startIsoDate) ?? getTodayIsoDate();
@@ -347,6 +354,8 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
       enabled: catPreset.validationConfig.enabled,
       label: catPreset.validationConfig.label,
       options: [...catPreset.validationConfig.options],
+      includeProgramSections: catPreset.validationConfig.includeProgramSections !== false,
+      displayStyle: catPreset.validationConfig.displayStyle === 'buttons' ? 'buttons' : 'dropdown',
       requireInviteCode: Boolean(catPreset.validationConfig.requireInviteCode),
       inviteCode: '',
     });
@@ -428,6 +437,8 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
           enabled: validationConfig.enabled,
           label: validationConfig.label.trim() || preset.validationConfig.label,
           options: parsedOptions.length > 0 ? parsedOptions : preset.validationConfig.options,
+          includeProgramSections: validationConfig.includeProgramSections !== false,
+          displayStyle: validationConfig.displayStyle === 'buttons' ? 'buttons' : 'dropdown',
           requireInviteCode: Boolean(validationConfig.requireInviteCode),
           inviteCode: validationConfig.inviteCode?.trim() || undefined,
         },
@@ -553,6 +564,8 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
       enabled: validationConfig.enabled,
       label: validationConfig.label,
       options: validationConfig.options.map((s) => s.trim()).filter(Boolean),
+      includeProgramSections: validationConfig.includeProgramSections !== false,
+      displayStyle: validationConfig.displayStyle === 'buttons' ? 'buttons' : 'dropdown',
       requireInviteCode: validationConfig.requireInviteCode,
       inviteCode: validationConfig.inviteCode,
     },
@@ -1182,6 +1195,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 {/* Validation Form */}
                 <GuestCircleValidationEditor
                   category={category}
+                  programSections={getScheduleSections(draftBlocks)}
                   value={validationConfig}
                   onChange={setValidationConfig}
                 />
@@ -1355,6 +1369,15 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                     venue: venueFormat === 'virtual' ? 'Livestream Stage' : venue.trim() || 'Main Auditorium',
                   }}
                   logoUrl={logoUrl}
+                  hasScheduleBlocks={draftBlocks.length > 0}
+                  existingBlocks={draftBlocks.map((b) => ({
+                    ...b,
+                    eventId: 'draft',
+                    duration: '60m',
+                    completed: false,
+                  }))}
+                  availableEvents={events}
+                  allScheduleBlocks={existingScheduleBlocks}
                   onLogoChange={(nextLogo) => setLogoUrl(nextLogo ?? undefined)}
                   onSaveOutline={(next) => setProgramOutline(next ?? undefined)}
                   onImportParsedBlocks={handleImportWizardOutlineBlocks}
@@ -1456,6 +1479,115 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
 
                 {draftBlocks.length > 0 && (
                   <div className="space-y-3">
+                    {/* Bulk Select / Delete Draft Blocks Bar */}
+                    <div className="p-3 rounded-2xl bg-white border border-[#E5E5EA] space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectDraftBlocksMode((prev) => {
+                                if (prev) {
+                                  setSelectedDraftBlockIds([]);
+                                  setConfirmClearDrafts(null);
+                                }
+                                return !prev;
+                              });
+                            }}
+                            className={`min-h-[32px] px-3 rounded-full text-[11px] font-semibold border transition-colors ${
+                              selectDraftBlocksMode || selectedDraftBlockIds.length > 0
+                                ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                                : 'bg-[#F5F5F7] text-[#0B0B0B] border-transparent hover:border-[#0B0B0B]'
+                            }`}
+                          >
+                            {selectDraftBlocksMode ? 'Done Selecting' : 'Select Items'}
+                          </button>
+                          {(selectDraftBlocksMode || selectedDraftBlockIds.length > 0) && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedDraftBlockIds(draftBlocks.map((b) => b.id));
+                                  setConfirmClearDrafts(null);
+                                }}
+                                className="min-h-[32px] px-3 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B]"
+                              >
+                                Select All ({draftBlocks.length})
+                              </button>
+                              {selectedDraftBlockIds.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedDraftBlockIds([]);
+                                    setConfirmClearDrafts(null);
+                                  }}
+                                  className="min-h-[32px] px-3 rounded-full bg-[#F5F5F7] text-[11px] font-semibold text-[#71717A]"
+                                >
+                                  Clear ({selectedDraftBlockIds.length})
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {selectedDraftBlockIds.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmClearDrafts('selected')}
+                              className="min-h-[32px] px-3 rounded-full bg-[#EF4444] text-white text-[11px] font-semibold hover:bg-red-600 inline-flex items-center gap-1"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              Delete Selected ({selectedDraftBlockIds.length})
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setConfirmClearDrafts('all')}
+                            className="min-h-[32px] px-3 rounded-full bg-[#F5F5F7] hover:bg-red-50 hover:text-[#EF4444] text-[11px] font-semibold text-[#0B0B0B]"
+                          >
+                            Clear All Drafts ({draftBlocks.length})
+                          </button>
+                        </div>
+                      </div>
+                      {confirmClearDrafts && (
+                        <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs font-semibold text-red-900">
+                            {confirmClearDrafts === 'selected'
+                              ? `Remove ${selectedDraftBlockIds.length} selected draft block${selectedDraftBlockIds.length === 1 ? '' : 's'}?`
+                              : `Clear all ${draftBlocks.length} draft program blocks?`}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setConfirmClearDrafts(null)}
+                              className="min-h-[30px] px-3 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B]"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirmClearDrafts === 'selected') {
+                                  const selectedSet = new Set(selectedDraftBlockIds);
+                                  setDraftBlocks((prev) =>
+                                    prev.filter((item) => !selectedSet.has(item.id))
+                                  );
+                                } else {
+                                  setDraftBlocks([]);
+                                }
+                                setSelectedDraftBlockIds([]);
+                                setConfirmClearDrafts(null);
+                                setSelectDraftBlocksMode(false);
+                              }}
+                              className="min-h-[30px] px-3 rounded-full bg-[#EF4444] text-white text-[11px] font-semibold"
+                            >
+                              Confirm Delete
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
                     {wizardSectionGroups.map((group) => (
                       <div key={group.section || '__general__'} className="space-y-1.5">
                         {hasWizardSections && (
@@ -1470,37 +1602,62 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                           </div>
                         )}
                         <div className="rounded-2xl bg-white border border-[#E5E5EA] divide-y divide-[#E5E5EA] overflow-hidden">
-                          {group.blocks.map((blk) => (
-                            <div
-                              key={blk.id}
-                              className="p-3.5 sm:p-4 flex items-start sm:items-center justify-between gap-3"
-                            >
-                              <div className="min-w-0 flex-1 space-y-1">
-                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#71717A] tabular-nums">
-                                  <span className="font-mono text-xs font-semibold text-[#0B0B0B]">
-                                    {blk.time}
-                                  </span>
-                                  <span>· {formatScheduleBlockDateBadge(blk, previewEventDraft)}</span>
-                                </div>
-                                <p className="text-sm font-semibold text-[#0B0B0B] break-words leading-snug">
-                                  {blk.title}
-                                </p>
-                                <p className="text-[11px] text-[#71717A] break-words">
-                                  {blk.lead} · {blk.stage}
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setDraftBlocks((prev) => prev.filter((item) => item.id !== blk.id))
-                                }
-                                aria-label="Remove program block"
-                                className="w-9 h-9 rounded-full bg-[#F5F5F7] hover:bg-[#EF4444]/10 hover:text-[#EF4444] flex items-center justify-center text-[#71717A] shrink-0"
+                          {group.blocks.map((blk) => {
+                            const isSelected = selectedDraftBlockIds.includes(blk.id);
+                            return (
+                              <div
+                                key={blk.id}
+                                className={`p-3.5 sm:p-4 flex items-start sm:items-center justify-between gap-3 ${
+                                  isSelected ? 'bg-[#F5F5F7]' : ''
+                                }`}
                               >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          ))}
+                                <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                                  {(selectDraftBlocksMode || selectedDraftBlockIds.length > 0) && (
+                                    <input
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      aria-label={`Select ${blk.title}`}
+                                      onChange={() =>
+                                        setSelectedDraftBlockIds((prev) =>
+                                          prev.includes(blk.id)
+                                            ? prev.filter((id) => id !== blk.id)
+                                            : [...prev, blk.id]
+                                        )
+                                      }
+                                      className="w-4 h-4 mt-1 accent-[#0B0B0B] shrink-0 cursor-pointer"
+                                    />
+                                  )}
+                                  <div className="min-w-0 flex-1 space-y-1">
+                                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#71717A] tabular-nums">
+                                      <span className="font-mono text-xs font-semibold text-[#0B0B0B]">
+                                        {blk.time}
+                                      </span>
+                                      <span>· {formatScheduleBlockDateBadge(blk, previewEventDraft)}</span>
+                                    </div>
+                                    <p className="text-sm font-semibold text-[#0B0B0B] break-words leading-snug">
+                                      {blk.title}
+                                    </p>
+                                    <p className="text-[11px] text-[#71717A] break-words">
+                                      {blk.lead} · {blk.stage}
+                                    </p>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDraftBlocks((prev) => prev.filter((item) => item.id !== blk.id));
+                                    setSelectedDraftBlockIds((prev) =>
+                                      prev.filter((id) => id !== blk.id)
+                                    );
+                                  }}
+                                  aria-label="Remove program block"
+                                  className="w-9 h-9 rounded-full bg-[#F5F5F7] hover:bg-[#EF4444]/10 hover:text-[#EF4444] flex items-center justify-center text-[#71717A] shrink-0"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     ))}
@@ -1719,9 +1876,22 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                   <label className="text-xs font-semibold text-[#0B0B0B]">
                     Confirmation SMS Template
                   </label>
-                  <span className="text-[11px] font-mono text-[#71717A] tabular-nums">
-                    {smsSegments} SMS credit/pass · {smsTemplate.length} chars
-                  </span>
+                  <div className="flex flex-wrap items-center gap-1">
+                    {['{name}', '{event}', '{code}', '{programLink}'].map((tag) => (
+                      <button
+                        key={tag}
+                        type="button"
+                        disabled={!entitlements.allowCustomMessages}
+                        onClick={() => setSmsTemplate((prev) => `${prev} ${tag}`.trim())}
+                        className="px-2 py-0.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[10px] font-mono text-[#0B0B0B] disabled:opacity-45 disabled:cursor-not-allowed"
+                      >
+                        + {tag}
+                      </button>
+                    ))}
+                    <span className="text-[11px] font-mono text-[#71717A] tabular-nums ml-1">
+                      {smsSegments} SMS credit/pass · {smsTemplate.length} chars
+                    </span>
+                  </div>
                 </div>
                 <textarea
                   rows={3}

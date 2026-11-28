@@ -38,6 +38,7 @@ import {
 import {
   appendPoweredByLine,
   calculateSmsCredits,
+  ensureProgramLinkInMessage,
   resolveEventMessage,
   resolveGiftThankYouMessage,
 } from '../src/lib/eventMessages.ts';
@@ -749,7 +750,9 @@ export function createMemoryRouter() {
               cameraUrl: resolvedMsg?.cameraUrl,
               eventUrl: resolvedMsg?.eventUrl,
               programUrl: resolvedMsg?.programUrl,
-              programOutlineTitle: targetEvent.extraDataConfig?.programOutline?.title,
+              programOutlineTitle:
+                targetEvent.extraDataConfig?.programOutline?.title ||
+                targetEvent.extraDataConfig?.programOutline?.fileName,
               programOutlineFileName: targetEvent.extraDataConfig?.programOutline?.fileName,
               scheduleBlocks: memoryStore.getEventScheduleBlocks(targetEvent.id),
             })
@@ -1843,7 +1846,9 @@ export function createMemoryRouter() {
                 cameraUrl: resolvedMsg.cameraUrl,
                 eventUrl: resolvedMsg.eventUrl,
                 programUrl: resolvedMsg.programUrl,
-                programOutlineTitle: result.event.extraDataConfig?.programOutline?.title,
+                programOutlineTitle:
+                  result.event.extraDataConfig?.programOutline?.title ||
+                  result.event.extraDataConfig?.programOutline?.fileName,
                 programOutlineFileName: result.event.extraDataConfig?.programOutline?.fileName,
                 scheduleBlocks: memoryStore.getEventScheduleBlocks(result.event.id),
                 replyTo: req.memoryUser?.profile.replyToEmail,
@@ -1864,7 +1869,9 @@ export function createMemoryRouter() {
                 cameraUrl: resolvedMsg.cameraUrl,
                 eventUrl: resolvedMsg.eventUrl,
                 programUrl: resolvedMsg.programUrl,
-                programOutlineTitle: result.event.extraDataConfig?.programOutline?.title,
+                programOutlineTitle:
+                  result.event.extraDataConfig?.programOutline?.title ||
+                  result.event.extraDataConfig?.programOutline?.fileName,
                 programOutlineFileName: result.event.extraDataConfig?.programOutline?.fileName,
                 scheduleBlocks: memoryStore.getEventScheduleBlocks(result.event.id),
               })
@@ -2013,7 +2020,9 @@ export function createMemoryRouter() {
                   cameraUrl: resolved.cameraUrl,
                   eventUrl: resolved.eventUrl,
                   programUrl: resolved.programUrl,
-                  programOutlineTitle: evt.extraDataConfig?.programOutline?.title,
+                  programOutlineTitle:
+                    evt.extraDataConfig?.programOutline?.title ||
+                    evt.extraDataConfig?.programOutline?.fileName,
                   programOutlineFileName: evt.extraDataConfig?.programOutline?.fileName,
                   scheduleBlocks: memoryStore.getEventScheduleBlocks(evt.id),
                   replyTo: orgDefaults.replyToEmail || req.memoryUser?.profile.replyToEmail,
@@ -2108,13 +2117,16 @@ export function createMemoryRouter() {
         const cleanSlug = encodeURIComponent(evtMapped.slug || evtMapped.id);
         const programUrl = `${requestOrigin}/e/${cleanSlug}/program`;
         const eventUrl = `${requestOrigin}/e/${cleanSlug}`;
-        const personalizedRaw = cleanMessage
-          .replace(/\{name\}/gi, att.name)
-          .replace(/\{event\}/gi, evtMapped.title)
-          .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode)
-          .replace(/\{program_?link\}|\{outline_?link\}/gi, programUrl)
-          .replace(/\{event_?link\}|\{schedule_?link\}/gi, eventUrl);
-        const personalizedText = appendPoweredByLine(personalizedRaw);
+        const personalizedWithProgram = ensureProgramLinkInMessage(
+          cleanMessage
+            .replace(/\{name\}/gi, att.name)
+            .replace(/\{event\}/gi, evtMapped.title)
+            .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode)
+            .replace(/\{program_?link\}|\{outline_?link\}/gi, programUrl)
+            .replace(/\{event_?link\}|\{schedule_?link\}/gi, eventUrl),
+          programUrl
+        );
+        const personalizedText = appendPoweredByLine(personalizedWithProgram);
         const smsCost = sendSms && att.phone ? calculateSmsCredits(personalizedText) : 0;
         const cameraUrl = `${requestOrigin}/e/${cleanSlug}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
         return { att, evtMapped, personalizedText, smsCost, cameraUrl, programUrl, eventUrl };
@@ -2160,7 +2172,9 @@ export function createMemoryRouter() {
                   cameraUrl,
                   eventUrl,
                   programUrl,
-                  programOutlineTitle: evtMapped.extraDataConfig?.programOutline?.title,
+                  programOutlineTitle:
+                    evtMapped.extraDataConfig?.programOutline?.title ||
+                    evtMapped.extraDataConfig?.programOutline?.fileName,
                   programOutlineFileName: evtMapped.extraDataConfig?.programOutline?.fileName,
                   scheduleBlocks: memoryStore.getEventScheduleBlocks(evtMapped.id),
                   replyTo: req.memoryUser?.profile.replyToEmail,
@@ -2228,6 +2242,30 @@ export function createMemoryRouter() {
       return res.json({ block });
     } catch (err) {
       return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to toggle schedule block.' });
+    }
+  });
+
+  router.post('/studio/schedule/bulk-delete', requireMemoryAuth, requireRole('creator', 'organizer'), (req: AuthedRequest, res) => {
+    const rawIds = (req.body as { blockIds?: unknown })?.blockIds;
+    if (!Array.isArray(rawIds) || rawIds.length === 0) {
+      return res.status(400).json({ error: 'Provide a non-empty blockIds list to delete.' });
+    }
+    if (rawIds.length > 500) {
+      return res.status(400).json({ error: 'Cannot delete more than 500 schedule blocks in a single request.' });
+    }
+    const cleanIds = rawIds
+      .filter((id): id is string => typeof id === 'string')
+      .map((id) => id.trim())
+      .filter(Boolean);
+    if (cleanIds.length === 0) {
+      return res.status(400).json({ error: 'No valid schedule block IDs provided.' });
+    }
+    try {
+      const result = memoryStore.bulkDeleteScheduleBlocks(req.user!.id, cleanIds);
+      return res.json({ ok: true, ...result });
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status || 400;
+      return res.status(status).json({ error: err instanceof Error ? err.message : 'Failed to bulk-delete schedule blocks.' });
     }
   });
 

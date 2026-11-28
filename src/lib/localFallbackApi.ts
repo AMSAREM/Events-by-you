@@ -14,6 +14,7 @@ import {
 import {
   appendPoweredByLine,
   calculateSmsCredits,
+  ensureProgramLinkInMessage,
   resolveEventMessage,
   resolveGiftThankYouMessage,
 } from './eventMessages';
@@ -2650,11 +2651,14 @@ export async function localFallbackRequest<T>(
     const prepared = recipients.map((att) => {
       const evt = db.events.find((e) => e.id === att.eventId)!;
       const programUrl = buildProgramLinkForOrigin(evt.slug || evt.id);
-      const personalizedRaw = message
-        .replace(/\{name\}/gi, att.name)
-        .replace(/\{event\}/gi, evt.title)
-        .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode)
-        .replace(/\{program_?link\}|\{outline_?link\}/gi, programUrl);
+      const personalizedRaw = ensureProgramLinkInMessage(
+        message
+          .replace(/\{name\}/gi, att.name)
+          .replace(/\{event\}/gi, evt.title)
+          .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode)
+          .replace(/\{program_?link\}|\{outline_?link\}/gi, programUrl),
+        programUrl
+      );
       const personalized = appendPoweredByLine(personalizedRaw);
       const smsCost = sendSms && att.phone?.trim() ? calculateSmsCredits(personalized) : 0;
       return { att, evt, smsCost };
@@ -2779,6 +2783,38 @@ export async function localFallbackRequest<T>(
     }
     saveDb(db);
     return { block: blk } as T;
+  }
+
+  if (method === 'POST' && path === '/studio/schedule/bulk-delete') {
+    requireRoles(user, ['creator', 'organizer']);
+    const rawIds = (body as { blockIds?: unknown })?.blockIds;
+    if (!Array.isArray(rawIds) || rawIds.length === 0) {
+      throw new LocalApiError('Provide at least one schedule block ID to delete.', 400);
+    }
+    if (rawIds.length > 500) {
+      throw new LocalApiError('Cannot delete more than 500 schedule blocks at once.', 400);
+    }
+    const idSet = new Set(
+      rawIds
+        .filter((id): id is string => typeof id === 'string')
+        .map((id) => id.trim())
+        .filter(Boolean)
+    );
+    const ownedEventIds = new Set(
+      db.events.filter((e) => e.organizerId === user.id).map((e) => e.id)
+    );
+    for (const blk of db.scheduleBlocks) {
+      if (idSet.has(blk.id) && !ownedEventIds.has(blk.eventId)) {
+        throw new LocalApiError('Unauthorized to delete one or more schedule blocks.', 403);
+      }
+    }
+    const deletedIds = db.scheduleBlocks
+      .filter((b) => idSet.has(b.id) && ownedEventIds.has(b.eventId))
+      .map((b) => b.id);
+    const delSet = new Set(deletedIds);
+    db.scheduleBlocks = db.scheduleBlocks.filter((b) => !delSet.has(b.id));
+    saveDb(db);
+    return { ok: true, deletedIds, count: deletedIds.length } as T;
   }
 
   if (method === 'DELETE' && schItemMatch) {

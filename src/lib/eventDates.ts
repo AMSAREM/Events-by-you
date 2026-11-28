@@ -317,6 +317,30 @@ export function getScheduleSections(
   return sections;
 }
 
+export function getResolvedValidationOptions(
+  validationConfig?: { options?: string[]; includeProgramSections?: boolean } | null,
+  scheduleBlocks?: ReadonlyArray<Pick<ScheduleBlock, 'section'>>
+): string[] {
+  const base = Array.isArray(validationConfig?.options) ? validationConfig.options : [];
+  const shouldIncludeSections = validationConfig?.includeProgramSections !== false;
+  const sections =
+    shouldIncludeSections && Array.isArray(scheduleBlocks)
+      ? getScheduleSections(scheduleBlocks)
+      : [];
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const item of [...base, ...sections]) {
+    const clean = typeof item === 'string' ? item.trim() : '';
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(clean);
+    }
+  }
+  return merged;
+}
+
 export interface ScheduleSectionGroup<T extends Pick<ScheduleBlock, 'section'>> {
   section: string;
   isGeneral: boolean;

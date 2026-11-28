@@ -652,6 +652,8 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
       enabled: base.enabled,
       label: base.label,
       options: [...(base.options ?? preset.validationConfig.options)],
+      includeProgramSections: base.includeProgramSections !== false,
+      displayStyle: base.displayStyle === 'buttons' ? 'buttons' : 'dropdown',
       requireInviteCode: Boolean(base.requireInviteCode),
       inviteCode: base.inviteCode ?? '',
     };
@@ -693,6 +695,8 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
       enabled: base.enabled,
       label: base.label,
       options: [...(base.options ?? preset.validationConfig.options)],
+      includeProgramSections: base.includeProgramSections !== false,
+      displayStyle: base.displayStyle === 'buttons' ? 'buttons' : 'dropdown',
       requireInviteCode: Boolean(base.requireInviteCode),
       inviteCode: base.inviteCode ?? '',
     });
@@ -842,6 +846,8 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
               parsedOptions.length > 0
                 ? parsedOptions
                 : preset.validationConfig.options,
+            includeProgramSections: validationDraft.includeProgramSections !== false,
+            displayStyle: validationDraft.displayStyle === 'buttons' ? 'buttons' : 'dropdown',
             requireInviteCode: Boolean(validationDraft.requireInviteCode),
             inviteCode: validationDraft.inviteCode?.trim() || undefined,
           },
@@ -1320,6 +1326,13 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
           <GuestCircleValidationEditor
             compact
             category={event.category}
+            programSections={Array.from(
+              new Set(
+                eventSessions
+                  .map((b) => b.section?.trim())
+                  .filter((s): s is string => Boolean(s))
+              )
+            )}
             value={validationDraft}
             onChange={setValidationDraft}
           />

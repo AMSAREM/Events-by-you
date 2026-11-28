@@ -2917,6 +2917,39 @@ export const memoryStore = {
     db.scheduleBlocks.delete(blockId);
   },
 
+  bulkDeleteScheduleBlocks(
+    userId: string,
+    blockIds: string[]
+  ): { deletedIds: string[]; count: number } {
+    const uniqueIds = Array.from(
+      new Set(
+        blockIds
+          .map((id) => (typeof id === 'string' ? id.trim() : ''))
+          .filter(Boolean)
+      )
+    );
+    if (uniqueIds.length === 0) {
+      return { deletedIds: [], count: 0 };
+    }
+    for (const id of uniqueIds) {
+      const blk = db.scheduleBlocks.get(id);
+      if (!blk) continue;
+      const evt = db.events.get(blk.eventId);
+      if (!evt || evt.organizerId !== userId) {
+        throw Object.assign(new Error('Unauthorized to delete one or more schedule blocks.'), {
+          status: 403,
+        });
+      }
+    }
+    const deletedIds: string[] = [];
+    for (const id of uniqueIds) {
+      if (db.scheduleBlocks.delete(id)) {
+        deletedIds.push(id);
+      }
+    }
+    return { deletedIds, count: deletedIds.length };
+  },
+
   resolveAlert(userId: string, alertId: string): SystemAlert {
     const al = db.alerts.get(alertId);
     if (!al || al.organizerId !== userId) throw new Error('Alert not found.');

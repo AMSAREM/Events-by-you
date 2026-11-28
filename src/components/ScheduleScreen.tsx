@@ -33,6 +33,7 @@ interface ScheduleScreenProps {
   onAddBlock: (block: ScheduleBlock) => Promise<void> | void;
   onUpdateBlock?: (id: string, patch: Partial<ScheduleBlock>) => Promise<void> | void;
   onDeleteBlock?: (id: string) => void;
+  onBulkDeleteBlocks?: (blockIds: string[]) => Promise<void> | void;
   onUpdateEvent?: (updated: EventItem) => Promise<void> | void;
   onManageEvent: (event: EventItem) => void;
   onNavigateSettings: () => void;
@@ -48,6 +49,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   onAddBlock,
   onUpdateBlock,
   onDeleteBlock,
+  onBulkDeleteBlocks,
   onUpdateEvent,
   onManageEvent,
   onNavigateSettings,
@@ -64,6 +66,11 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [editingSectionBlockId, setEditingSectionBlockId] = useState<string | null>(null);
   const [editingSectionDraft, setEditingSectionDraft] = useState('');
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
+  const [bulkConfirmMode, setBulkConfirmMode] = useState<'selected' | 'all' | null>(null);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkActionFeedback, setBulkActionFeedback] = useState<string | null>(null);
 
   const [newTitle, setNewTitle] = useState('');
   const [newSection, setNewSection] = useState('');
@@ -84,6 +91,11 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
       sanitizeIsoDate(events[0]?.isoDate) ||
       ''
   );
+
+  useEffect(() => {
+    const validIds = new Set(blocks.map((b) => b.id));
+    setSelectedBlockIds((prev) => prev.filter((id) => validIds.has(id)));
+  }, [blocks]);
 
   useEffect(() => {
     if (events.length > 0 && (!newEventId || !events.some((e) => e.id === newEventId))) {
@@ -338,6 +350,28 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            {filteredBlocks.length > 0 && (onBulkDeleteBlocks || onDeleteBlock) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectMode((prev) => {
+                    if (prev) {
+                      setSelectedBlockIds([]);
+                      setBulkConfirmMode(null);
+                    }
+                    return !prev;
+                  });
+                }}
+                className={`min-h-[40px] px-4 py-2 rounded-full border text-xs font-semibold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                  selectMode || selectedBlockIds.length > 0
+                    ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                    : 'bg-white border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B]'
+                }`}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{selectMode ? 'Done Selecting' : 'Bulk Select / Delete'}</span>
+              </button>
+            )}
             {outlineTargetEvent && (
               <button
                 type="button"
@@ -480,6 +514,10 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
             eventContext={outlineTargetEvent}
             logoUrl={outlineTargetEvent.extraDataConfig?.logoUrl || profile.avatarUrl}
             hasScheduleBlocks={blocks.some((b) => b.eventId === outlineTargetEvent.id)}
+            existingBlocks={blocks.filter((b) => b.eventId === outlineTargetEvent.id)}
+            availableEvents={events}
+            allScheduleBlocks={blocks}
+            currentEventId={outlineTargetEvent.id}
             busy={savingOutline}
             onOpenExportDesign={() => setExportModalOpen(true)}
             onLogoChange={async (nextLogoUrl) => {
@@ -736,6 +774,135 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
         </form>
       )}
 
+      {bulkActionFeedback && (
+        <div className="px-4 py-2.5 rounded-2xl bg-[#0B0B0B] text-white text-xs font-semibold flex items-center justify-between gap-2">
+          <span>{bulkActionFeedback}</span>
+          <button
+            type="button"
+            onClick={() => setBulkActionFeedback(null)}
+            className="text-zinc-300 hover:text-white text-[11px]"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Bulk Select & Delete Toolbar */}
+      {(selectMode || selectedBlockIds.length > 0 || bulkConfirmMode) &&
+        filteredBlocks.length > 0 &&
+        (onBulkDeleteBlocks || onDeleteBlock) && (
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-white border border-[#E5E5EA] space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold text-[#0B0B0B] tabular-nums">
+                  {selectedBlockIds.length} selected
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const visibleIds = filteredBlocks.map((b) => b.id);
+                    setSelectedBlockIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
+                    setBulkConfirmMode(null);
+                  }}
+                  className="min-h-[32px] px-3 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B]"
+                >
+                  Select Visible ({filteredBlocks.length})
+                </button>
+                {selectedBlockIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedBlockIds([]);
+                      setBulkConfirmMode(null);
+                    }}
+                    className="min-h-[32px] px-3 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[11px] font-semibold text-[#71717A]"
+                  >
+                    Clear Selection
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedBlockIds.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={bulkDeleting}
+                    onClick={() => setBulkConfirmMode('selected')}
+                    className="min-h-[32px] px-3.5 rounded-full bg-[#EF4444] text-white text-[11px] font-semibold hover:bg-red-600 disabled:opacity-50 inline-flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Delete Selected ({selectedBlockIds.length})
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={bulkDeleting}
+                  onClick={() => setBulkConfirmMode('all')}
+                  className="min-h-[32px] px-3.5 rounded-full bg-[#F5F5F7] hover:bg-red-50 hover:text-[#EF4444] text-[11px] font-semibold text-[#0B0B0B] border border-[#E5E5EA] disabled:opacity-50"
+                >
+                  Clear Filtered ({filteredBlocks.length})
+                </button>
+              </div>
+            </div>
+
+            {bulkConfirmMode && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-red-900">
+                  {bulkConfirmMode === 'selected'
+                    ? `Permanently delete ${selectedBlockIds.length} selected cue${selectedBlockIds.length === 1 ? '' : 's'}?`
+                    : `Permanently clear all ${filteredBlocks.length} filtered cue${filteredBlocks.length === 1 ? '' : 's'}?`}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={bulkDeleting}
+                    onClick={() => setBulkConfirmMode(null)}
+                    className="min-h-[32px] px-3 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={bulkDeleting}
+                    onClick={async () => {
+                      const idsToDelete =
+                        bulkConfirmMode === 'selected'
+                          ? [...selectedBlockIds]
+                          : filteredBlocks.map((b) => b.id);
+                      if (idsToDelete.length === 0) return;
+                      setBulkDeleting(true);
+                      try {
+                        if (onBulkDeleteBlocks) {
+                          await Promise.resolve(onBulkDeleteBlocks(idsToDelete));
+                        } else if (onDeleteBlock) {
+                          for (const id of idsToDelete) {
+                            await Promise.resolve(onDeleteBlock(id));
+                          }
+                        }
+                        setSelectedBlockIds([]);
+                        setBulkConfirmMode(null);
+                        setSelectMode(false);
+                        setBulkActionFeedback(
+                          `Removed ${idsToDelete.length} program ${idsToDelete.length === 1 ? 'cue' : 'cues'}.`
+                        );
+                      } catch (err) {
+                        setBulkActionFeedback(
+                          err instanceof Error ? err.message : 'Unable to delete selected cues.'
+                        );
+                      } finally {
+                        setBulkDeleting(false);
+                      }
+                    }}
+                    className="min-h-[32px] px-3.5 rounded-full bg-[#EF4444] text-white text-[11px] font-semibold hover:bg-red-600 disabled:opacity-50"
+                  >
+                    {bulkDeleting ? 'Deleting...' : 'Confirm Delete'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
       {/* Timeline List Grouped by Section */}
       <div className="space-y-4">
         {filteredBlocks.length === 0 ? (
@@ -770,13 +937,31 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                   const evtDateSlots = getEventDateSlots(evt);
                   const blockSection = sanitizeScheduleSection(block.section);
                   const isEditingSection = editingSectionBlockId === block.id;
+                  const isSelected = selectedBlockIds.includes(block.id);
 
                   return (
                     <div
                       key={block.id}
-                      className="p-3.5 sm:p-5 hover:bg-[#FAFAFC] transition-colors flex flex-col lg:flex-row lg:items-center justify-between gap-3"
+                      className={`p-3.5 sm:p-5 hover:bg-[#FAFAFC] transition-colors flex flex-col lg:flex-row lg:items-center justify-between gap-3 ${
+                        isSelected ? 'bg-[#F5F5F7]' : ''
+                      }`}
                     >
                       <div className="flex items-start gap-3 min-w-0">
+                        {(selectMode || selectedBlockIds.length > 0) && (
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            aria-label={`Select ${block.title}`}
+                            onChange={() =>
+                              setSelectedBlockIds((prev) =>
+                                prev.includes(block.id)
+                                  ? prev.filter((id) => id !== block.id)
+                                  : [...prev, block.id]
+                              )
+                            }
+                            className="w-4 h-4 mt-2.5 accent-[#0B0B0B] shrink-0 cursor-pointer"
+                          />
+                        )}
                         <button
                           type="button"
                           onClick={() => {

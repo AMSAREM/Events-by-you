@@ -604,6 +604,7 @@ export interface EmailScheduleItem {
   lead?: string;
   date?: string;
   day?: string;
+  section?: string;
 }
 
 function formatEmailScheduleDatePrefix(blk: EmailScheduleItem): string {
@@ -622,7 +623,7 @@ function renderEmailScheduleHtml(
   programOutlineTitle?: string,
   programOutlineFileName?: string
 ): string {
-  const items = Array.isArray(scheduleBlocks) ? scheduleBlocks.slice(0, 16) : [];
+  const items = Array.isArray(scheduleBlocks) ? scheduleBlocks.slice(0, 30) : [];
   const targetUrl = programUrl || eventUrl;
   if (items.length === 0 && !targetUrl && !programOutlineTitle && !programOutlineFileName) return '';
 
@@ -639,7 +640,7 @@ function renderEmailScheduleHtml(
   const rowsHtml = items
     .map((blk) => {
       const datePrefix = formatEmailScheduleDatePrefix(blk);
-      const timeHeader = datePrefix ? `${datePrefix} · ${blk.time}` : blk.time;
+      const timeHeader = [datePrefix, blk.time, blk.section].filter(Boolean).join(' · ');
       return `
       <div style="padding:10px 12px;background:#FFFFFF;border:1px solid #E5E5EA;border-radius:12px;margin-bottom:8px;">
         <div style="font-size:11px;font-weight:700;color:#0B0B0B;font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;">
@@ -686,7 +687,7 @@ function renderEmailScheduleText(
   programOutlineFileName?: string
 ): string[] {
   const lines: string[] = [];
-  const items = Array.isArray(scheduleBlocks) ? scheduleBlocks.slice(0, 16) : [];
+  const items = Array.isArray(scheduleBlocks) ? scheduleBlocks.slice(0, 30) : [];
   if (programOutlineTitle || programOutlineFileName) {
     lines.push('', `Official Program Outline: ${programOutlineTitle || programOutlineFileName}`);
   }
@@ -694,7 +695,7 @@ function renderEmailScheduleText(
     lines.push('', 'Program Schedule & Run of Show:');
     for (const blk of items) {
       const datePrefix = formatEmailScheduleDatePrefix(blk);
-      const timeLabel = datePrefix ? `${datePrefix} · ${blk.time}` : blk.time;
+      const timeLabel = [datePrefix, blk.time, blk.section].filter(Boolean).join(' · ');
       const meta = [blk.stage, blk.lead].filter(Boolean).join(' · ');
       lines.push(`- ${timeLabel}: ${blk.title}${meta ? ` (${meta})` : ''}`);
     }

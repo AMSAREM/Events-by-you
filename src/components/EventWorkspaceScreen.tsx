@@ -64,6 +64,7 @@ import {
   getEventCheckInPolicy,
   getEventDateSlots,
   getEventDayOptions,
+  getResolvedValidationOptions,
   getScheduleBlockDayFromIso,
   getScheduleSections,
   getTodayIsoDate,
@@ -92,6 +93,7 @@ import { compressFlyerImageFile } from '../lib/flyerUpload';
 import {
   buildEventInvitationUrl,
   buildEventOgImageUrl,
+  buildEventProgramUrl,
   DeterministicQrSvg,
   downloadQrSvg,
 } from '../lib/qr';
@@ -132,7 +134,7 @@ interface EventWorkspaceScreenProps {
   onUpdateEvent?: (updated: EventItem) => Promise<void> | void;
   onSavePlanning?: (eventId: string, planningConfig: EventPlanningConfig) => Promise<void> | void;
   onOpenPlans: () => void;
-  onPreviewPublicEvent: (focus?: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls') => void;
+  onPreviewPublicEvent: (focus?: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls' | 'program') => void;
   onToggleCheckIn: (
     attendeeId: string,
     options?: { mode?: 'toggle' | 'checkin' | 'undo'; dateIso?: string }
@@ -205,6 +207,7 @@ interface EventWorkspaceScreenProps {
     patch: Partial<ScheduleBlock>
   ) => Promise<void> | void;
   onDeleteScheduleBlock?: (blockId: string) => void;
+  onBulkDeleteScheduleBlocks?: (blockIds: string[]) => Promise<void> | void;
   onToggleQrPassPublished?: (eventId: string, published: boolean) => Promise<void> | void;
   onNavigateSettings: () => void;
   onResolveAlert: (id: string) => void;
@@ -244,6 +247,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   onAddScheduleBlock,
   onUpdateScheduleBlock,
   onDeleteScheduleBlock,
+  onBulkDeleteScheduleBlocks,
   onToggleQrPassPublished,
   onNavigateSettings,
   onResolveAlert,
@@ -268,6 +272,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
       enabled: base.enabled,
       label: base.label,
       options: [...(base.options ?? [])],
+      includeProgramSections: base.includeProgramSections !== false,
+      displayStyle: base.displayStyle === 'buttons' ? 'buttons' : 'dropdown',
       requireInviteCode: Boolean(base.requireInviteCode),
       inviteCode: base.inviteCode ?? '',
     };
@@ -303,6 +309,10 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [editingProgramSectionId, setEditingProgramSectionId] = useState<string | null>(null);
   const [editingProgramSectionDraft, setEditingProgramSectionDraft] = useState('');
+  const [programSelectMode, setProgramSelectMode] = useState(false);
+  const [selectedProgramBlockIds, setSelectedProgramBlockIds] = useState<string[]>([]);
+  const [bulkDeleteConfirmMode, setBulkDeleteConfirmMode] = useState<'selected' | 'all' | null>(null);
+  const [bulkDeletingBlocks, setBulkDeletingBlocks] = useState(false);
 
   const [editingDatesPolicy, setEditingDatesPolicy] = useState(false);
   const [savingDatesPolicy, setSavingDatesPolicy] = useState(false);
@@ -315,6 +325,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     return new Date(Date.parse(`${start}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
   });
   const [policyDraft, setPolicyDraft] = useState<EventCheckInPolicy>(() => getEventCheckInPolicy(event));
+  const [capacityDraft, setCapacityDraft] = useState<string>(String(event.capacity));
+  const [savingCapacity, setSavingCapacity] = useState(false);
 
   // Walk-in guest inline form state
   const [addingWalkIn, setAddingWalkIn] = useState(false);
@@ -332,10 +344,18 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const [walkInPhone, setWalkInPhone] = useState('');
   const [walkInEmail, setWalkInEmail] = useState('');
   const [walkInTier, setWalkInTier] = useState<AttendeeTier>('General');
+  const eventBlocks = useMemo(
+    () =>
+      scheduleBlocks
+        .filter((b) => b.eventId === event.id)
+        .sort((a, b) => compareScheduleBlocksChronological(a, b, event)),
+    [scheduleBlocks, event]
+  );
+
   const workspaceCircles = useMemo<string[]>(() => {
     const base = event.validationConfig ?? getCategoryPreset(event.category).validationConfig;
-    return Array.isArray(base.options) && base.options.length > 0 ? base.options : [];
-  }, [event.validationConfig, event.category]);
+    return getResolvedValidationOptions(base, eventBlocks);
+  }, [event.validationConfig, event.category, eventBlocks]);
   const [walkInValidationGroup, setWalkInValidationGroup] = useState<string>(
     workspaceCircles[0] ?? ''
   );
@@ -345,6 +365,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
       enabled: base.enabled,
       label: base.label,
       options: [...(base.options ?? [])],
+      includeProgramSections: base.includeProgramSections !== false,
+      displayStyle: base.displayStyle === 'buttons' ? 'buttons' : 'dropdown',
       requireInviteCode: Boolean(base.requireInviteCode),
       inviteCode: base.inviteCode ?? '',
     });
@@ -353,6 +375,9 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     setProgramDateFilter('all');
     setProgramSectionFilter('all');
     setEditingProgramSectionId(null);
+    setProgramSelectMode(false);
+    setSelectedProgramBlockIds([]);
+    setBulkDeleteConfirmMode(null);
     const defaultDay = isMultiDayEvent(event) ? 'Day 1' : 'Sat';
     setNewBlockDay(defaultDay);
     const nextStart = sanitizeIsoDate(event.isoDate) ?? getTodayIsoDate();
@@ -367,12 +392,17 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     );
     setPolicyDraft(getEventCheckInPolicy(event));
     setEditingDatesPolicy(false);
-  }, [event.id, event.category, event.validationConfig, event.isoDate, event.endIsoDate, event.checkInPolicy]);
+    setCapacityDraft(String(event.capacity));
+  }, [event.id, event.category, event.validationConfig, event.isoDate, event.endIsoDate, event.checkInPolicy, event.capacity]);
   useEffect(() => {
     if (workspaceCircles.length > 0 && !workspaceCircles.includes(walkInValidationGroup)) {
       setWalkInValidationGroup(workspaceCircles[0]);
     }
   }, [workspaceCircles, walkInValidationGroup]);
+  useEffect(() => {
+    const validIds = new Set(eventBlocks.map((b) => b.id));
+    setSelectedProgramBlockIds((prev) => prev.filter((id) => validIds.has(id)));
+  }, [eventBlocks]);
 
   // Standalone Gift Table desk entry state
   const [giftGiverName, setGiftGiverName] = useState('');
@@ -443,6 +473,10 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     () => buildCameraLinkForOrigin(event.slug || event.id),
     [event.slug, event.id]
   );
+  const programUrlForEvent = useMemo(
+    () => buildEventProgramUrl(event.slug || event.id),
+    [event.slug, event.id]
+  );
 
   const handleSaveMessageSettings = async (successToast = 'Event Sender ID & message templates saved') => {
     if (!entitlements.allowCustomSenderId && !entitlements.allowCustomMessages) {
@@ -510,14 +544,6 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const eventCheckInPolicy = getEventCheckInPolicy(event);
   const eventDayOptions = useMemo(() => getEventDayOptions(event), [event]);
   const eventDateSlots = useMemo(() => getEventDateSlots(event), [event]);
-
-  const eventBlocks = useMemo(
-    () =>
-      scheduleBlocks
-        .filter((b) => b.eventId === event.id)
-        .sort((a, b) => compareScheduleBlocksChronological(a, b, event)),
-    [scheduleBlocks, event]
-  );
 
   const activeProgramDateSlots = useMemo(() => {
     const map = new Map<string, { isoDate: string; label: string }>();
@@ -873,6 +899,41 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     }
   };
 
+  const handleSaveCapacity = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!onUpdateEvent || savingCapacity) return;
+    const minAllowed = Math.max(10, totalRegistered);
+    const parsed = Math.round(Number(capacityDraft));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      triggerToast('Enter a valid venue capacity number');
+      setCapacityDraft(String(event.capacity));
+      return;
+    }
+    let nextCap = Math.max(minAllowed, parsed);
+    if (entitlements.maxAttendeesPerEvent !== null) {
+      nextCap = Math.min(entitlements.maxAttendeesPerEvent, Math.max(totalRegistered || 1, nextCap));
+    }
+    setCapacityDraft(String(nextCap));
+    if (nextCap === event.capacity) {
+      if (parsed < minAllowed) {
+        triggerToast(`Capacity cannot be less than ${minAllowed.toLocaleString()} (minimum 10 or current registrants)`);
+      } else if (entitlements.maxAttendeesPerEvent !== null && parsed > entitlements.maxAttendeesPerEvent) {
+        triggerToast(`${entitlements.plan} caps at ${entitlements.maxAttendeesPerEvent.toLocaleString()} seats. Upgrade for more.`);
+      }
+      return;
+    }
+    setSavingCapacity(true);
+    try {
+      await Promise.resolve(onUpdateEvent({ ...event, capacity: nextCap }));
+      triggerToast(`Venue capacity updated to ${nextCap.toLocaleString()} seats`);
+    } catch (err) {
+      setCapacityDraft(String(event.capacity));
+      triggerToast(err instanceof Error ? err.message : 'Unable to update venue capacity.');
+    } finally {
+      setSavingCapacity(false);
+    }
+  };
+
   const handleSaveCircleSettings = async () => {
     if (!onUpdateEvent || savingCircles) return;
     const presetCfg = getCategoryPreset(event.category).validationConfig;
@@ -886,6 +947,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
             enabled: circleDraft.enabled,
             label: circleDraft.label.trim() || presetCfg.label,
             options: cleanedOptions.length > 0 ? cleanedOptions : presetCfg.options,
+            includeProgramSections: circleDraft.includeProgramSections !== false,
+            displayStyle: circleDraft.displayStyle === 'buttons' ? 'buttons' : 'dropdown',
             requireInviteCode: Boolean(circleDraft.requireInviteCode),
             inviteCode: circleDraft.inviteCode?.trim() || undefined,
           },
@@ -1147,7 +1210,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     onClick={() => onOpenEditModal(event)}
                     className="px-3 py-1.5 rounded-full bg-black/75 hover:bg-black text-white border border-white/20 text-[11px] font-semibold transition-colors"
                   >
-                    Edit Theme &amp; Share
+                    Event Settings
                   </button>
                 </div>
               )}
@@ -1591,6 +1654,40 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {eventBlocks.length > 0 && (onBulkDeleteScheduleBlocks || onDeleteScheduleBlock) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProgramSelectMode((prev) => {
+                          if (prev) {
+                            setSelectedProgramBlockIds([]);
+                            setBulkDeleteConfirmMode(null);
+                          }
+                          return !prev;
+                        });
+                      }}
+                      className={`min-h-[40px] px-3.5 py-2 rounded-full border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap ${
+                        programSelectMode || selectedProgramBlockIds.length > 0
+                          ? 'bg-[#0B0B0B] text-white border-[#0B0B0B]'
+                          : 'bg-white border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B]'
+                      }`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>
+                        {programSelectMode ? 'Done Selecting' : 'Bulk Select / Delete'}
+                      </span>
+                    </button>
+                  )}
+                  {(eventBlocks.length > 0 || event.extraDataConfig?.programOutline) && (
+                    <button
+                      type="button"
+                      onClick={() => onPreviewPublicEvent('program')}
+                      className="min-h-[40px] px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Public Program</span>
+                    </button>
+                  )}
                   {eventBlocks.length > 0 && (
                     <button
                       type="button"
@@ -1619,6 +1716,10 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   eventContext={event}
                   logoUrl={event.extraDataConfig?.logoUrl || profile.avatarUrl}
                   hasScheduleBlocks={eventBlocks.length > 0}
+                  existingBlocks={eventBlocks}
+                  availableEvents={events}
+                  allScheduleBlocks={scheduleBlocks}
+                  currentEventId={event.id}
                   busy={savingOutline}
                   onOpenExportDesign={() => setExportModalOpen(true)}
                   onLogoChange={async (nextLogoUrl) => {
@@ -1929,6 +2030,125 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 </div>
               )}
 
+              {/* Bulk Select & Delete Toolbar */}
+              {(programSelectMode || selectedProgramBlockIds.length > 0 || bulkDeleteConfirmMode) &&
+                visibleProgramBlocks.length > 0 &&
+                (onBulkDeleteScheduleBlocks || onDeleteScheduleBlock) && (
+                  <div className="p-3 sm:p-4 rounded-2xl bg-white border border-[#E5E5EA] space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-semibold text-[#0B0B0B] tabular-nums">
+                          {selectedProgramBlockIds.length} selected
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const visibleIds = visibleProgramBlocks.map((b) => b.id);
+                            setSelectedProgramBlockIds((prev) =>
+                              Array.from(new Set([...prev, ...visibleIds]))
+                            );
+                            setBulkDeleteConfirmMode(null);
+                          }}
+                          className="min-h-[32px] px-3 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B]"
+                        >
+                          Select Visible ({visibleProgramBlocks.length})
+                        </button>
+                        {selectedProgramBlockIds.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedProgramBlockIds([]);
+                              setBulkDeleteConfirmMode(null);
+                            }}
+                            className="min-h-[32px] px-3 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[11px] font-semibold text-[#71717A]"
+                          >
+                            Clear Selection
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {selectedProgramBlockIds.length > 0 && (
+                          <button
+                            type="button"
+                            disabled={bulkDeletingBlocks}
+                            onClick={() => setBulkDeleteConfirmMode('selected')}
+                            className="min-h-[32px] px-3.5 rounded-full bg-[#EF4444] text-white text-[11px] font-semibold hover:bg-red-600 disabled:opacity-50 inline-flex items-center gap-1"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            Delete Selected ({selectedProgramBlockIds.length})
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={bulkDeletingBlocks}
+                          onClick={() => setBulkDeleteConfirmMode('all')}
+                          className="min-h-[32px] px-3.5 rounded-full bg-[#F5F5F7] hover:bg-red-50 hover:text-[#EF4444] text-[11px] font-semibold text-[#0B0B0B] border border-[#E5E5EA] disabled:opacity-50"
+                        >
+                          Clear Filtered ({visibleProgramBlocks.length})
+                        </button>
+                      </div>
+                    </div>
+
+                    {bulkDeleteConfirmMode && (
+                      <div className="p-3 rounded-xl bg-red-50 border border-red-200 flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-semibold text-red-900">
+                          {bulkDeleteConfirmMode === 'selected'
+                            ? `Permanently delete ${selectedProgramBlockIds.length} selected program session${selectedProgramBlockIds.length === 1 ? '' : 's'}?`
+                            : `Permanently clear all ${visibleProgramBlocks.length} visible program session${visibleProgramBlocks.length === 1 ? '' : 's'}?`}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={bulkDeletingBlocks}
+                            onClick={() => setBulkDeleteConfirmMode(null)}
+                            className="min-h-[32px] px-3 rounded-full bg-white border border-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B]"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={bulkDeletingBlocks}
+                            onClick={async () => {
+                              const idsToDelete =
+                                bulkDeleteConfirmMode === 'selected'
+                                  ? [...selectedProgramBlockIds]
+                                  : visibleProgramBlocks.map((b) => b.id);
+                              if (idsToDelete.length === 0) return;
+                              setBulkDeletingBlocks(true);
+                              try {
+                                if (onBulkDeleteScheduleBlocks) {
+                                  await Promise.resolve(onBulkDeleteScheduleBlocks(idsToDelete));
+                                } else if (onDeleteScheduleBlock) {
+                                  for (const id of idsToDelete) {
+                                    await Promise.resolve(onDeleteScheduleBlock(id));
+                                  }
+                                }
+                                setSelectedProgramBlockIds([]);
+                                setBulkDeleteConfirmMode(null);
+                                setProgramSelectMode(false);
+                                triggerToast(
+                                  `Deleted ${idsToDelete.length} program ${idsToDelete.length === 1 ? 'session' : 'sessions'}`
+                                );
+                              } catch (err) {
+                                triggerToast(
+                                  err instanceof Error
+                                    ? err.message
+                                    : 'Unable to delete selected sessions.'
+                                );
+                              } finally {
+                                setBulkDeletingBlocks(false);
+                              }
+                            }}
+                            className="min-h-[32px] px-3.5 rounded-full bg-[#EF4444] text-white text-[11px] font-semibold hover:bg-red-600 disabled:opacity-50"
+                          >
+                            {bulkDeletingBlocks ? 'Deleting...' : 'Confirm Delete'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
               {/* Schedule Items Flow Grouped by Section */}
               <div className="flex flex-col gap-3 mt-1">
                 {visibleProgramBlocks.length === 0 ? (
@@ -1959,13 +2179,32 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                           const dateBadge = formatScheduleBlockDateBadge(block, event);
                           const blockSection = sanitizeScheduleSection(block.section);
                           const isEditingSec = editingProgramSectionId === block.id;
+                          const isSelected = selectedProgramBlockIds.includes(block.id);
                           return (
                             <div
                               key={block.id}
-                              className="group flex flex-col lg:flex-row lg:items-center justify-between p-3.5 sm:p-4 hover:bg-[#FAFAFC] transition-colors gap-3"
+                              className={`group flex flex-col lg:flex-row lg:items-center justify-between p-3.5 sm:p-4 hover:bg-[#FAFAFC] transition-colors gap-3 ${
+                                isSelected ? 'bg-[#F5F5F7]' : ''
+                              }`}
                             >
                               <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                                <GripVertical className="w-4 h-4 text-[#71717A] shrink-0 mt-1 hidden sm:block" />
+                                {(programSelectMode || selectedProgramBlockIds.length > 0) ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    aria-label={`Select ${block.title}`}
+                                    onChange={() =>
+                                      setSelectedProgramBlockIds((prev) =>
+                                        prev.includes(block.id)
+                                          ? prev.filter((id) => id !== block.id)
+                                          : [...prev, block.id]
+                                      )
+                                    }
+                                    className="w-4 h-4 mt-1 accent-[#0B0B0B] shrink-0 cursor-pointer"
+                                  />
+                                ) : (
+                                  <GripVertical className="w-4 h-4 text-[#71717A] shrink-0 mt-1 hidden sm:block" />
+                                )}
                                 <div className="flex flex-col min-w-0 flex-1 gap-1">
                                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#71717A] tabular-nums">
                                     <span className="font-mono text-xs sm:text-[13px] font-semibold text-[#0B0B0B]">
@@ -2342,6 +2581,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       <GuestCircleValidationEditor
                         compact
                         category={event.category}
+                        programSections={activeProgramSections}
                         value={circleDraft}
                         onChange={setCircleDraft}
                       />
@@ -2548,19 +2788,34 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     Customize your Arkesel Sender ID and every attendee message (up to 5 photos + collage per guest).
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (navigator.clipboard?.writeText) {
-                      navigator.clipboard.writeText(cameraUrlForEvent).catch(() => {});
-                    }
-                    triggerToast('Disposable Camera link copied');
-                  }}
-                  className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 self-start shrink-0"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                  Copy Camera Link
-                </button>
+                <div className="flex flex-wrap items-center gap-2 self-start shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (navigator.clipboard?.writeText) {
+                        navigator.clipboard.writeText(programUrlForEvent).catch(() => {});
+                      }
+                      triggerToast('Public Program Outline link copied');
+                    }}
+                    className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    Copy Program Link
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (navigator.clipboard?.writeText) {
+                        navigator.clipboard.writeText(cameraUrlForEvent).catch(() => {});
+                      }
+                      triggerToast('Disposable Camera link copied');
+                    }}
+                    className="px-4 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    Copy Camera Link
+                  </button>
+                </div>
               </div>
 
               {(!entitlements.allowCustomSenderId || !entitlements.allowCustomMessages) && (
@@ -2641,10 +2896,23 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
               {/* Confirmation SMS */}
               <div className="p-4 rounded-2xl bg-white space-y-3 border border-[#E5E5EA]/70">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold">
-                  <span>Registration Confirmation SMS</span>
-                  <span className="text-[#71717A] font-mono tabular-nums">
-                    {smsSegments} SMS segment · {confirmationTemplate.length} chars
-                  </span>
+                  <span>Registration Confirmation SMS &amp; Email</span>
+                  <div className="flex flex-wrap items-center gap-1">
+                    {['{name}', '{event}', '{code}', '{programLink}'].map((tag) => (
+                      <button
+                        key={tag}
+                        type="button"
+                        disabled={!entitlements.allowCustomMessages}
+                        onClick={() => setConfirmationTemplate((prev) => `${prev} ${tag}`.trim())}
+                        className="px-2 py-0.5 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[10px] font-mono text-[#0B0B0B] disabled:opacity-45 disabled:cursor-not-allowed"
+                      >
+                        + {tag}
+                      </button>
+                    ))}
+                    <span className="text-[#71717A] font-mono tabular-nums ml-1">
+                      {smsSegments} SMS segment · {confirmationTemplate.length} chars
+                    </span>
+                  </div>
                 </div>
                 <textarea
                   rows={3}
@@ -2657,6 +2925,10 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     !entitlements.allowCustomMessages ? 'opacity-65 cursor-not-allowed' : ''
                   }`}
                 />
+                <p className="text-[11px] text-[#71717A]">
+                  Auto-attaches Program Outline link:{' '}
+                  <span className="font-mono text-[#0B0B0B]">{programUrlForEvent}</span>
+                </p>
               </div>
 
               {/* Check-In Welcome SMS */}
@@ -2664,7 +2936,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold">
                   <span>Check-In Welcome SMS (Dispatched When Guest Checks In)</span>
                   <div className="flex flex-wrap gap-1">
-                    {['{name}', '{event}', '{code}', '{cameraLink}'].map((tag) => (
+                    {['{name}', '{event}', '{code}', '{cameraLink}', '{programLink}'].map((tag) => (
                       <button
                         key={tag}
                         type="button"
@@ -2690,7 +2962,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 />
                 <div className="p-3 rounded-xl bg-[#F5F5F7] text-[11px] text-[#0B0B0B]">
                   <span className="font-semibold text-[#71717A] block mb-1">
-                    Live Gate Check-In Preview (5 Photos + Collage):
+                    Live Gate Check-In Preview (Camera + Program Outline):
                   </span>
                   <p className="font-mono break-words whitespace-pre-line">
                     {
@@ -2708,7 +2980,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   </p>
                 </div>
                 <p className="text-[11px] text-[#71717A]">
-                  Constant line appended to every SMS &amp; email:{' '}
+                  All confirmation, reminder, check-in &amp; broadcast SMS/emails automatically include the Program Outline URL ({programUrlForEvent}) and{' '}
                   <span className="font-mono text-[#0B0B0B]">{POWERED_BY_LINE}</span>
                 </p>
               </div>
@@ -3131,7 +3403,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
 
         {/* Right / Secondary Column (Span 4) */}
         <div className="lg:col-span-4 flex flex-col gap-6">
-          {/* Capacity Limit Alert Card */}
+          {/* Capacity Limit & Venue Capacity Card */}
           <section className="bg-[#F5F5F7] rounded-[28px] p-6 relative overflow-hidden shadow-sm">
             <div className="flex items-start gap-3">
               <div className="w-8 h-8 rounded-full bg-[#EF4444]/10 text-[#EF4444] flex items-center justify-center shrink-0">
@@ -3148,6 +3420,47 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 </p>
               </div>
             </div>
+
+            {isEventCreator && onUpdateEvent && (
+              <form
+                onSubmit={(e) => void handleSaveCapacity(e)}
+                className="mt-4 p-3.5 rounded-2xl bg-white border border-[#E5E5EA] space-y-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <label
+                    htmlFor="workspace-venue-capacity"
+                    className="text-xs font-semibold text-[#0B0B0B]"
+                  >
+                    Adjust Venue Capacity
+                  </label>
+                  <span className="text-[11px] text-[#71717A] tabular-nums">
+                    Min {Math.max(10, totalRegistered).toLocaleString()}
+                    {entitlements.maxAttendeesPerEvent !== null
+                      ? ` · Max ${entitlements.maxAttendeesPerEvent.toLocaleString()}`
+                      : ''}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="workspace-venue-capacity"
+                    type="number"
+                    min={Math.max(10, totalRegistered)}
+                    max={entitlements.maxAttendeesPerEvent ?? undefined}
+                    value={capacityDraft}
+                    onChange={(e) => setCapacityDraft(e.target.value)}
+                    className="flex-1 min-w-0 h-10 px-3.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-sm font-medium text-[#0B0B0B] tabular-nums focus:bg-white focus:border-[#0B0B0B] focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={savingCapacity}
+                    className="px-4 h-10 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
+                  >
+                    {savingCapacity ? 'Saving...' : 'Update Cap'}
+                  </button>
+                </div>
+              </form>
+            )}
+
             <div className="mt-4 pt-3 flex items-center justify-between gap-2">
               <span className="text-xs font-semibold text-[#0B0B0B]">
                 {entitlements.plan === 'Starter'
@@ -3195,7 +3508,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 <div className="p-2.5 rounded-xl bg-[#F5F5F7] text-[11px] text-[#1A1C1D] italic line-clamp-3">
                   &ldquo;{checkInTemplate}&rdquo;
                 </div>
-                <div className="flex items-center justify-between pt-0.5">
+                <div className="flex items-center justify-between pt-0.5 gap-2 flex-wrap">
                   <button
                     type="button"
                     onClick={() => setActiveTab('messages')}
@@ -3203,19 +3516,34 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   >
                     Customize Messages
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (navigator.clipboard?.writeText) {
-                        navigator.clipboard.writeText(cameraUrlForEvent).catch(() => {});
-                      }
-                      triggerToast('Disposable Camera URL copied');
-                    }}
-                    className="text-[11px] font-mono text-[#71717A] hover:text-[#0B0B0B] inline-flex items-center gap-1"
-                  >
-                    <Copy className="w-3 h-3" />
-                    Camera URL
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (navigator.clipboard?.writeText) {
+                          navigator.clipboard.writeText(programUrlForEvent).catch(() => {});
+                        }
+                        triggerToast('Program Outline URL copied');
+                      }}
+                      className="text-[11px] font-mono text-[#71717A] hover:text-[#0B0B0B] inline-flex items-center gap-1"
+                    >
+                      <Copy className="w-3 h-3" />
+                      Program URL
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (navigator.clipboard?.writeText) {
+                          navigator.clipboard.writeText(cameraUrlForEvent).catch(() => {});
+                        }
+                        triggerToast('Disposable Camera URL copied');
+                      }}
+                      className="text-[11px] font-mono text-[#71717A] hover:text-[#0B0B0B] inline-flex items-center gap-1"
+                    >
+                      <Copy className="w-3 h-3" />
+                      Camera URL
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -3346,8 +3674,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
 
                     <p className="text-[11px] text-[#71717A] tabular-nums">
                       {effectiveChannel === 'email'
-                        ? `Target: ${emailRecipients.length} email guests · 0 SMS credits (Resend)`
-                        : `Target: ${phoneRecipients.length} phone recipients · Cost: ${thankYouCost.toLocaleString()} SMS credits`}
+                        ? `Target: ${emailRecipients.length} email guests · 0 SMS credits (Resend) · Includes Program Outline`
+                        : `Target: ${phoneRecipients.length} phone recipients · Cost: ${thankYouCost.toLocaleString()} SMS credits · Includes Program Outline`}
                     </p>
                     <div className="pt-0.5 flex items-center justify-between gap-2">
                       <span className="text-[11px] text-[#71717A]">

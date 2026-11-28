@@ -28,11 +28,12 @@ export function calculateSmsCredits(message?: string): number {
 }
 
 export const DEFAULT_CHECKIN_MESSAGE =
-  `You're checked in to {event}, {name}! Thank you for being a part of the celebration. Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`;
+  `You're checked in to {event}, {name}! Thank you for being a part of the celebration. Program Outline: {programLink} · Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`;
 
 export const LEGACY_DEFAULT_CHECKIN_MESSAGES = [
   `Welcome to {event}, {name}! You're checked in. Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`,
   `Thank you for being a part of the celebration at {event}, {name}! You're checked in. Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`,
+  `You're checked in to {event}, {name}! Thank you for being a part of the celebration. Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`,
 ];
 
 export function isLegacyDefaultCheckInMessage(message?: string | null): boolean {
@@ -46,17 +47,17 @@ export function getDefaultMessageConfig(event?: Partial<EventItem>): Required<Ev
   return {
     confirmationMessage:
       event?.messageConfig?.confirmationMessage?.trim() ||
-      `Hi {name}, your pass for {event} ({code}) is confirmed for {date} at {venue}. View & snap 5 photos on our shared disposable camera: {cameraLink}`,
+      `Hi {name}, your pass for {event} ({code}) is confirmed for {date} at {venue}. Program Outline: {programLink} · Disposable camera (5 photos): {cameraLink}`,
     reminderMessage:
       event?.messageConfig?.reminderMessage?.trim() ||
-      `Reminder: {event} starts {date} at {time} ({venue}). Present QR token {code} at the gate. Camera: {cameraLink}`,
+      `Reminder: {event} starts {date} at {time} ({venue}). Present QR token {code} at the gate. Program Outline: {programLink} · Camera: {cameraLink}`,
     checkInMessage:
       customCheckIn && !isLegacyDefaultCheckInMessage(customCheckIn)
         ? customCheckIn
         : DEFAULT_CHECKIN_MESSAGE,
     thankYouMessage:
       event?.messageConfig?.thankYouMessage?.trim() ||
-      `Thank you for attending {event}, {name}! Relive the moments & turn your 5 camera shots into a collage: {cameraLink}`,
+      `Thank you for attending {event}, {name}! Program Outline: {programLink} · Relive the moments & turn your 5 camera shots into a collage: {cameraLink}`,
     includeCameraLink: event?.messageConfig?.includeCameraLink !== false,
   };
 }
@@ -179,15 +180,19 @@ export function resolveEventMessage(params: {
     rendered = `${rendered.trim()} Disposable Camera (5 shots & collage): ${cameraUrl}`;
   }
 
-  if (
-    (params.type === 'confirmation' || params.type === 'reminder' || params.type === 'checkin') &&
-    !hasProgramPlaceholder &&
-    !rendered.includes(programUrl)
-  ) {
+  if (!hasProgramPlaceholder && !rendered.includes(programUrl)) {
     rendered = `${rendered.trim()} Program Outline: ${programUrl}`;
   }
 
   return { text: appendPoweredByLine(rendered), cameraUrl, eventUrl, programUrl };
+}
+
+export function ensureProgramLinkInMessage(message: string, programUrl: string): string {
+  const clean = (message || '').trim();
+  if (!programUrl) return clean;
+  if (!clean) return `Program Outline: ${programUrl}`;
+  if (clean.includes(programUrl)) return clean;
+  return `${clean} Program Outline: ${programUrl}`;
 }
 
 export const DEFAULT_GIFT_THANK_YOU_MESSAGE =

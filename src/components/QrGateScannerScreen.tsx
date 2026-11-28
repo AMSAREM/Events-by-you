@@ -31,6 +31,7 @@ import {
   AttendeeTier,
   EventItem,
   OrganizerProfile,
+  ScheduleBlock,
   SystemAlert,
 } from '../types/events';
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
@@ -40,6 +41,7 @@ import {
   formatEventDurationBadge,
   getAttendeeCheckedInDaysCount,
   getEventCheckInPolicy,
+  getResolvedValidationOptions,
   getTodayIsoDate,
   isAttendeeCheckedInForDate,
 } from '../lib/eventDates';
@@ -59,6 +61,7 @@ import { TopUtilityBar } from './TopUtilityBar';
 interface QrGateScannerScreenProps {
   events: EventItem[];
   attendees: Attendee[];
+  scheduleBlocks?: ScheduleBlock[];
   alerts: SystemAlert[];
   profile: OrganizerProfile;
   initialEventId?: string;
@@ -124,6 +127,7 @@ type ScanOutcome =
 export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
   events,
   attendees,
+  scheduleBlocks = [],
   alerts,
   profile,
   initialEventId,
@@ -215,13 +219,22 @@ export const QrGateScannerScreen: React.FC<QrGateScannerScreenProps> = ({
     }
   };
 
+  const selectedEventBlocks = useMemo(
+    () =>
+      selectedEvent
+        ? scheduleBlocks.filter((b) => b.eventId === selectedEvent.id)
+        : [],
+    [scheduleBlocks, selectedEvent]
+  );
+
   const activeValidationCircles = useMemo<string[]>(() => {
     if (!selectedEvent) return ['Invited Guest'];
-    return (
-      selectedEvent.validationConfig?.options ??
-      getCategoryPreset(selectedEvent.category).validationConfig.options
+    return getResolvedValidationOptions(
+      selectedEvent.validationConfig ??
+        getCategoryPreset(selectedEvent.category).validationConfig,
+      selectedEventBlocks
     );
-  }, [selectedEvent]);
+  }, [selectedEvent, selectedEventBlocks]);
 
   // Walk-In Gate Registration Form state
   const walkInSectionRef = useRef<HTMLElement | null>(null);

@@ -51,6 +51,7 @@ import {
   formatEventDateSpan,
   formatEventDurationBadge,
   getEventCheckInPolicy,
+  getResolvedValidationOptions,
 } from '../lib/eventDates';
 import { useDocumentFullscreen } from '../lib/fullscreen';
 import { isPollsEnabledForEvent } from '../lib/polls';
@@ -81,7 +82,7 @@ interface PublicEventScreenProps {
   attendees: Attendee[];
   scheduleBlocks?: ScheduleBlock[];
   initialEventId?: string;
-  initialFocus?: 'top' | 'register' | 'checkin' | 'walkin' | 'gifts' | 'polls';
+  initialFocus?: 'top' | 'register' | 'checkin' | 'walkin' | 'gifts' | 'polls' | 'program';
   initialDeskToken?: string;
   initialPassCode?: string;
   isLoadingEvents?: boolean;
@@ -93,7 +94,7 @@ interface PublicEventScreenProps {
   onOpenStudio: () => void;
   onNavigateSignUp?: () => void;
   onCreateEvent?: () => void;
-  onFocusModeChange?: (mode: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls', event: EventItem) => void;
+  onFocusModeChange?: (mode: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls' | 'program', event: EventItem) => void;
   onCheckinModalChange?: (open: boolean) => void;
   onToggleQrPassPublished?: (eventId: string, published: boolean) => Promise<void> | void;
   onGiftEventSync?: (updatedEvent: EventItem) => void;
@@ -201,7 +202,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const selectedEvent =
     events.find((e) => e.id === selectedEventId) ?? activeEvents[0] ?? events[0];
 
-  const [screenMode, setScreenMode] = useState<'top' | 'checkin' | 'walkin' | 'gifts' | 'polls'>(
+  const [screenMode, setScreenMode] = useState<'top' | 'checkin' | 'walkin' | 'gifts' | 'polls' | 'program'>(
     initialDeskToken
       ? 'gifts'
       : initialFocus === 'checkin'
@@ -212,12 +213,15 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
             ? 'gifts'
             : initialFocus === 'polls'
               ? 'polls'
-              : 'top'
+              : initialFocus === 'program'
+                ? 'program'
+                : 'top'
   );
   const standaloneCheckin = screenMode === 'checkin';
   const standaloneWalkin = screenMode === 'walkin';
   const standaloneGifts = screenMode === 'gifts';
   const standalonePolls = screenMode === 'polls';
+  const standaloneProgram = screenMode === 'program';
   const [showCheckinModal, setShowCheckinModal] = useState(false);
   const [activatingQr, setActivatingQr] = useState(false);
 
@@ -268,6 +272,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       setShowCheckinModal(false);
     } else if (initialFocus === 'polls') {
       setScreenMode('polls');
+      setShowCheckinModal(false);
+    } else if (initialFocus === 'program') {
+      setScreenMode('program');
       setShowCheckinModal(false);
     } else if (initialFocus === 'register' && selectedEvent) {
       setScreenMode('top');
@@ -351,18 +358,23 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [lookingUpPass, setLookingUpPass] = useState(false);
 
+  const resolvedValidationOptions = useMemo(
+    () => getResolvedValidationOptions(validationConfig, eventScheduleBlocks),
+    [validationConfig, eventScheduleBlocks]
+  );
+
   const filteredValidationOptions = useMemo(() => {
     const q = circleSearch.trim().toLowerCase();
-    if (!q) return validationConfig.options;
-    return validationConfig.options.filter((opt) => opt.toLowerCase().includes(q));
-  }, [validationConfig.options, circleSearch]);
+    if (!q) return resolvedValidationOptions;
+    return resolvedValidationOptions.filter((opt) => opt.toLowerCase().includes(q));
+  }, [resolvedValidationOptions, circleSearch]);
 
   useEffect(() => {
     setHeroFailed(false);
     setCircleSearch('');
     setValidationGroup(
-      validationConfig.enabled && validationConfig.options.length === 1
-        ? validationConfig.options[0]
+      validationConfig.enabled && resolvedValidationOptions.length === 1
+        ? resolvedValidationOptions[0]
         : ''
     );
     setInviteCodeInput('');
@@ -377,7 +389,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     setCustomResponses({});
     setDuplicateError(null);
     setLookupError(null);
-  }, [selectedEvent?.id, selectedEvent?.flyerUrl, validationConfig.enabled, validationConfig.options]);
+  }, [selectedEvent?.id, selectedEvent?.flyerUrl, validationConfig.enabled, resolvedValidationOptions]);
 
   const normalizedPhone = useMemo(() => {
     const trimmed = phoneInput.trim();
@@ -411,6 +423,11 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
   const pollsStandaloneUrl = useMemo(
     () => buildEventInvitationUrl(selectedEvent?.slug ?? selectedEvent?.id ?? 'event', 'polls'),
+    [selectedEvent?.slug, selectedEvent?.id]
+  );
+
+  const programStandaloneUrl = useMemo(
+    () => buildEventInvitationUrl(selectedEvent?.slug ?? selectedEvent?.id ?? 'event', 'program'),
     [selectedEvent?.slug, selectedEvent?.id]
   );
 
@@ -487,7 +504,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     };
   }, [initialPassCode, selectedEvent?.id]);
 
-  const switchScreenMode = (mode: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls') => {
+  const switchScreenMode = (mode: 'top' | 'checkin' | 'walkin' | 'gifts' | 'polls' | 'program') => {
     setScreenMode(mode);
     setGiftReceipt(null);
     setGiftError(null);
@@ -525,7 +542,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
       ? giftsStandaloneUrl
       : standalonePolls
         ? pollsStandaloneUrl
-        : invitationUrl;
+        : standaloneProgram
+          ? programStandaloneUrl
+          : invitationUrl;
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(targetUrl).catch(() => {});
     }
@@ -534,7 +553,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
         ? `Gift Table link copied: /e/${selectedEvent?.slug}/gifts`
         : standalonePolls
           ? `Live Polls link copied: /e/${selectedEvent?.slug}/polls`
-          : `Invitation link copied: /e/${selectedEvent?.slug}`
+          : standaloneProgram
+            ? `Program Outline link copied: /e/${selectedEvent?.slug}/program`
+            : `Invitation link copied: /e/${selectedEvent?.slug}`
     );
     setTimeout(() => setShareToast(null), 2600);
   };
@@ -748,7 +769,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     }
     if (
       validationConfig.enabled &&
-      validationConfig.options.length > 0 &&
+      resolvedValidationOptions.length > 0 &&
       !validationGroup.trim()
     ) {
       setDuplicateError(`Please complete the Validation Form: choose your ${validationConfig.label}.`);
@@ -912,7 +933,15 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   const eventSeoPayload = buildEventSeoPayload(
     selectedEvent,
     CANONICAL_ORIGIN,
-    standaloneCheckin ? 'checkin' : standaloneGifts ? 'gifts' : 'top'
+    standaloneCheckin
+      ? 'checkin'
+      : standaloneGifts
+        ? 'gifts'
+        : standalonePolls
+          ? 'polls'
+          : standaloneProgram
+            ? 'program'
+            : 'top'
   );
 
   const spotsRemaining = Math.max(0, selectedEvent.capacity - selectedEvent.registered);
@@ -1131,20 +1160,21 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
 
               <form onSubmit={handleSubmit} className="space-y-5">
                 {/* STEP 1: EVENT VALIDATION FORM */}
-                {validationConfig.enabled && validationConfig.options.length > 0 && (
+                {validationConfig.enabled && resolvedValidationOptions.length > 0 && (
                   <div className="p-4 rounded-2xl bg-white/48 backdrop-blur-xs border border-white/65 space-y-3">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5">
+                      <label
+                        htmlFor="checkout-validation-select"
+                        className="flex items-center gap-1.5 text-xs font-bold text-[#0B0B0B]"
+                      >
                         <ShieldCheck className="w-4 h-4 text-[#0B0B0B]" />
-                        <span className="text-xs font-bold text-[#0B0B0B]">
-                          {validationConfig.label} *
-                        </span>
-                      </div>
+                        <span>{validationConfig.label} *</span>
+                      </label>
                       <span className="text-[10px] font-mono uppercase tracking-wider text-[#3F3F46]">
-                        {validationConfig.options.length} Options
+                        {resolvedValidationOptions.length} Options
                       </span>
                     </div>
-                    {validationConfig.options.length > 6 && (
+                    {resolvedValidationOptions.length > 8 && (
                       <div className="relative">
                         <Search className="w-3.5 h-3.5 text-[#52525B] absolute left-3.5 top-2.5 pointer-events-none" />
                         <input
@@ -1168,7 +1198,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     )}
                     {filteredValidationOptions.length === 0 ? (
                       <p className="text-xs text-[#3F3F46] py-2">
-                        No circle or table matches &ldquo;{circleSearch}&rdquo;.{' '}
+                        No circle, table, or section matches &ldquo;{circleSearch}&rdquo;.{' '}
                         <button
                           type="button"
                           onClick={() => setCircleSearch('')}
@@ -1177,7 +1207,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                           Show all
                         </button>
                       </p>
-                    ) : (
+                    ) : validationConfig.displayStyle === 'buttons' ? (
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-56 overflow-y-auto pr-0.5">
                         {filteredValidationOptions.map((opt) => {
                           const active = validationGroup === opt;
@@ -1201,6 +1231,31 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                             </button>
                           );
                         })}
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <select
+                          id="checkout-validation-select"
+                          required
+                          value={validationGroup}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setValidationGroup(val);
+                            if (!giftSide && val) setGiftSide(val);
+                            setDuplicateError(null);
+                          }}
+                          className="w-full h-11 pl-4 pr-10 rounded-full bg-white/85 border border-black/15 text-xs font-semibold text-[#0B0B0B] appearance-none focus:bg-white focus:border-[#0B0B0B] focus:ring-1 focus:ring-[#0B0B0B] focus:outline-none cursor-pointer"
+                        >
+                          <option value="">
+                            Select your {validationConfig.label.toLowerCase()}...
+                          </option>
+                          {filteredValidationOptions.map((opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown className="w-4 h-4 text-[#52525B] absolute right-3.5 top-3.5 pointer-events-none" />
                       </div>
                     )}
 
@@ -1678,7 +1733,9 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       ? 'Standalone Gift Table'
                       : standalonePolls
                         ? 'Live Corporate Polls'
-                        : 'Event Invitation & Check-In'}
+                        : standaloneProgram
+                          ? 'Program Outline & Schedule'
+                          : 'Event Invitation & Check-In'}
             </span>
           </div>
 
@@ -1711,6 +1768,19 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                     >
                       Validate &amp; Check-In
                     </button>
+                    {!isScannedQrSession && (hasProgramOutlineContent || standaloneProgram) && (
+                      <button
+                        type="button"
+                        onClick={() => switchScreenMode('program')}
+                        className={`px-3 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap transition-colors ${
+                          standaloneProgram
+                            ? 'bg-[#0B0B0B] text-white'
+                            : 'text-[#71717A] hover:text-[#0B0B0B]'
+                        }`}
+                      >
+                        Program
+                      </button>
+                    )}
                     {!isScannedQrSession && giftTableAvailable && (
                       <button
                         type="button"
@@ -1838,7 +1908,106 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
           )}
 
           {!issuedPass ? (
-            standalonePolls ? (
+            standaloneProgram ? (
+              <div className="space-y-5">
+                <div className="lg:hidden flex items-center gap-1 bg-white rounded-full p-1 shadow-sm border border-[#E5E5EA] overflow-x-auto">
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('top')}
+                    className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
+                  >
+                    Invitation
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('checkin')}
+                    className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
+                  >
+                    Validate &amp; Check-In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('program')}
+                    className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold bg-[#0B0B0B] text-white whitespace-nowrap shrink-0"
+                  >
+                    Program
+                  </button>
+                  {giftTableAvailable && (
+                    <button
+                      type="button"
+                      onClick={() => switchScreenMode('gifts')}
+                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
+                    >
+                      Gift Table
+                    </button>
+                  )}
+                  {pollsAvailable && (
+                    <button
+                      type="button"
+                      onClick={() => switchScreenMode('polls')}
+                      className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
+                    >
+                      Polls
+                    </button>
+                  )}
+                </div>
+
+                <section className="bg-white rounded-[28px] p-5 sm:p-6 shadow-sm border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="min-w-0 space-y-1">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#F5F5F7] text-[10px] font-bold uppercase tracking-wider text-[#0B0B0B]">
+                      Official Program Outline
+                    </span>
+                    <h1 className="font-display text-xl sm:text-2xl font-bold text-[#0B0B0B] tracking-tight truncate">
+                      {selectedEvent.title}
+                    </h1>
+                    <p className="text-xs text-[#71717A] truncate">
+                      {formattedEventDate} · {selectedEvent.time} · {selectedEvent.venue}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleShare}
+                      className="min-h-[38px] px-3.5 py-1.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors"
+                    >
+                      <Share2 className="w-3.5 h-3.5" />
+                      <span>Copy Program Link</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => switchScreenMode('checkin')}
+                      className="min-h-[38px] px-4 py-1.5 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                    >
+                      <span>Validate &amp; Check-In</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </section>
+
+                <PublicProgramOutlineSection
+                  id="standalone-program-outline"
+                  event={selectedEvent}
+                  programOutline={programOutline}
+                  scheduleBlocks={scheduleBlocks}
+                  variant="invitation"
+                />
+
+                {!hasProgramOutlineContent && (
+                  <div className="bg-white rounded-[28px] p-8 text-center border border-[#E5E5EA] space-y-3">
+                    <p className="text-sm font-semibold text-[#0B0B0B]">
+                      Program outline sessions will appear here once published by the organiser.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => switchScreenMode('top')}
+                      className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold"
+                    >
+                      Back to Event Invitation
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : standalonePolls ? (
               <div className="space-y-5">
                 {!isFullscreen && (
                   <div className="lg:hidden flex items-center gap-1 bg-white rounded-full p-1 shadow-sm border border-[#E5E5EA] overflow-x-auto">
@@ -2558,6 +2727,15 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 >
                   Validate &amp; Check-In
                 </button>
+                {(hasProgramOutlineContent || standaloneProgram) && (
+                  <button
+                    type="button"
+                    onClick={() => switchScreenMode('program')}
+                    className="min-h-[40px] flex-1 py-2 px-3.5 rounded-full text-xs font-semibold text-[#71717A] whitespace-nowrap shrink-0"
+                  >
+                    Program
+                  </button>
+                )}
                 {giftTableAvailable && (
                   <button
                     type="button"
