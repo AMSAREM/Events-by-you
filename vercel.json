@@ -35,8 +35,8 @@
       "destination": "/api"
     },
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "source": "/((?!api/|assets/|src/assets/|static-loader-data/|.*\\.(?:js|mjs|css|map|json|png|jpg|jpeg|gif|svg|webp|ico|woff|woff2|ttf|eot|webmanifest|txt|xml)$).*)",
+      "destination": "/"
     }
   ]
 }
