@@ -64,7 +64,7 @@ import {
   DeterministicQrSvg,
   downloadQrSvg,
 } from '../lib/qr';
-import { appendPoweredByLine } from '../lib/eventMessages';
+import { appendPoweredByLine, resolveEventMessage } from '../lib/eventMessages';
 import {
   CANONICAL_ORIGIN,
   NOINDEX_ROUTE_SEO,
@@ -1952,60 +1952,16 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                   )}
                 </div>
 
-                <section className="bg-white rounded-[28px] p-5 sm:p-6 shadow-sm border border-[#E5E5EA] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="min-w-0 space-y-1">
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#F5F5F7] text-[10px] font-bold uppercase tracking-wider text-[#0B0B0B]">
-                      Official Program Outline
-                    </span>
-                    <h1 className="font-display text-xl sm:text-2xl font-bold text-[#0B0B0B] tracking-tight truncate">
-                      {selectedEvent.title}
-                    </h1>
-                    <p className="text-xs text-[#71717A] truncate">
-                      {formattedEventDate} · {selectedEvent.time} · {selectedEvent.venue}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={handleShare}
-                      className="min-h-[38px] px-3.5 py-1.5 rounded-full bg-[#F5F5F7] hover:bg-[#E8E8EA] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors"
-                    >
-                      <Share2 className="w-3.5 h-3.5" />
-                      <span>Copy Program Link</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => switchScreenMode('checkin')}
-                      className="min-h-[38px] px-4 py-1.5 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
-                    >
-                      <span>Validate &amp; Check-In</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </section>
-
                 <PublicProgramOutlineSection
                   id="standalone-program-outline"
                   event={selectedEvent}
                   programOutline={programOutline}
                   scheduleBlocks={scheduleBlocks}
-                  variant="invitation"
+                  variant="program"
+                  onValidateCheckIn={() => switchScreenMode('checkin')}
+                  onShareProgram={handleShare}
+                  onBackToInvitation={() => switchScreenMode('top')}
                 />
-
-                {!hasProgramOutlineContent && (
-                  <div className="bg-white rounded-[28px] p-8 text-center border border-[#E5E5EA] space-y-3">
-                    <p className="text-sm font-semibold text-[#0B0B0B]">
-                      Program outline sessions will appear here once published by the organiser.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => switchScreenMode('top')}
-                      className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold"
-                    >
-                      Back to Event Invitation
-                    </button>
-                  </div>
-                )}
               </div>
             ) : standalonePolls ? (
               <div className="space-y-5">
@@ -3394,8 +3350,17 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                       <p className="text-[11px] text-[#71717A] truncate font-mono">
                         Sent via Arkesel SMS to {issuedPass.phone}
                       </p>
-                      <div className="mt-1.5 px-2.5 py-1 bg-[#EEEEF0] rounded-lg text-[11px] font-mono text-[#0B0B0B] truncate">
-                        &ldquo;{selectedEvent.title}: Confirmed! Ticket {issuedPass.ticketCode}
+                      <div className="mt-1.5 px-2.5 py-1.5 bg-[#EEEEF0] rounded-lg text-[11px] font-mono text-[#0B0B0B] break-words">
+                        &ldquo;
+                        {
+                          resolveEventMessage({
+                            type: 'confirmation',
+                            event: selectedEvent,
+                            attendeeName: issuedPass.name,
+                            ticketCode: issuedPass.ticketCode,
+                            includeGuestInCameraUrl: true,
+                          }).text
+                        }
                         &rdquo;
                       </div>
                     </div>

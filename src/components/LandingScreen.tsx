@@ -1067,7 +1067,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                               </span>
                             </div>
                             <p className="font-mono text-xs text-[#0B0B0B] leading-relaxed bg-white p-3 rounded-xl border border-[#E5E5EA]">
-                              Hi {SHOWCASE_PREVIEW_ATTENDEES[0].name.split(' ')[0]}, your pass for{' '}
+                              Welcome and thank you for celebrating with us! Hi{' '}
+                              {SHOWCASE_PREVIEW_ATTENDEES[0].name.split(' ')[0]}, your pass for{' '}
                               {SHOWCASE_PREVIEW_EVENT.title} is confirmed. Show QR token{' '}
                               <span className="text-emerald-700 font-bold">
                                 {SHOWCASE_PREVIEW_ATTENDEES[0].ticketCode}
@@ -1148,7 +1149,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             <span className="text-[11px] font-mono text-[#71717A]">Just now</span>
                           </div>
                           <p className="text-xs text-[#1A1C1D] leading-relaxed">
-                            Hi {SHOWCASE_PREVIEW_ATTENDEES[0].name.split(' ')[0]}, your pass for{' '}
+                            Welcome and thank you for celebrating with us! Hi{' '}
+                            {SHOWCASE_PREVIEW_ATTENDEES[0].name.split(' ')[0]}, your pass for{' '}
                             {SHOWCASE_PREVIEW_EVENT.title} is confirmed. Show your QR token at check-in:{' '}
                             <strong className="font-mono bg-[#F5F5F7] px-1.5 py-0.5 rounded">
                               {SHOWCASE_PREVIEW_ATTENDEES[0].ticketCode}

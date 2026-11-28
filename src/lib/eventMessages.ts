@@ -27,6 +27,21 @@ export function calculateSmsCredits(message?: string): number {
   return Math.max(1, Math.ceil(clean.length / 160));
 }
 
+export const DEFAULT_CONFIRMATION_MESSAGE =
+  `Welcome and thank you for celebrating with us! Hi {name}, your pass for {event} ({code}) is confirmed for {date} at {venue}. Program Outline: {programLink} · Disposable camera (5 photos): {cameraLink}`;
+
+export const LEGACY_DEFAULT_CONFIRMATION_MESSAGES = [
+  `Hi {name}, your pass for {event} ({code}) is confirmed for {date} at {venue}. Program Outline: {programLink} · Disposable camera (5 photos): {cameraLink}`,
+  `Hi {name}, your pass for {event} ({code}) is confirmed for {date} at {venue}. Disposable camera (5 photos): {cameraLink}`,
+  `Hi {name}, your pass for {event} ({code}) is confirmed for {date} at {venue}.`,
+];
+
+export function isLegacyDefaultConfirmationMessage(message?: string | null): boolean {
+  const clean = (message || '').trim();
+  if (!clean) return false;
+  return LEGACY_DEFAULT_CONFIRMATION_MESSAGES.includes(clean);
+}
+
 export const DEFAULT_CHECKIN_MESSAGE =
   `You're checked in to {event}, {name}! Thank you for being a part of the celebration. Program Outline: {programLink} · Snap up to 5 photos on our disposable camera & turn them into a collage: {cameraLink}`;
 
@@ -43,11 +58,13 @@ export function isLegacyDefaultCheckInMessage(message?: string | null): boolean 
 }
 
 export function getDefaultMessageConfig(event?: Partial<EventItem>): Required<EventMessageConfig> {
+  const customConfirmation = event?.messageConfig?.confirmationMessage?.trim();
   const customCheckIn = event?.messageConfig?.checkInMessage?.trim();
   return {
     confirmationMessage:
-      event?.messageConfig?.confirmationMessage?.trim() ||
-      `Hi {name}, your pass for {event} ({code}) is confirmed for {date} at {venue}. Program Outline: {programLink} · Disposable camera (5 photos): {cameraLink}`,
+      customConfirmation && !isLegacyDefaultConfirmationMessage(customConfirmation)
+        ? customConfirmation
+        : DEFAULT_CONFIRMATION_MESSAGE,
     reminderMessage:
       event?.messageConfig?.reminderMessage?.trim() ||
       `Reminder: {event} starts {date} at {time} ({venue}). Present QR token {code} at the gate. Program Outline: {programLink} · Camera: {cameraLink}`,
@@ -124,7 +141,8 @@ export function resolveEventMessage(params: {
   const incomingTemplate = params.template?.trim();
   const rawTemplate =
     (incomingTemplate &&
-    !(params.type === 'checkin' && isLegacyDefaultCheckInMessage(incomingTemplate))
+    !(params.type === 'checkin' && isLegacyDefaultCheckInMessage(incomingTemplate)) &&
+    !(params.type === 'confirmation' && isLegacyDefaultConfirmationMessage(incomingTemplate))
       ? incomingTemplate
       : '') ||
     (params.type === 'checkin'

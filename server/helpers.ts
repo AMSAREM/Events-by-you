@@ -272,7 +272,7 @@ export async function dispatchOptionalArkeselSms(
         : undefined;
     const messageText =
       stripTrailingPoweredByLine(customMessage) ||
-      `${eventTitle}: Pass confirmed! Code: ${ticketCode}. Show this QR token at check-in.`;
+      `${eventTitle}: Welcome and thank you for celebrating with us! Pass confirmed! Code: ${ticketCode}. Show this QR token at check-in.`;
     const body: Record<string, unknown> = {
       sender: senderId,
       message: messageText,
