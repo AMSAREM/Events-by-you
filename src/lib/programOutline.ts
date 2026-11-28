@@ -1,8 +1,11 @@
 import type { EventItem, EventProgramOutline, ScheduleBlock } from '../types/events.ts';
 import {
+  getEventDayCount,
   getScheduleBlockDayFromIso,
+  getTodayIsoDate,
   resolveIsoDateForScheduleDay,
   sanitizeIsoDate,
+  sanitizeScheduleSection,
 } from './eventDates.ts';
 import { compressFlyerImageFile } from './flyerUpload.ts';
 
@@ -30,6 +33,7 @@ export interface ParsedProgramOutlineBlock {
   lead: string;
   day: ScheduleBlock['day'];
   date?: string;
+  section?: string;
 }
 
 export function inferProgramOutlineMimeType(
@@ -329,6 +333,7 @@ export function parseProgramOutlineTextToBlocks(
   eventContext?: Pick<EventItem, 'isoDate' | 'endIsoDate' | 'organizer' | 'venue'> | null
 ): ParsedProgramOutlineBlock[] {
   const lines = rawText
+    .replace(/^\uFEFF/, '')
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
@@ -356,6 +361,14 @@ export function parseProgramOutlineTextToBlocks(
     const idxDur = firstCols.findIndex((c) => c.includes('dur'));
     const idxDate = firstCols.findIndex((c) => c.includes('date'));
     const idxDay = firstCols.findIndex((c) => c === 'day');
+    const idxSection = firstCols.findIndex(
+      (c) =>
+        c.includes('section') ||
+        c.includes('segment') ||
+        c.includes('part') ||
+        c.includes('track') ||
+        c.includes('group')
+    );
 
     const blocks: ParsedProgramOutlineBlock[] = [];
     for (let r = 1; r < lines.length; r += 1) {
@@ -373,6 +386,7 @@ export function parseProgramOutlineTextToBlocks(
       const resolvedDay = resolvedDate
         ? getScheduleBlockDayFromIso(resolvedDate, eventContext ?? undefined, defaultDay)
         : defaultDay;
+      const section = idxSection >= 0 ? sanitizeScheduleSection(cols[idxSection]) : undefined;
       blocks.push({
         time: normalizeTimeExpression(cols[idxTime] || '09:00'),
         duration: (idxDur >= 0 ? cols[idxDur]?.trim() : '') || '45m',
@@ -381,6 +395,7 @@ export function parseProgramOutlineTextToBlocks(
         lead: (idxLead >= 0 ? cols[idxLead]?.trim() : '') || defaultLead,
         day: resolvedDay,
         ...(resolvedDate ? { date: resolvedDate } : {}),
+        ...(section ? { section } : {}),
       });
     }
     return blocks;
@@ -388,6 +403,7 @@ export function parseProgramOutlineTextToBlocks(
 
   let activeDay: ScheduleBlock['day'] = defaultDay;
   let activeDate: string | undefined = defaultDate;
+  let activeSection: string | undefined;
   const blocks: ParsedProgramOutlineBlock[] = [];
 
   for (const rawLine of lines) {
@@ -408,6 +424,7 @@ export function parseProgramOutlineTextToBlocks(
         (isoInLine ? sanitizeIsoDate(isoInLine[1]) : undefined) ||
         resolveIsoDateForScheduleDay(normalizedDayLabel, eventContext ?? undefined) ||
         activeDate;
+      activeSection = undefined;
       continue;
     }
 
@@ -420,7 +437,25 @@ export function parseProgramOutlineTextToBlocks(
       }
     }
 
-    // Pipe-delimited line: Time | Title | Stage | Lead
+    // Detect Program Section headings like "### Part 1: Arrival", "Section: Main Program", or "[Afternoon Session]"
+    const explicitSectionPrefixMatch = cleanedLine.match(/^(?:section|part|segment)\s*:\s*(.+)$/i);
+    const markdownSectionMatch = cleanedLine.match(/^#{2,6}\s+(.+)$/);
+    const bracketSectionMatch = cleanedLine.match(/^\[([^\]]{2,80})\]$/);
+    if (!timeInLine && !cleanedLine.includes('|')) {
+      const rawSectionCandidate =
+        explicitSectionPrefixMatch?.[1] ||
+        bracketSectionMatch?.[1] ||
+        (markdownSectionMatch && !/program outline import template/i.test(markdownSectionMatch[1])
+          ? markdownSectionMatch[1]
+          : undefined);
+      const parsedSection = sanitizeScheduleSection(rawSectionCandidate);
+      if (parsedSection && !/^Day\s*[1-7]\b/i.test(parsedSection)) {
+        activeSection = parsedSection;
+        continue;
+      }
+    }
+
+    // Pipe-delimited line: Time | Title | Stage | Lead | Optional Section
     if (cleanedLine.includes('|')) {
       const parts = cleanedLine.split('|').map((p) => p.trim()).filter(Boolean);
       if (parts.length >= 2) {
@@ -430,6 +465,7 @@ export function parseProgramOutlineTextToBlocks(
         const title = /\d/.test(parts[0]) ? parts[1] : parts[0];
         const stage = parts[2] || defaultStage;
         const lead = parts[3] || defaultLead;
+        const rowSection = sanitizeScheduleSection(parts[4]) ?? activeSection;
         if (title) {
           blocks.push({
             time: maybeTime,
@@ -439,6 +475,7 @@ export function parseProgramOutlineTextToBlocks(
             lead,
             day: activeDay,
             ...(activeDate ? { date: activeDate } : {}),
+            ...(rowSection ? { section: rowSection } : {}),
           });
           continue;
         }
@@ -477,6 +514,7 @@ export function parseProgramOutlineTextToBlocks(
         lead,
         day: activeDay,
         ...(activeDate ? { date: activeDate } : {}),
+        ...(activeSection ? { section: activeSection } : {}),
       });
       continue;
     }
@@ -487,6 +525,7 @@ export function parseProgramOutlineTextToBlocks(
       if (cols.length >= 2 && cols[1]) {
         const timeStr = /\d{1,2}/.test(cols[0]) ? normalizeTimeExpression(cols[0]) : '09:00';
         const title = /\d{1,2}/.test(cols[0]) ? cols[1] : cols[0];
+        const rowSection = sanitizeScheduleSection(cols[4]) ?? activeSection;
         blocks.push({
           time: timeStr,
           duration: '45m',
@@ -495,10 +534,213 @@ export function parseProgramOutlineTextToBlocks(
           lead: cols[3] || defaultLead,
           day: activeDay,
           ...(activeDate ? { date: activeDate } : {}),
+          ...(rowSection ? { section: rowSection } : {}),
         });
       }
     }
   }
 
   return blocks;
+}
+
+function escapeCsvCell(value: string): string {
+  const clean = value.replace(/\r?\n/g, ' ').trim();
+  if (/[",]/.test(clean)) {
+    return `"${clean.replace(/"/g, '""')}"`;
+  }
+  return clean;
+}
+
+export type ProgramOutlineTemplateFormat = 'csv' | 'txt' | 'md';
+
+function buildTemplateSampleRows(
+  eventContext?: Pick<EventItem, 'isoDate' | 'endIsoDate' | 'organizer' | 'venue'> | null
+): Array<{
+  day: ScheduleBlock['day'];
+  date: string;
+  section: string;
+  time: string;
+  duration: string;
+  title: string;
+  stage: string;
+  lead: string;
+}> {
+  const day1Iso = sanitizeIsoDate(eventContext?.isoDate) || getTodayIsoDate();
+  const stage = eventContext?.venue?.trim() || 'Main Auditorium';
+  const lead = eventContext?.organizer?.trim() || 'Program Lead';
+  const dayCount = getEventDayCount(eventContext);
+
+  const rows: Array<{
+    day: ScheduleBlock['day'];
+    date: string;
+    section: string;
+    time: string;
+    duration: string;
+    title: string;
+    stage: string;
+    lead: string;
+  }> = [
+    {
+      day: 'Day 1',
+      date: day1Iso,
+      section: 'Part 1 · Arrival & Welcome',
+      time: '09:00 - 09:30',
+      duration: '30m',
+      title: 'Guest Arrival & QR Check-In',
+      stage: `${stage} Atrium`,
+      lead: 'Hospitality Team',
+    },
+    {
+      day: 'Day 1',
+      date: day1Iso,
+      section: 'Part 1 · Arrival & Welcome',
+      time: '09:30 - 10:15',
+      duration: '45m',
+      title: 'Opening Welcome & Introductions',
+      stage,
+      lead,
+    },
+    {
+      day: 'Day 1',
+      date: day1Iso,
+      section: 'Part 2 · Main Program',
+      time: '10:15 - 11:15',
+      duration: '60m',
+      title: 'Main Session / Keynote Address',
+      stage,
+      lead: 'Keynote Speaker',
+    },
+    {
+      day: 'Day 1',
+      date: day1Iso,
+      section: 'Part 3 · Closing & Networking',
+      time: '11:30 - 12:30',
+      duration: '60m',
+      title: 'Closing Remarks & Networking',
+      stage,
+      lead,
+    },
+  ];
+
+  if (dayCount > 1) {
+    const day2Iso =
+      resolveIsoDateForScheduleDay('Day 2', eventContext ?? undefined) || day1Iso;
+    rows.push(
+      {
+        day: 'Day 2',
+        date: day2Iso,
+        section: 'Day 2 · Morning & Grand Finale',
+        time: '09:00 - 09:45',
+        duration: '45m',
+        title: 'Day 2 Morning Check-In & Recap',
+        stage,
+        lead,
+      },
+      {
+        day: 'Day 2',
+        date: day2Iso,
+        section: 'Day 2 · Morning & Grand Finale',
+        time: '10:00 - 11:30',
+        duration: '90m',
+        title: 'Grand Finale Session',
+        stage,
+        lead: 'Host Committee',
+      }
+    );
+  }
+
+  return rows;
+}
+
+export function buildProgramOutlineCsvTemplate(
+  eventContext?: Pick<EventItem, 'isoDate' | 'endIsoDate' | 'organizer' | 'venue'> | null
+): string {
+  const rows = buildTemplateSampleRows(eventContext);
+  const header = ['Day', 'Date', 'Section', 'Time', 'Duration', 'Title', 'Stage', 'Lead'].join(',');
+  const lines = rows.map((row) =>
+    [
+      escapeCsvCell(row.day),
+      escapeCsvCell(row.date),
+      escapeCsvCell(row.section),
+      escapeCsvCell(row.time),
+      escapeCsvCell(row.duration),
+      escapeCsvCell(row.title),
+      escapeCsvCell(row.stage),
+      escapeCsvCell(row.lead),
+    ].join(',')
+  );
+  return `${header}\n${lines.join('\n')}\n`;
+}
+
+export function buildProgramOutlineTextTemplate(
+  eventContext?: Pick<EventItem, 'isoDate' | 'endIsoDate' | 'organizer' | 'venue'> | null,
+  eventTitle?: string
+): string {
+  const rows = buildTemplateSampleRows(eventContext);
+  const cleanTitle = (eventTitle || 'Event').replace(/[|]/g, '-').trim();
+  const groupedByDay = new Map<string, typeof rows>();
+
+  for (const row of rows) {
+    const key = `${row.day} (${row.date})`;
+    const list = groupedByDay.get(key) ?? [];
+    list.push(row);
+    groupedByDay.set(key, list);
+  }
+
+  const sections: string[] = [`# ${cleanTitle} — Program Outline Import Template`];
+  for (const [dayLabel, dayRows] of groupedByDay.entries()) {
+    sections.push('');
+    sections.push(`## ${dayLabel}`);
+    let lastSection = '';
+    for (const row of dayRows) {
+      if (row.section && row.section !== lastSection) {
+        sections.push(`### ${row.section}`);
+        lastSection = row.section;
+      }
+      sections.push(`${row.time} | ${row.title} | ${row.stage} | ${row.lead}`);
+    }
+  }
+  sections.push('');
+  return sections.join('\n');
+}
+
+export function downloadProgramOutlineTemplate(
+  format: ProgramOutlineTemplateFormat = 'csv',
+  eventContext?: Pick<EventItem, 'isoDate' | 'endIsoDate' | 'organizer' | 'venue'> | null,
+  eventTitle?: string
+): { fileName: string } {
+  const slugBase = (eventTitle || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  const prefix = slugBase ? `${slugBase}-` : '';
+
+  const isCsv = format === 'csv';
+  const ext = isCsv ? 'csv' : format === 'md' ? 'md' : 'txt';
+  const fileName = `${prefix}program-outline-template.${ext}`;
+
+  const rawBody = isCsv
+    ? `\uFEFF${buildProgramOutlineCsvTemplate(eventContext)}`
+    : buildProgramOutlineTextTemplate(eventContext, eventTitle);
+
+  const mimeType = isCsv
+    ? 'text/csv;charset=utf-8;'
+    : format === 'md'
+      ? 'text/markdown;charset=utf-8;'
+      : 'text/plain;charset=utf-8;';
+
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    const blob = new Blob([rawBody], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  return { fileName };
 }

@@ -22,6 +22,7 @@ import {
   TimeRange,
 } from '../types/events';
 import { computeVelocitySeries, getCategoryPreset } from '../data/initialData';
+import { formatEventDateSpan } from '../lib/eventDates';
 import { compressFlyerImageFile } from '../lib/flyerUpload';
 import { CircularGauge, MonochromePoster, SplineChart } from './MonochromeArtwork';
 import { TopUtilityBar } from './TopUtilityBar';
@@ -231,7 +232,8 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-[#0B0B0B] shrink-0" />
                 <span className="truncate">
-                  Upcoming Banner · {featuredEvent.title} · {featuredEvent.date}
+                  Upcoming Banner · {featuredEvent.title} ·{' '}
+                  {formatEventDateSpan(featuredEvent.isoDate, featuredEvent.endIsoDate, featuredEvent.date)}
                 </span>
               </button>
             )}
@@ -463,7 +465,9 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                       {featuredEvent.status}
                     </span>
                     <span aria-hidden="true">·</span>
-                    <span className="tabular-nums">{featuredEvent.date}</span>
+                    <span className="tabular-nums">
+                      {formatEventDateSpan(featuredEvent.isoDate, featuredEvent.endIsoDate, featuredEvent.date)}
+                    </span>
                     <span aria-hidden="true">·</span>
                     <span className="tabular-nums">{featuredEvent.time}</span>
                   </div>
@@ -649,7 +653,9 @@ export const OverviewScreen: React.FC<OverviewScreenProps> = ({
                           <span aria-hidden="true">·</span>
                           <span className="capitalize">{evt.status}</span>
                           <span aria-hidden="true">·</span>
-                          <span className="tabular-nums">{evt.date}</span>
+                          <span className="tabular-nums">
+                            {formatEventDateSpan(evt.isoDate, evt.endIsoDate, evt.date)}
+                          </span>
                           <span aria-hidden="true">·</span>
                           <span>{evt.city}</span>
                           <span aria-hidden="true">·</span>

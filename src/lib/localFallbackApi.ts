@@ -28,6 +28,7 @@ import {
   sanitizeCheckedInDates,
   sanitizeCheckInPolicy,
   sanitizeIsoDate,
+  sanitizeScheduleSection,
 } from './eventDates';
 import { resolveAuthoritativeSmsBundle, validateReceiptReference } from './smsBundles';
 import { sanitizeEventLogoUrl, sanitizeProgramOutline } from './programOutline';
@@ -1956,9 +1957,7 @@ export async function localFallbackRequest<T>(
       isoDate: cleanStartIso,
       ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
       ...(cleanPolicy ? { checkInPolicy: cleanPolicy } : {}),
-      date: cleanEndIso
-        ? formatEventDateSpan(cleanStartIso, cleanEndIso, event.date)
-        : event.date,
+      date: formatEventDateSpan(cleanStartIso, cleanEndIso, event.date),
       capacity: getEffectiveEventCapacity(event.capacity, user.profile),
       extraDataConfig: {
         ...initialExtraDataConfig,
@@ -1977,12 +1976,14 @@ export async function localFallbackRequest<T>(
       const dayVal = b.day
         ? normalizeScheduleDay(b.day, 'Sat')
         : getScheduleBlockDayFromIso(cleanDate, dateContext, 'Sat');
+      const cleanSection = sanitizeScheduleSection(b.section);
       const blk: ScheduleBlock = {
         ...b,
         id: `sch-${Date.now().toString(36)}-${randomHex(2)}-${idx}`,
         eventId: uniqueEventId,
         day: dayVal,
         ...(cleanDate ? { date: cleanDate } : {}),
+        ...(cleanSection ? { section: cleanSection } : {}),
       };
       db.scheduleBlocks.push(blk);
       return blk;
@@ -2433,6 +2434,7 @@ export async function localFallbackRequest<T>(
         id: eventId,
         isoDate: nextStartIso,
         endIsoDate: nextEndIso,
+        date: formatEventDateSpan(nextStartIso, nextEndIso, patch.date || existing.date),
         checkInPolicy: nextPolicy,
         extraDataConfig: mergedExtra,
         capacity: getEffectiveEventCapacity(nextCapRaw, user.profile),
@@ -2697,12 +2699,15 @@ export async function localFallbackRequest<T>(
     const dayVal = incoming.day
       ? normalizeScheduleDay(incoming.day, 'Sat')
       : getScheduleBlockDayFromIso(cleanDate, evt, 'Sat');
+    const cleanSection = sanitizeScheduleSection(incoming.section);
     const blk: ScheduleBlock = {
       ...incoming,
       day: dayVal,
       ...(cleanDate ? { date: cleanDate } : { date: undefined }),
+      ...(cleanSection ? { section: cleanSection } : {}),
       id: (incoming.id as string) || `sch-${Date.now()}-${randomHex(2)}`,
     };
+    if (!cleanSection) delete blk.section;
     db.scheduleBlocks.push(blk);
     saveDb(db);
     return { block: blk } as T;
@@ -2760,6 +2765,14 @@ export async function localFallbackRequest<T>(
     }
     if (typeof patch.lead === 'string' && patch.lead.trim()) {
       blk.lead = patch.lead.trim();
+    }
+    if ('section' in patch) {
+      const cleanSec = sanitizeScheduleSection(patch.section);
+      if (cleanSec) {
+        blk.section = cleanSec;
+      } else {
+        delete blk.section;
+      }
     }
     if (typeof patch.completed === 'boolean') {
       blk.completed = patch.completed;

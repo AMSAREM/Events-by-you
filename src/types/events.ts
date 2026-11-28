@@ -70,6 +70,7 @@ export interface ScheduleBlock {
   lead: string;
   completed: boolean;
   date?: string; // Specific ISO calendar date YYYY-MM-DD
+  section?: string; // Optional program section / segment label
   day:
     | 'Mon'
     | 'Tue'

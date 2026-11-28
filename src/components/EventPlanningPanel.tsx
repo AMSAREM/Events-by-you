@@ -20,7 +20,12 @@ import {
   X,
 } from 'lucide-react';
 import { EVENT_CATEGORIES } from '../data/initialData';
-import { formatIsoDateShort, getEventDateSlots, sanitizeIsoDate } from '../lib/eventDates';
+import {
+  formatEventDateSpan,
+  formatIsoDateShort,
+  getEventDateSlots,
+  sanitizeIsoDate,
+} from '../lib/eventDates';
 import {
   computeEventReadiness,
   formatPlanningMoney,
@@ -649,7 +654,7 @@ export const EventPlanningPanel: React.FC<EventPlanningPanelProps> = ({
           <div className="flex flex-wrap items-center gap-2 text-xs text-[#71717A]">
             <span className="font-semibold text-[#0B0B0B]">{event.category}</span>
             <span aria-hidden="true">·</span>
-            <span>{event.date}</span>
+            <span>{formatEventDateSpan(event.isoDate, event.endIsoDate, event.date)}</span>
             <span aria-hidden="true">·</span>
             <span className="truncate">{event.venue}</span>
           </div>

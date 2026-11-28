@@ -112,6 +112,7 @@ import {
   sanitizeCheckedInDates,
   sanitizeCheckInPolicy,
   sanitizeIsoDate,
+  sanitizeScheduleSection,
 } from './src/lib/eventDates.ts';
 import {
   buildValidatedPollOptions,
@@ -1068,7 +1069,7 @@ function toLegacyScheduleDay(
 async function mergeEventScheduleDatesMeta(
   client: SupabaseClient,
   eventId: string,
-  updates: Record<string, { date?: string; day?: string } | null>
+  updates: Record<string, { date?: string | null; day?: string; section?: string | null } | null>
 ) {
   if (Object.keys(updates).length === 0) return;
   try {
@@ -1087,7 +1088,26 @@ async function mergeEventScheduleDatesMeta(
       if (val === null) {
         delete currentMap[blockId];
       } else {
-        currentMap[blockId] = { ...(currentMap[blockId] ?? {}), ...val };
+        const merged: { date?: string; day?: string; section?: string } = {
+          ...(currentMap[blockId] ?? {}),
+        };
+        if ('date' in val) {
+          if (val.date) merged.date = val.date;
+          else delete merged.date;
+        }
+        if ('day' in val && val.day) {
+          merged.day = val.day;
+        }
+        if ('section' in val) {
+          const cleanSec = sanitizeScheduleSection(val.section);
+          if (cleanSec) merged.section = cleanSec;
+          else delete merged.section;
+        }
+        if (merged.date || merged.day || merged.section) {
+          currentMap[blockId] = merged;
+        } else {
+          delete currentMap[blockId];
+        }
       }
     }
     currentExtra.__scheduleDates = currentMap;
@@ -1280,7 +1300,7 @@ async function loadOrganizerWorkspace(client: SupabaseClient, user: User) {
 
   const attendeeMetaByEvent = new Map<string, ReturnType<typeof extractEventAttendeeMetaMap>>();
   const shotShootersByEvent = new Map<string, Record<string, string>>();
-  const scheduleDatesByEvent = new Map<string, Record<string, { date?: string; day?: string }>>();
+  const scheduleDatesByEvent = new Map<string, Record<string, { date?: string; day?: string; section?: string }>>();
   const eventCategoryById = new Map<string, string>();
   const eventDateContextById = new Map<string, Pick<EventItem, 'isoDate' | 'endIsoDate'>>();
   for (const row of eventRows ?? []) {
@@ -2873,7 +2893,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         return res.status(500).json({ error: error.message, events: [], scheduleBlocks: [] });
       }
       const rows = data ?? [];
-      const scheduleDatesByEvent = new Map<string, Record<string, { date?: string; day?: string }>>();
+      const scheduleDatesByEvent = new Map<string, Record<string, { date?: string; day?: string; section?: string }>>();
       const events = rows.map((r) => {
         const rec = r as Record<string, unknown>;
         scheduleDatesByEvent.set(String(rec.id), extractEventScheduleDatesMap(rec.extra_data_config));
@@ -3496,7 +3516,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                 to: cleanEmail,
                 attendeeName: name.trim(),
                 eventTitle: event.title,
-                eventDate: event.date,
+                eventDate: formatEventDateSpan(event.isoDate, event.endIsoDate, event.date),
                 eventTime: event.time,
                 eventVenue: event.venue,
                 eventCity: event.city,
@@ -5453,9 +5473,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         }
       }
       const dateContext = { isoDate: cleanStartIso, endIsoDate: cleanEndIso };
-      const formattedDate = cleanEndIso
-        ? formatEventDateSpan(cleanStartIso, cleanEndIso, event.date)
-        : event.date;
+      const formattedDate = formatEventDateSpan(cleanStartIso, cleanEndIso, event.date);
 
       const starterPlanning = sanitizeEventPlanningConfig(
         event.extraDataConfig?.planningConfig ??
@@ -5534,7 +5552,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
 
       let createdBlocks: ScheduleBlock[] = [];
       if (blocks && blocks.length > 0) {
-        const metaMap: Record<string, { date?: string; day?: string }> = {};
+        const metaMap: Record<string, { date?: string; day?: string; section?: string }> = {};
         const blockRows = blocks.map((b, idx) => {
           const id = `sch-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}-${idx}`;
           const resolvedDate =
@@ -5543,8 +5561,13 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           const resolvedDay = resolvedDate
             ? getScheduleBlockDayFromIso(resolvedDate, dateContext, normalizeScheduleDay(b.day, 'Sat'))
             : normalizeScheduleDay(b.day, 'Sat');
-          if (resolvedDate || resolvedDay) {
-            metaMap[id] = { ...(resolvedDate ? { date: resolvedDate } : {}), day: resolvedDay };
+          const cleanSection = sanitizeScheduleSection(b.section);
+          if (resolvedDate || resolvedDay || cleanSection) {
+            metaMap[id] = {
+              ...(resolvedDate ? { date: resolvedDate } : {}),
+              day: resolvedDay,
+              ...(cleanSection ? { section: cleanSection } : {}),
+            };
           }
           return {
             id,
@@ -5557,6 +5580,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
             completed: b.completed,
             day: resolvedDay,
             ...(resolvedDate ? { date: resolvedDate } : {}),
+            ...(cleanSection ? { section: cleanSection } : {}),
           };
         });
         let { data: insertedBlocks, error: schErr } = await client
@@ -5564,7 +5588,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
           .insert(blockRows)
           .select('*');
         if (schErr && (isMissingColumnError(schErr) || isScheduleDayCheckError(schErr))) {
-          const legacyBlockRows = blockRows.map(({ date: blkDate, ...rest }) => ({
+          const legacyBlockRows = blockRows.map(({ date: blkDate, section: _sec, ...rest }) => ({
             ...rest,
             day: toLegacyScheduleDay(rest.day as ScheduleBlock['day'], blkDate),
           }));
@@ -5706,9 +5730,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         delete embeddedExtra.checkInPolicy;
       }
 
-      const formattedDate = cleanEndIso
-        ? formatEventDateSpan(cleanStartIso, cleanEndIso, updated.date || String(existingRec?.date || ''))
-        : updated.date;
+      const formattedDate = formatEventDateSpan(
+        cleanStartIso,
+        cleanEndIso,
+        updated.date || String(existingRec?.date || '')
+      );
 
       const updatePayload: Record<string, unknown> = {
         slug: updated.slug,
@@ -6582,7 +6608,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                 to: attendee.email.trim(),
                 attendeeName: attendee.name,
                 eventTitle: evtMapped.title,
-                eventDate: evtMapped.date,
+                eventDate: formatEventDateSpan(evtMapped.isoDate, evtMapped.endIsoDate, evtMapped.date),
                 eventVenue: evtMapped.venue,
                 eventCity: evtMapped.city,
                 ticketCode: attendee.ticketCode,
@@ -6602,7 +6628,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                 to: attendee.email.trim(),
                 attendeeName: attendee.name,
                 eventTitle: evtMapped.title,
-                eventDate: evtMapped.date,
+                eventDate: formatEventDateSpan(evtMapped.isoDate, evtMapped.endIsoDate, evtMapped.date),
                 eventTime: evtMapped.time,
                 eventVenue: evtMapped.venue,
                 eventCity: evtMapped.city,
@@ -6932,7 +6958,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                   to: mappedAttendee.email.trim(),
                   attendeeName: mappedAttendee.name,
                   eventTitle: evtMapped.title,
-                  eventDate: evtMapped.date,
+                  eventDate: formatEventDateSpan(evtMapped.isoDate, evtMapped.endIsoDate, evtMapped.date),
                   eventVenue: evtMapped.venue,
                   eventCity: evtMapped.city,
                   ticketCode: mappedAttendee.ticketCode,
@@ -7209,7 +7235,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                     to: att.email.trim(),
                     attendeeName: att.name,
                     eventTitle: evtMapped.title,
-                    eventDate: evtMapped.date,
+                    eventDate: formatEventDateSpan(evtMapped.isoDate, evtMapped.endIsoDate, evtMapped.date),
                     eventVenue: evtMapped.venue,
                     eventCity: evtMapped.city,
                     ticketCode: att.ticketCode,
@@ -7295,6 +7321,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       const resolvedDay = resolvedDate
         ? getScheduleBlockDayFromIso(resolvedDate, evtMapped, normalizeScheduleDay(block.day, 'Sat'))
         : normalizeScheduleDay(block.day, 'Sat');
+      const resolvedSection = sanitizeScheduleSection(block.section);
       const insertRow: Record<string, unknown> = {
         id: block.id,
         event_id: block.eventId,
@@ -7306,6 +7333,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         completed: Boolean(block.completed),
         day: resolvedDay,
         ...(resolvedDate ? { date: resolvedDate } : {}),
+        ...(resolvedSection ? { section: resolvedSection } : {}),
       };
 
       let { data, error } = await client
@@ -7314,11 +7342,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .select('*')
         .single();
       if (error && (isMissingColumnError(error) || isScheduleDayCheckError(error))) {
-        const { date: _d, ...withoutDate } = insertRow;
+        const { date: _d, section: _s, ...withoutExtraCols } = insertRow;
         const retry = await client
           .from('schedule_blocks')
           .insert({
-            ...withoutDate,
+            ...withoutExtraCols,
             day: toLegacyScheduleDay(resolvedDay, resolvedDate),
           })
           .select('*')
@@ -7331,6 +7359,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       const metaEntry = {
         ...(resolvedDate ? { date: resolvedDate } : {}),
         day: resolvedDay,
+        ...(resolvedSection ? { section: resolvedSection } : {}),
       };
       await mergeEventScheduleDatesMeta(client, block.eventId, {
         [String((data as Record<string, unknown>).id)]: metaEntry,
@@ -7393,6 +7422,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         nextDate = resolveScheduleBlockDate({ day: nextDay, date: undefined }, evtMapped) ?? currentMapped.date;
       }
 
+      const explicitSectionProvided = 'section' in patch;
+      const nextSection = explicitSectionProvided
+        ? sanitizeScheduleSection(patch.section)
+        : currentMapped.section;
+
       const updPayload: Record<string, unknown> = {
         ...(typeof patch.time === 'string' && patch.time.trim() ? { time: patch.time.trim() } : {}),
         ...(typeof patch.duration === 'string' && patch.duration.trim()
@@ -7402,6 +7436,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         ...(typeof patch.stage === 'string' && patch.stage.trim() ? { stage: patch.stage.trim() } : {}),
         ...(typeof patch.lead === 'string' && patch.lead.trim() ? { lead: patch.lead.trim() } : {}),
         ...(typeof patch.completed === 'boolean' ? { completed: patch.completed } : {}),
+        ...(explicitSectionProvided ? { section: nextSection ?? null } : {}),
         day: nextDay,
         date: nextDate ?? null,
       };
@@ -7413,11 +7448,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         .select('*')
         .single();
       if (updErr && (isMissingColumnError(updErr) || isScheduleDayCheckError(updErr))) {
-        const { date: _d, ...withoutDate } = updPayload;
+        const { date: _d, section: _s, ...withoutExtraCols } = updPayload;
         const retry = await client
           .from('schedule_blocks')
           .update({
-            ...withoutDate,
+            ...withoutExtraCols,
             day: toLegacyScheduleDay(nextDay, nextDate),
           })
           .eq('id', req.params.id)
@@ -7428,13 +7463,25 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       }
       if (updErr) return res.status(400).json({ error: updErr.message });
 
-      const metaEntry = nextDate || nextDay ? { ...(nextDate ? { date: nextDate } : {}), day: nextDay } : null;
+      const metaEntry = {
+        date: nextDate ?? null,
+        day: nextDay,
+        ...(explicitSectionProvided
+          ? { section: nextSection ?? null }
+          : nextSection
+            ? { section: nextSection }
+            : {}),
+      };
       await mergeEventScheduleDatesMeta(client, eventId, {
         [req.params.id]: metaEntry,
       });
 
       return res.json({
-        block: mapScheduleRow(updated as Record<string, unknown>, metaEntry ?? undefined),
+        block: mapScheduleRow(updated as Record<string, unknown>, {
+          ...(nextDate ? { date: nextDate } : {}),
+          day: nextDay,
+          ...(nextSection ? { section: nextSection } : {}),
+        }),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update schedule block.';

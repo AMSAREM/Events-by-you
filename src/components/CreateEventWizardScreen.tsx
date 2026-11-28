@@ -10,6 +10,7 @@ import {
   Copy,
   Gift,
   ImagePlus,
+  Layers,
   Link2,
   Lock,
   Mail,
@@ -42,8 +43,12 @@ import {
   getEventDayCount,
   getEventDayOptions,
   getScheduleBlockDayFromIso,
+  getScheduleSections,
+  getTodayIsoDate,
+  groupScheduleBlocksBySection,
   resolveIsoDateForScheduleDay,
   sanitizeIsoDate,
+  sanitizeScheduleSection,
 } from '../lib/eventDates';
 import {
   appendPoweredByLine,
@@ -112,9 +117,12 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const [addingTag, setAddingTag] = useState(false);
 
   const [venueFormat, setVenueFormat] = useState<'in-person' | 'virtual' | 'hybrid'>('in-person');
-  const [startIsoDate, setStartIsoDate] = useState('2026-12-18');
+  const [startIsoDate, setStartIsoDate] = useState(() => getTodayIsoDate());
   const [isMultiDay, setIsMultiDay] = useState(false);
-  const [endIsoDate, setEndIsoDate] = useState('2026-12-20');
+  const [endIsoDate, setEndIsoDate] = useState(() => {
+    const start = getTodayIsoDate();
+    return new Date(Date.parse(`${start}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+  });
   const [checkInPolicy, setCheckInPolicy] = useState<EventCheckInPolicy>('single-entry');
   const [policyTouched, setPolicyTouched] = useState(false);
   const [timeLabel, setTimeLabel] = useState('09:00 AM - 05:00 PM');
@@ -155,6 +163,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
       id: string;
       day: ScheduleBlock['day'];
       date?: string;
+      section?: string;
       time: string;
       title: string;
       lead: string;
@@ -162,9 +171,10 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     }[]
   >([]);
   const [newBlockDay, setNewBlockDay] = useState<ScheduleBlock['day']>('Day 1');
-  const [newBlockDate, setNewBlockDate] = useState<string>('2026-12-18');
+  const [newBlockDate, setNewBlockDate] = useState<string>(() => getTodayIsoDate());
   const [newBlockTime, setNewBlockTime] = useState('10:00 - 11:00');
   const [newBlockTitle, setNewBlockTitle] = useState('');
+  const [newBlockSection, setNewBlockSection] = useState('');
   const [newBlockLead, setNewBlockLead] = useState('');
   const [newBlockStage, setNewBlockStage] = useState('Workshop Lab');
   const [programOutline, setProgramOutline] = useState<EventProgramOutline | undefined>(undefined);
@@ -173,7 +183,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   );
 
   useEffect(() => {
-    const cleanStart = sanitizeIsoDate(startIsoDate) ?? '2026-12-18';
+    const cleanStart = sanitizeIsoDate(startIsoDate) ?? getTodayIsoDate();
     const cleanEnd =
       isMultiDay && sanitizeIsoDate(endIsoDate) && endIsoDate > cleanStart
         ? endIsoDate
@@ -272,7 +282,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const handleAddDraftBlock = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBlockTitle.trim()) return;
-    const cleanStart = sanitizeIsoDate(startIsoDate) ?? '2026-12-18';
+    const cleanStart = sanitizeIsoDate(startIsoDate) ?? getTodayIsoDate();
     const cleanEnd =
       isMultiDay && sanitizeIsoDate(endIsoDate) && endIsoDate > cleanStart
         ? endIsoDate
@@ -283,6 +293,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     const resolvedDay = cleanDate
       ? getScheduleBlockDayFromIso(cleanDate, dateCtx, newBlockDay)
       : newBlockDay;
+    const cleanSection = sanitizeScheduleSection(newBlockSection);
     setDraftBlocks((prev) =>
       [
         ...prev,
@@ -290,6 +301,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
           id: `wiz-blk-${Date.now()}`,
           day: resolvedDay,
           ...(cleanDate ? { date: cleanDate } : {}),
+          ...(cleanSection ? { section: cleanSection } : {}),
           time: newBlockTime.trim() || '14:00 - 15:00',
           title: newBlockTitle.trim(),
           lead: newBlockLead.trim() || profile.name,
@@ -302,7 +314,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   };
 
   const handleImportWizardOutlineBlocks = (parsedBlocks: ParsedProgramOutlineBlock[]) => {
-    const cleanStart = sanitizeIsoDate(startIsoDate) ?? '2026-12-18';
+    const cleanStart = sanitizeIsoDate(startIsoDate) ?? getTodayIsoDate();
     const cleanEnd =
       isMultiDay && sanitizeIsoDate(endIsoDate) && endIsoDate > cleanStart
         ? endIsoDate
@@ -313,6 +325,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
       id: `wiz-blk-${nowSeed}-${idx}`,
       day: pb.day,
       ...(pb.date ? { date: pb.date } : {}),
+      ...(pb.section ? { section: pb.section } : {}),
       time: pb.time,
       title: pb.title,
       lead: pb.lead || profile.name,
@@ -379,7 +392,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
         .filter(Boolean);
       const preset = getCategoryPreset(category || 'Events');
 
-      const cleanStartIso = sanitizeIsoDate(startIsoDate) ?? '2026-12-18';
+      const cleanStartIso = sanitizeIsoDate(startIsoDate) ?? getTodayIsoDate();
       const cleanEndIso =
         isMultiDay && sanitizeIsoDate(endIsoDate) && endIsoDate > cleanStartIso
           ? endIsoDate
@@ -477,6 +490,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
           completed: false,
           day: blk.day,
           ...(cleanBlkDate ? { date: cleanBlkDate } : {}),
+          ...(blk.section ? { section: blk.section } : {}),
         };
       });
 
@@ -491,7 +505,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     }
   };
 
-  const effectiveStartIso = sanitizeIsoDate(startIsoDate) ?? '2026-12-18';
+  const effectiveStartIso = sanitizeIsoDate(startIsoDate) ?? getTodayIsoDate();
   const effectiveEndIso =
     isMultiDay && sanitizeIsoDate(endIsoDate) && endIsoDate > effectiveStartIso
       ? endIsoDate
@@ -1308,152 +1322,193 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
             </>
           )}
 
-          {step === 2 && (
-            <section className="bg-[#F5F5F7] rounded-3xl p-6 sm:p-8 space-y-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="font-display text-xl font-bold text-[#0B0B0B]">
-                    Program &amp; Session Schedule
-                  </h2>
-                  <p className="text-xs text-[#71717A] mt-0.5">
-                    Sessions added here publish directly to your public registration timeline.
-                  </p>
-                </div>
-                <span className="px-3 py-1 rounded-full bg-white text-xs font-semibold text-[#0B0B0B] tabular-nums">
-                  {draftBlocks.length} blocks
-                </span>
-              </div>
-
-              <ProgramOutlineUploadCard
-                outline={programOutline}
-                eventTitle={title.trim() || 'New Production'}
-                eventContext={{
-                  isoDate: effectiveStartIso,
-                  endIsoDate: effectiveEndIso,
-                  organizer: profile.studio || profile.name,
-                  venue: venueFormat === 'virtual' ? 'Livestream Stage' : venue.trim() || 'Main Auditorium',
-                }}
-                logoUrl={logoUrl}
-                onLogoChange={(nextLogo) => setLogoUrl(nextLogo ?? undefined)}
-                onSaveOutline={(next) => setProgramOutline(next ?? undefined)}
-                onImportParsedBlocks={handleImportWizardOutlineBlocks}
-              />
-
-              <form onSubmit={handleAddDraftBlock} className="p-4 rounded-2xl bg-white grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <input
-                  type="text"
-                  required
-                  value={newBlockTitle}
-                  onChange={(e) => setNewBlockTitle(e.target.value)}
-                  placeholder="Session Title (e.g. Fireside Chat)"
-                  className="sm:col-span-2 h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none"
-                />
-                <div className="grid grid-cols-2 gap-2">
-                  <select
-                    value={newBlockDay}
-                    onChange={(e) => {
-                      const nextDay = e.target.value as ScheduleBlock['day'];
-                      setNewBlockDay(nextDay);
-                      const mappedDate = resolveIsoDateForScheduleDay(nextDay, {
-                        isoDate: effectiveStartIso,
-                        endIsoDate: effectiveEndIso,
-                      });
-                      if (mappedDate) setNewBlockDate(mappedDate);
-                    }}
-                    aria-label="Program day"
-                    className="h-10 px-3 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] focus:outline-none"
-                  >
-                    {wizardDayOptions.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="date"
-                    value={newBlockDate}
-                    min={wizardDateSlots.length > 0 ? wizardDateSlots[0].isoDate : undefined}
-                    onChange={(e) => {
-                      const clean = sanitizeIsoDate(e.target.value);
-                      setNewBlockDate(e.target.value);
-                      if (clean) {
-                        setNewBlockDay(
-                          getScheduleBlockDayFromIso(
-                            clean,
-                            { isoDate: effectiveStartIso, endIsoDate: effectiveEndIso },
-                            newBlockDay
-                          )
-                        );
-                      }
-                    }}
-                    aria-label="Specific calendar date"
-                    className="h-10 px-3 rounded-full bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B] focus:outline-none"
-                  />
-                </div>
-                <input
-                  type="text"
-                  value={newBlockTime}
-                  onChange={(e) => setNewBlockTime(e.target.value)}
-                  placeholder="13:00 - 14:15"
-                  className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B] focus:outline-none"
-                />
-                <input
-                  type="text"
-                  value={newBlockLead}
-                  onChange={(e) => setNewBlockLead(e.target.value)}
-                  placeholder="Speaker / Host"
-                  className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none"
-                />
-                <input
-                  type="text"
-                  value={newBlockStage}
-                  onChange={(e) => setNewBlockStage(e.target.value)}
-                  placeholder="Room / Stage"
-                  className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none"
-                />
-                <button
-                  type="submit"
-                  className="sm:col-span-2 h-10 px-5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
-                >
-                  + Add Program Block
-                </button>
-              </form>
-
-              <div className="space-y-2.5">
-                {draftBlocks.map((blk) => (
-                  <div
-                    key={blk.id}
-                    className="p-4 rounded-2xl bg-white flex items-center justify-between gap-3"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="px-2.5 py-1 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold shrink-0 whitespace-nowrap">
-                        {formatScheduleBlockDateBadge(blk, previewEventDraft)}
-                      </span>
-                      <span className="px-3 py-1 rounded-full bg-[#F5F5F7] font-mono text-xs font-semibold text-[#0B0B0B] tabular-nums shrink-0">
-                        {blk.time}
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-[#0B0B0B] truncate">{blk.title}</p>
-                        <p className="text-[11px] text-[#71717A] truncate">
-                          {blk.lead} · {blk.stage}
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDraftBlocks((prev) => prev.filter((item) => item.id !== blk.id))
-                      }
-                      aria-label="Remove program block"
-                      className="w-8 h-8 rounded-full bg-[#F5F5F7] hover:bg-[#EF4444]/10 hover:text-[#EF4444] flex items-center justify-center text-[#71717A] shrink-0"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+          {step === 2 && (() => {
+            const wizardSections = getScheduleSections(draftBlocks);
+            const wizardSectionGroups = groupScheduleBlocksBySection(draftBlocks, 'General Program');
+            const hasWizardSections =
+              wizardSectionGroups.length > 1 ||
+              (wizardSectionGroups.length === 1 && !wizardSectionGroups[0].isGeneral);
+            return (
+              <section className="bg-[#F5F5F7] rounded-3xl p-4 sm:p-8 space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h2 className="font-display text-lg sm:text-xl font-bold text-[#0B0B0B]">
+                      Program &amp; Session Schedule
+                    </h2>
+                    <p className="text-xs text-[#71717A] mt-0.5">
+                      Organize sessions by sections and days — publishes directly to your public invitation &amp; check-in pages.
+                    </p>
                   </div>
-                ))}
-              </div>
-            </section>
-          )}
+                  <span className="px-3 py-1 rounded-full bg-white text-xs font-semibold text-[#0B0B0B] tabular-nums">
+                    {draftBlocks.length} {draftBlocks.length === 1 ? 'block' : 'blocks'}
+                    {wizardSections.length > 0 ? ` · ${wizardSections.length} sections` : ''}
+                  </span>
+                </div>
+
+                <ProgramOutlineUploadCard
+                  outline={programOutline}
+                  eventTitle={title.trim() || 'New Production'}
+                  eventContext={{
+                    isoDate: effectiveStartIso,
+                    endIsoDate: effectiveEndIso,
+                    organizer: profile.studio || profile.name,
+                    venue: venueFormat === 'virtual' ? 'Livestream Stage' : venue.trim() || 'Main Auditorium',
+                  }}
+                  logoUrl={logoUrl}
+                  onLogoChange={(nextLogo) => setLogoUrl(nextLogo ?? undefined)}
+                  onSaveOutline={(next) => setProgramOutline(next ?? undefined)}
+                  onImportParsedBlocks={handleImportWizardOutlineBlocks}
+                />
+
+                <datalist id="wizard-program-sections">
+                  {wizardSections.map((sec) => (
+                    <option key={sec} value={sec} />
+                  ))}
+                </datalist>
+
+                <form onSubmit={handleAddDraftBlock} className="p-4 rounded-2xl bg-white grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <input
+                    type="text"
+                    required
+                    value={newBlockTitle}
+                    onChange={(e) => setNewBlockTitle(e.target.value)}
+                    placeholder="Session Title (e.g. Fireside Chat)"
+                    className="sm:col-span-2 h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    list="wizard-program-sections"
+                    value={newBlockSection}
+                    onChange={(e) => setNewBlockSection(e.target.value)}
+                    placeholder="Section / Segment (Optional, e.g. Part 1 · Welcome)"
+                    className="sm:col-span-2 h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none"
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <select
+                      value={newBlockDay}
+                      onChange={(e) => {
+                        const nextDay = e.target.value as ScheduleBlock['day'];
+                        setNewBlockDay(nextDay);
+                        const mappedDate = resolveIsoDateForScheduleDay(nextDay, {
+                          isoDate: effectiveStartIso,
+                          endIsoDate: effectiveEndIso,
+                        });
+                        if (mappedDate) setNewBlockDate(mappedDate);
+                      }}
+                      aria-label="Program day"
+                      className="h-10 px-3 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] focus:outline-none"
+                    >
+                      {wizardDayOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="date"
+                      value={newBlockDate}
+                      min={wizardDateSlots.length > 0 ? wizardDateSlots[0].isoDate : undefined}
+                      onChange={(e) => {
+                        const clean = sanitizeIsoDate(e.target.value);
+                        setNewBlockDate(e.target.value);
+                        if (clean) {
+                          setNewBlockDay(
+                            getScheduleBlockDayFromIso(
+                              clean,
+                              { isoDate: effectiveStartIso, endIsoDate: effectiveEndIso },
+                              newBlockDay
+                            )
+                          );
+                        }
+                      }}
+                      aria-label="Specific calendar date"
+                      className="h-10 px-3 rounded-full bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B] focus:outline-none"
+                    />
+                  </div>
+                  <input
+                    type="text"
+                    value={newBlockTime}
+                    onChange={(e) => setNewBlockTime(e.target.value)}
+                    placeholder="13:00 - 14:15"
+                    className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs font-mono text-[#0B0B0B] focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={newBlockLead}
+                    onChange={(e) => setNewBlockLead(e.target.value)}
+                    placeholder="Speaker / Host"
+                    className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={newBlockStage}
+                    onChange={(e) => setNewBlockStage(e.target.value)}
+                    placeholder="Room / Stage"
+                    className="h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    className="sm:col-span-2 h-10 px-5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors"
+                  >
+                    + Add Program Block
+                  </button>
+                </form>
+
+                {draftBlocks.length > 0 && (
+                  <div className="space-y-3">
+                    {wizardSectionGroups.map((group) => (
+                      <div key={group.section || '__general__'} className="space-y-1.5">
+                        {hasWizardSections && (
+                          <div className="flex items-center justify-between gap-2 px-1">
+                            <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-[#0B0B0B]">
+                              <Layers className="w-3.5 h-3.5 text-[#71717A]" />
+                              {group.section}
+                            </span>
+                            <span className="text-[11px] font-semibold text-[#71717A] tabular-nums">
+                              {group.blocks.length}
+                            </span>
+                          </div>
+                        )}
+                        <div className="rounded-2xl bg-white border border-[#E5E5EA] divide-y divide-[#E5E5EA] overflow-hidden">
+                          {group.blocks.map((blk) => (
+                            <div
+                              key={blk.id}
+                              className="p-3.5 sm:p-4 flex items-start sm:items-center justify-between gap-3"
+                            >
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#71717A] tabular-nums">
+                                  <span className="font-mono text-xs font-semibold text-[#0B0B0B]">
+                                    {blk.time}
+                                  </span>
+                                  <span>· {formatScheduleBlockDateBadge(blk, previewEventDraft)}</span>
+                                </div>
+                                <p className="text-sm font-semibold text-[#0B0B0B] break-words leading-snug">
+                                  {blk.title}
+                                </p>
+                                <p className="text-[11px] text-[#71717A] break-words">
+                                  {blk.lead} · {blk.stage}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDraftBlocks((prev) => prev.filter((item) => item.id !== blk.id))
+                                }
+                                aria-label="Remove program block"
+                                className="w-9 h-9 rounded-full bg-[#F5F5F7] hover:bg-[#EF4444]/10 hover:text-[#EF4444] flex items-center justify-center text-[#71717A] shrink-0"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            );
+          })()}
 
           {step === 3 && (
             <section className="bg-[#F5F5F7] rounded-3xl p-6 sm:p-8 space-y-5">

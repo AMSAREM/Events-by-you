@@ -39,17 +39,17 @@ export const ProgramOutlinePreviewModal: React.FC<ProgramOutlinePreviewModalProp
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-label={`Preview ${displayTitle}`}
     >
       <div
-        className="w-full max-w-3xl max-h-[90vh] bg-white rounded-[28px] shadow-2xl overflow-hidden flex flex-col"
+        className="w-full max-w-3xl max-h-[94dvh] bg-white rounded-[24px] sm:rounded-[28px] shadow-2xl overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-5 py-4 border-b border-[#E5E5EA] flex items-center justify-between gap-3">
+        <div className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-[#E5E5EA] flex items-center justify-between gap-2.5">
           <div className="min-w-0">
             <h3 className="text-sm sm:text-base font-bold text-[#0B0B0B] truncate">
               {displayTitle}
@@ -63,7 +63,7 @@ export const ProgramOutlinePreviewModal: React.FC<ProgramOutlinePreviewModalProp
             <a
               href={outline.dataUrl}
               download={outline.fileName}
-              className="px-3.5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 inline-flex items-center gap-1.5 transition-colors"
+              className="min-h-[40px] px-3.5 py-2 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 inline-flex items-center gap-1.5 transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
               <span>Download</span>
@@ -72,7 +72,7 @@ export const ProgramOutlinePreviewModal: React.FC<ProgramOutlinePreviewModalProp
               type="button"
               onClick={onClose}
               aria-label="Close outline preview"
-              className="w-8 h-8 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] flex items-center justify-center text-[#0B0B0B] transition-colors"
+              className="w-10 h-10 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] flex items-center justify-center text-[#0B0B0B] transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
@@ -159,8 +159,8 @@ export const PublicProgramOutlineCard: React.FC<PublicProgramOutlineCardProps> =
   return (
     <>
       <div
-        className={`bg-white rounded-[24px] shadow-sm border border-[#E5E5EA]/70 ${
-          compact ? 'p-3.5' : 'p-4 sm:p-5'
+        className={`bg-[#F5F5F7] rounded-2xl border border-[#E5E5EA]/80 ${
+          compact ? 'p-3.5' : 'p-4'
         }`}
       >
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -169,7 +169,7 @@ export const PublicProgramOutlineCard: React.FC<PublicProgramOutlineCardProps> =
               <button
                 type="button"
                 onClick={() => setPreviewOpen(true)}
-                className="w-12 h-12 rounded-2xl overflow-hidden bg-[#F5F5F7] shrink-0 border border-[#E5E5EA] hover:opacity-90 transition-opacity"
+                className="w-11 h-11 rounded-xl overflow-hidden bg-white shrink-0 border border-[#E5E5EA] hover:opacity-90 transition-opacity"
                 aria-label={`Preview ${displayTitle}`}
               >
                 <img
@@ -179,7 +179,7 @@ export const PublicProgramOutlineCard: React.FC<PublicProgramOutlineCardProps> =
                 />
               </button>
             ) : (
-              <div className="w-12 h-12 rounded-2xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
+              <div className="w-11 h-11 rounded-xl bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
                 {isCsv ? (
                   <FileSpreadsheet className="w-5 h-5" />
                 ) : isImage ? (
@@ -195,11 +195,11 @@ export const PublicProgramOutlineCard: React.FC<PublicProgramOutlineCardProps> =
                 <p className="text-sm font-semibold text-[#0B0B0B] truncate">
                   {displayTitle}
                 </p>
-                <span className="px-2 py-0.5 rounded-full bg-[#F5F5F7] text-[10px] font-semibold text-[#444748] shrink-0">
+                <span className="text-[11px] font-medium text-[#52525B] shrink-0">
                   {getProgramOutlineKindLabel(outline.mimeType)}
                 </span>
               </div>
-              <p className="text-[11px] text-[#71717A] truncate mt-0.5">
+              <p className="text-[11px] text-[#71717A] truncate mt-0.5 tabular-nums">
                 {outline.fileName} · {formatFileSizeCompact(outline.sizeBytes)}
               </p>
               {outline.notes && (
@@ -208,11 +208,11 @@ export const PublicProgramOutlineCard: React.FC<PublicProgramOutlineCardProps> =
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="grid grid-cols-2 sm:flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={() => setPreviewOpen(true)}
-              className="px-3.5 py-2 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+              className="min-h-[40px] px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors"
             >
               <Eye className="w-3.5 h-3.5" />
               <span>View</span>
@@ -220,7 +220,7 @@ export const PublicProgramOutlineCard: React.FC<PublicProgramOutlineCardProps> =
             <a
               href={outline.dataUrl}
               download={outline.fileName}
-              className="px-3.5 py-2 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+              className="min-h-[40px] px-3.5 py-2 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
               <span>Download</span>

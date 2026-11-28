@@ -47,21 +47,15 @@ import {
 import { getCategoryPreset, normalizePhoneE164 } from '../data/initialData';
 import { api } from '../lib/api';
 import {
-  ALL_SCHEDULE_DAYS,
   buildEventIcsContent,
-  compareScheduleBlocksChronological,
   formatEventDateSpan,
   formatEventDurationBadge,
-  formatIsoDateShort,
-  formatScheduleBlockDateBadge,
   getEventCheckInPolicy,
-  getEventDateSlots,
-  resolveScheduleBlockDate,
 } from '../lib/eventDates';
 import { useDocumentFullscreen } from '../lib/fullscreen';
 import { isPollsEnabledForEvent } from '../lib/polls';
 import { sanitizeProgramOutline } from '../lib/programOutline';
-import { PublicProgramOutlineCard } from './ProgramOutlineViewer';
+import { PublicProgramOutlineSection } from './PublicProgramOutlineSection';
 import {
   buildEventInvitationUrl,
   buildEventOgImageUrl,
@@ -310,47 +304,15 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     : '';
   const eventDurationBadge = formatEventDurationBadge(selectedEvent);
   const eventCheckInPolicy = getEventCheckInPolicy(selectedEvent);
-  const [scheduleDayFilter, setScheduleDayFilter] = useState<'all' | ScheduleBlock['day']>('all');
-  const [scheduleDateFilter, setScheduleDateFilter] = useState<'all' | string>('all');
   const eventScheduleBlocks = useMemo(
     () =>
       selectedEvent
-        ? scheduleBlocks
-            .filter((b) => b.eventId === selectedEvent.id)
-            .sort((a, b) => compareScheduleBlocksChronological(a, b, selectedEvent))
+        ? scheduleBlocks.filter((b) => b.eventId === selectedEvent.id)
         : [],
     [scheduleBlocks, selectedEvent]
   );
-  const scheduleDateTabs = useMemo(() => {
-    if (!selectedEvent) return [];
-    const map = new Map<string, string>();
-    for (const slot of getEventDateSlots(selectedEvent)) {
-      map.set(slot.isoDate, slot.fullLabel);
-    }
-    for (const blk of eventScheduleBlocks) {
-      const resolved = resolveScheduleBlockDate(blk, selectedEvent);
-      if (resolved && !map.has(resolved)) {
-        map.set(resolved, formatIsoDateShort(resolved, true));
-      }
-    }
-    return Array.from(map.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([isoDate, label]) => ({ isoDate, label }));
-  }, [eventScheduleBlocks, selectedEvent]);
-  const distinctScheduleDays = useMemo(() => {
-    const present = new Set(eventScheduleBlocks.map((b) => b.day));
-    return ALL_SCHEDULE_DAYS.filter((d) => present.has(d));
-  }, [eventScheduleBlocks]);
-  const filteredScheduleBlocks = useMemo(
-    () =>
-      eventScheduleBlocks.filter((b) => {
-        if (scheduleDateFilter !== 'all') {
-          return resolveScheduleBlockDate(b, selectedEvent) === scheduleDateFilter;
-        }
-        return scheduleDayFilter === 'all' || b.day === scheduleDayFilter;
-      }),
-    [eventScheduleBlocks, scheduleDayFilter, scheduleDateFilter, selectedEvent]
-  );
+  const hasProgramOutlineContent =
+    eventScheduleBlocks.length > 0 || Boolean(programOutline);
 
   const [name, setName] = useState('');
   const [countryPrefix, setCountryPrefix] = useState('+233');
@@ -415,8 +377,6 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
     setCustomResponses({});
     setDuplicateError(null);
     setLookupError(null);
-    setScheduleDayFilter('all');
-    setScheduleDateFilter('all');
   }, [selectedEvent?.id, selectedEvent?.flyerUrl, validationConfig.enabled, validationConfig.options]);
 
   const normalizedPhone = useMemo(() => {
@@ -2537,20 +2497,48 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                             </>
                           )}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setShowCheckinModal(true)}
-                          className="min-h-[38px] px-3.5 py-1.5 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
-                        >
-                          <QrCode className="w-3.5 h-3.5" />
-                          <span>Gate QR Display</span>
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          {hasProgramOutlineContent && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                document
+                                  .getElementById('checkin-program-outline')
+                                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              }}
+                              className="min-h-[38px] px-3 py-1.5 rounded-full bg-white/85 hover:bg-white text-[#0B0B0B] border border-black/15 text-xs font-semibold inline-flex items-center gap-1 transition-colors whitespace-nowrap"
+                            >
+                              <Calendar className="w-3.5 h-3.5" />
+                              <span>Program Outline ↓</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setShowCheckinModal(true)}
+                            className="min-h-[38px] px-3.5 py-1.5 rounded-full bg-[#0B0B0B] hover:bg-neutral-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                          >
+                            <QrCode className="w-3.5 h-3.5" />
+                            <span>Gate QR Display</span>
+                          </button>
+                        </div>
                       </div>
 
                       {registerSectionCard}
                     </div>
                   </div>
                 </div>
+
+                {hasProgramOutlineContent && (
+                  <div className="w-full max-w-5xl mx-auto">
+                    <PublicProgramOutlineSection
+                      id="checkin-program-outline"
+                      event={selectedEvent}
+                      programOutline={programOutline}
+                      scheduleBlocks={scheduleBlocks}
+                      variant="checkin"
+                    />
+                  </div>
+                )}
               </div>
             ) : (
             <>
@@ -2968,134 +2956,13 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               )}
 
               {/* Program Schedule Blocks & Uploaded Outline */}
-              {(eventScheduleBlocks.length > 0 || Boolean(programOutline)) && (
-                <section className="space-y-2.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-                    <h3 className="text-base font-semibold text-[#0B0B0B]">
-                      Event Schedule &amp; Run of Show
-                    </h3>
-                    <span className="text-[11px] font-medium text-[#71717A]">
-                      {eventScheduleBlocks.length > 0
-                        ? `${filteredScheduleBlocks.length} Sessions`
-                        : 'Official Program Outline'}
-                    </span>
-                  </div>
-
-                  {programOutline && (
-                    <PublicProgramOutlineCard
-                      outline={programOutline}
-                      eventTitle={selectedEvent.title}
-                    />
-                  )}
-
-                  {eventScheduleBlocks.length > 0 && (scheduleDateTabs.length > 1 ? (
-                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setScheduleDateFilter('all');
-                          setScheduleDayFilter('all');
-                        }}
-                        className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                          scheduleDateFilter === 'all'
-                            ? 'bg-[#0B0B0B] text-white'
-                            : 'bg-white text-[#71717A] border border-[#E5E5EA] hover:text-[#0B0B0B]'
-                        }`}
-                      >
-                        All Dates
-                      </button>
-                      {scheduleDateTabs.map((tab) => (
-                        <button
-                          key={tab.isoDate}
-                          type="button"
-                          onClick={() => {
-                            setScheduleDateFilter(tab.isoDate);
-                            setScheduleDayFilter('all');
-                          }}
-                          className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                            scheduleDateFilter === tab.isoDate
-                              ? 'bg-[#0B0B0B] text-white'
-                              : 'bg-white text-[#71717A] border border-[#E5E5EA] hover:text-[#0B0B0B]'
-                          }`}
-                        >
-                          {tab.label}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    distinctScheduleDays.length > 1 && (
-                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-                        <button
-                          type="button"
-                          onClick={() => setScheduleDayFilter('all')}
-                          className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                            scheduleDayFilter === 'all'
-                              ? 'bg-[#0B0B0B] text-white'
-                              : 'bg-white text-[#71717A] border border-[#E5E5EA] hover:text-[#0B0B0B]'
-                          }`}
-                        >
-                          All Days
-                        </button>
-                        {distinctScheduleDays.map((day) => (
-                          <button
-                            key={day}
-                            type="button"
-                            onClick={() => setScheduleDayFilter(day)}
-                            className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                              scheduleDayFilter === day
-                                ? 'bg-[#0B0B0B] text-white'
-                                : 'bg-white text-[#71717A] border border-[#E5E5EA] hover:text-[#0B0B0B]'
-                            }`}
-                          >
-                            {day}
-                          </button>
-                        ))}
-                      </div>
-                    )
-                  ))}
-
-                  {scheduleDateFilter !== 'all' &&
-                    extraDataConfig.planningConfig?.dayScheduleNotes?.[scheduleDateFilter] && (
-                      <div className="px-4 py-2.5 rounded-2xl bg-white border border-[#E5E5EA] text-xs text-[#444748]">
-                        <span className="font-semibold text-[#0B0B0B]">
-                          {formatIsoDateShort(scheduleDateFilter, true)} Note:{' '}
-                        </span>
-                        {extraDataConfig.planningConfig.dayScheduleNotes[scheduleDateFilter]}
-                      </div>
-                    )}
-
-                  {filteredScheduleBlocks.map((blk) => (
-                    <div
-                      key={blk.id}
-                      className="bg-white rounded-[24px] p-4 shadow-sm flex items-center gap-4"
-                    >
-                      <div className="w-14 h-14 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center font-bold text-[11px] shrink-0 text-center px-1 tabular-nums">
-                        {blk.time.split('-')[0]?.trim() || blk.time}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <h4 className="text-base font-semibold text-[#0B0B0B] truncate">
-                            {blk.title}
-                          </h4>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <span className="text-[10px] font-semibold bg-[#0B0B0B] text-white px-2.5 py-0.5 rounded-full whitespace-nowrap">
-                              {formatScheduleBlockDateBadge(blk, selectedEvent)}
-                            </span>
-                            <span className="text-[11px] font-medium bg-[#F3F3F5] text-[#71717A] px-2.5 py-0.5 rounded-full tabular-nums">
-                              {blk.time}
-                            </span>
-                          </div>
-                        </div>
-                        <p className="text-[11px] text-[#71717A] uppercase tracking-wider truncate mt-0.5">
-                          {blk.lead}
-                        </p>
-                        <p className="text-[13px] text-[#444748] mt-0.5 truncate font-medium">
-                          {blk.stage}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </section>
+              {hasProgramOutlineContent && (
+                <PublicProgramOutlineSection
+                  event={selectedEvent}
+                  programOutline={programOutline}
+                  scheduleBlocks={scheduleBlocks}
+                  variant="invitation"
+                />
               )}
 
               {/* Venue Location Preview (Architectural Card — no external broken URLs) */}
@@ -3449,49 +3316,14 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
               </div>
 
               {/* Event Program Preview & Uploaded Outline */}
-              {(eventScheduleBlocks.length > 0 || Boolean(programOutline)) && (
-                <div className="bg-white rounded-[28px] p-5 mb-6 shadow-sm space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-base font-semibold text-[#0B0B0B]">
-                      {selectedEvent.category} Program &amp; Schedule
-                    </h3>
-                    <span className="text-[11px] text-[#71717A]">Local Event Time</span>
-                  </div>
-                  {programOutline && (
-                    <PublicProgramOutlineCard
-                      compact
-                      outline={programOutline}
-                      eventTitle={selectedEvent.title}
-                    />
-                  )}
-                  {eventScheduleBlocks.length > 0 && (
-                    <div className="space-y-2.5">
-                      {eventScheduleBlocks.map((item, idx) => (
-                        <div
-                          key={item.id}
-                          className="flex items-start gap-3 p-3 bg-[#F5F5F7] rounded-2xl"
-                        >
-                          <div
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium shrink-0 tabular-nums ${
-                              idx === 0
-                                ? 'bg-[#0B0B0B] text-white'
-                                : 'bg-[#E8E8EA] text-[#0B0B0B]'
-                            }`}
-                          >
-                            {item.time}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[13px] font-semibold text-[#0B0B0B] truncate">
-                              {item.title}
-                            </p>
-                            <p className="text-[11px] text-[#71717A]">
-                              {item.stage} · {item.lead}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+              {hasProgramOutlineContent && (
+                <div className="mb-6">
+                  <PublicProgramOutlineSection
+                    event={selectedEvent}
+                    programOutline={programOutline}
+                    scheduleBlocks={scheduleBlocks}
+                    variant="pass"
+                  />
                 </div>
               )}
 

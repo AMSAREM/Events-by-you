@@ -50,6 +50,7 @@ import type {
   WebhookTriggerEvent,
 } from '../types/events';
 import { api } from '../lib/api';
+import { formatEventDateSpan } from '../lib/eventDates';
 import { formatPlanAttendeeCapacityLabel, getPlanEntitlements } from '../lib/subscriptionPlans';
 import { TopUtilityBar } from './TopUtilityBar';
 
@@ -3160,7 +3161,8 @@ const { attendee, event } = await response.json();`;
                     >
                       <p className="font-semibold text-[#0B0B0B]">{evt.title}</p>
                       <p className="text-[#71717A]">
-                        {evt.date} · {evt.venue}, {evt.city}
+                        {formatEventDateSpan(evt.isoDate, evt.endIsoDate, evt.date)} · {evt.venue},{' '}
+                        {evt.city}
                       </p>
                       <p className="font-mono text-[#0B0B0B] tabular-nums">
                         {evt.registered} / {evt.capacity} registered · {evt.checkedIn} checked in

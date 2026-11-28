@@ -34,6 +34,7 @@ import {
   formatEventDurationBadge,
   formatScheduleBlockDateBadge,
   getEventCheckInPolicy,
+  getTodayIsoDate,
   isMultiDayEvent,
   sanitizeIsoDate,
 } from '../lib/eventDates';
@@ -90,9 +91,12 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const [title, setTitle] = useState('');
   const [subtitle, setSubtitle] = useState('');
   const [category, setCategory] = useState('Events');
-  const [date, setDate] = useState('2026-12-18');
+  const [date, setDate] = useState(() => getTodayIsoDate());
   const [isMultiDay, setIsMultiDay] = useState(false);
-  const [endDate, setEndDate] = useState('2026-12-20');
+  const [endDate, setEndDate] = useState(() => {
+    const start = getTodayIsoDate();
+    return new Date(Date.parse(`${start}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+  });
   const [checkInPolicy, setCheckInPolicy] = useState<EventCheckInPolicy>('single-entry');
   const [policyTouched, setPolicyTouched] = useState(false);
   const [time, setTime] = useState('09:00 GMT');
@@ -112,7 +116,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({
   const [modalError, setModalError] = useState<string | null>(null);
   const createFlyerInputRef = useRef<HTMLInputElement | null>(null);
 
-  const cleanStartIso = sanitizeIsoDate(date) ?? '2026-12-18';
+  const cleanStartIso = sanitizeIsoDate(date) ?? getTodayIsoDate();
   const cleanEndIso =
     isMultiDay && sanitizeIsoDate(endDate) && endDate > cleanStartIso ? endDate : undefined;
   const formattedSpanPreview = formatEventDateSpan(cleanStartIso, cleanEndIso);
@@ -628,10 +632,12 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     otherActiveCount >= entitlements.maxActiveEvents;
 
   const [capacityDraft, setCapacityDraft] = useState(event.capacity);
-  const [startIsoDraft, setStartIsoDraft] = useState(sanitizeIsoDate(event.isoDate) ?? '2026-12-18');
+  const [startIsoDraft, setStartIsoDraft] = useState(
+    () => sanitizeIsoDate(event.isoDate) ?? getTodayIsoDate()
+  );
   const [multiDayDraft, setMultiDayDraft] = useState(() => isMultiDayEvent(event));
   const [endIsoDraft, setEndIsoDraft] = useState(() => {
-    const start = sanitizeIsoDate(event.isoDate) ?? '2026-12-18';
+    const start = sanitizeIsoDate(event.isoDate) ?? getTodayIsoDate();
     const existingEnd = sanitizeIsoDate(event.endIsoDate);
     if (existingEnd && existingEnd > start) return existingEnd;
     return new Date(Date.parse(`${start}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
@@ -671,7 +677,7 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     setDesignDraft(event.designTheme ?? preset.designTheme);
     setBrandColorDraft(event.brandColor ?? event.extraDataConfig?.brandColor);
     setCapacityDraft(event.capacity);
-    const nextStart = sanitizeIsoDate(event.isoDate) ?? '2026-12-18';
+    const nextStart = sanitizeIsoDate(event.isoDate) ?? getTodayIsoDate();
     setStartIsoDraft(nextStart);
     setMultiDayDraft(isMultiDayEvent(event));
     const existingEnd = sanitizeIsoDate(event.endIsoDate);
@@ -765,7 +771,7 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
         await navigator.share({
           title: event.title,
           text: appendPoweredByLine(
-            `${event.title} · ${event.date} at ${event.venue}. Register, view program schedule & get your QR pass:${scheduleSnippet}`
+            `${event.title} · ${formattedEventDate} at ${event.venue}. Register, view program schedule & get your QR pass:${scheduleSnippet}`
           ),
           url: inviteUrl,
         });
@@ -811,7 +817,8 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
     const parsedOptions = validationDraft.options
       .map((s) => s.trim())
       .filter(Boolean);
-    const nextStart = sanitizeIsoDate(startIsoDraft) ?? sanitizeIsoDate(event.isoDate) ?? '2026-12-18';
+    const nextStart =
+      sanitizeIsoDate(startIsoDraft) ?? sanitizeIsoDate(event.isoDate) ?? getTodayIsoDate();
     const nextEnd =
       multiDayDraft && sanitizeIsoDate(endIsoDraft) && endIsoDraft > nextStart
         ? endIsoDraft

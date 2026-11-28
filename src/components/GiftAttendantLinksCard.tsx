@@ -15,6 +15,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { EventItem, GiftTableAttendantLink } from '../types/events';
+import { formatEventDateSpan } from '../lib/eventDates';
 import { buildGiftDeskUrl, DeterministicQrSvg, downloadQrSvg } from '../lib/qr';
 
 interface GiftAttendantLinksCardProps {
@@ -122,7 +123,8 @@ export const GiftAttendantLinksCard: React.FC<GiftAttendantLinksCardProps> = ({
   };
 
   const buildWhatsAppHref = (link: GiftTableAttendantLink, deskUrl: string) => {
-    const text = `Hello ${link.attendantName}, you have been appointed to man the Gift Table for ${event.title} (${event.date}). Open your dedicated Gift Desk link to record gifts, cash envelopes & MoMo receipts: ${deskUrl}`;
+    const formattedDate = formatEventDateSpan(event.isoDate, event.endIsoDate, event.date);
+    const text = `Hello ${link.attendantName}, you have been appointed to man the Gift Table for ${event.title} (${formattedDate}). Open your dedicated Gift Desk link to record gifts, cash envelopes & MoMo receipts: ${deskUrl}`;
     const digits = (link.phone || '').replace(/\D/g, '');
     return digits
       ? `https://wa.me/${digits}?text=${encodeURIComponent(text)}`

@@ -1,4 +1,5 @@
 import type { EventItem, EventMessageConfig } from '../types/events.ts';
+import { formatEventDateSpan } from './eventDates.ts';
 
 export const MAX_SHOTS_PER_USER = 5;
 export const POWERED_BY_LINE = 'powered by eventsbyyou.xyz';
@@ -111,7 +112,8 @@ export function buildCameraLinkForOrigin(
 export function resolveEventMessage(params: {
   template?: string;
   type: 'confirmation' | 'reminder' | 'checkin' | 'thankyou';
-  event: Pick<EventItem, 'id' | 'slug' | 'title' | 'date' | 'time' | 'venue' | 'city' | 'messageConfig'>;
+  event: Pick<EventItem, 'id' | 'slug' | 'title' | 'date' | 'time' | 'venue' | 'city' | 'messageConfig'> &
+    Partial<Pick<EventItem, 'isoDate' | 'endIsoDate'>>;
   attendeeName?: string;
   ticketCode?: string;
   originOverride?: string;
@@ -154,10 +156,16 @@ export function resolveEventMessage(params: {
   const hasCameraPlaceholder = /\{camera_?link\}|\{camera\}/i.test(rawTemplate);
   const hasProgramPlaceholder = /\{program_?link\}|\{outline_?link\}/i.test(rawTemplate);
 
+  const resolvedDateLabel = formatEventDateSpan(
+    params.event.isoDate,
+    params.event.endIsoDate,
+    params.event.date
+  );
+
   let rendered = rawTemplate
     .replace(/\{name\}/gi, attendeeName)
     .replace(/\{event\}/gi, params.event.title)
-    .replace(/\{date\}/gi, params.event.date)
+    .replace(/\{date\}/gi, resolvedDateLabel)
     .replace(/\{time\}/gi, params.event.time)
     .replace(/\{venue\}/gi, params.event.venue)
     .replace(/\{city\}/gi, params.event.city)

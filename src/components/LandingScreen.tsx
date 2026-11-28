@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { Attendee, EventItem } from '../types/events';
 import { EVENT_CATEGORIES, getCategoryPreset } from '../data/initialData';
+import { formatEventDateSpan } from '../lib/eventDates';
 import { MARKETING_SEO } from '../lib/seoConfig';
 import { DeterministicQrSvg, buildEventInvitationUrl } from '../lib/qr';
 import { BrandLogo, BrandOfficialBadge } from './BrandLogo';
@@ -142,7 +143,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
         !q ||
         evt.title.toLowerCase().includes(q) ||
         evt.venue.toLowerCase().includes(q) ||
-        evt.date.toLowerCase().includes(q);
+        formatEventDateSpan(evt.isoDate, evt.endIsoDate, evt.date).toLowerCase().includes(q) ||
+        (evt.isoDate || '').toLowerCase().includes(q);
       return catOk && cityOk && queryOk;
     });
   }, [allEvents, finderCategory, finderCity, finderQuery]);
@@ -482,7 +484,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                             </p>
                             <p className="text-[11px] text-[#71717A] mt-0.5 truncate tabular-nums">
                               {topMatchedEvent.category} · {topMatchedEvent.city} ·{' '}
-                              {topMatchedEvent.date}
+                              {formatEventDateSpan(
+                                topMatchedEvent.isoDate,
+                                topMatchedEvent.endIsoDate,
+                                topMatchedEvent.date
+                              )}
                             </p>
                           </div>
                           {onOpenQrScanner && (
@@ -1857,7 +1863,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({
                     <div className="mt-4 pt-3 border-t border-[#E5E5EA] flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#71717A]">
                       <span>{evt.category} · {evt.venue}</span>
                       <span className="text-[#0B0B0B] font-semibold tabular-nums">
-                        {evt.date}
+                        {formatEventDateSpan(evt.isoDate, evt.endIsoDate, evt.date)}
                       </span>
                     </div>
                   </div>

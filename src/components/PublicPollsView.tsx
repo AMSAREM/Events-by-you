@@ -15,6 +15,7 @@ import {
 import type { EventItem, EventPoll } from '../types/events';
 import { getCategoryPreset } from '../data/initialData';
 import { api } from '../lib/api';
+import { formatEventDateSpan } from '../lib/eventDates';
 import {
   buildEventInvitationUrl,
   DeterministicQrSvg,
@@ -241,7 +242,8 @@ export const PublicPollsView: React.FC<PublicPollsViewProps> = ({
               {event.extraDataConfig?.pollsTitle || `${event.title} — Live Polls`}
             </h1>
             <p className="text-xs sm:text-sm text-zinc-300">
-              {event.title} · {event.date} · {event.venue}
+              {event.title} · {formatEventDateSpan(event.isoDate, event.endIsoDate, event.date)} ·{' '}
+              {event.venue}
             </p>
           </div>
 

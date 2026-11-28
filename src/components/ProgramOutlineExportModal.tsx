@@ -10,6 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import type { EventItem, ScheduleBlock } from '../types/events';
+import { groupScheduleBlocksBySection } from '../lib/eventDates';
 import { processEventLogoFile, sanitizeEventLogoUrl } from '../lib/programOutline';
 import {
   exportDesignedProgramOutlinePng,
@@ -49,6 +50,13 @@ export const ProgramOutlineExportModal: React.FC<ProgramOutlineExportModalProps>
     if (!event) return null;
     return resolveProgramExportData(event, scheduleBlocks, fallbackLogoUrl);
   }, [event, scheduleBlocks, fallbackLogoUrl]);
+
+  const sheetGroups = useMemo(
+    () => (sheetData ? groupScheduleBlocksBySection(sheetData.sessions) : []),
+    [sheetData]
+  );
+  const showSheetSections =
+    sheetGroups.length > 1 || (sheetGroups.length === 1 && !sheetGroups[0].isGeneral);
 
   if (!open || !event || !sheetData) return null;
 
@@ -144,9 +152,9 @@ export const ProgramOutlineExportModal: React.FC<ProgramOutlineExportModalProps>
   };
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-[#0B0B0B]/70 backdrop-blur-sm p-3 sm:p-6">
-      <div className="w-full max-w-4xl max-h-[92vh] rounded-3xl bg-white border border-[#E5E5EA] shadow-2xl overflow-hidden flex flex-col">
-        <div className="px-5 py-4 border-b border-[#E5E5EA] flex items-center justify-between gap-3 shrink-0">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-[#0B0B0B]/70 backdrop-blur-sm p-2.5 sm:p-6">
+      <div className="w-full max-w-4xl max-h-[94dvh] rounded-2xl sm:rounded-3xl bg-white border border-[#E5E5EA] shadow-2xl overflow-hidden flex flex-col">
+        <div className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-[#E5E5EA] flex items-center justify-between gap-3 shrink-0">
           <div className="min-w-0">
             <h2 className="text-sm sm:text-base font-bold text-[#0B0B0B] truncate">
               Designed Program Outline
@@ -159,13 +167,13 @@ export const ProgramOutlineExportModal: React.FC<ProgramOutlineExportModalProps>
             type="button"
             onClick={onClose}
             aria-label="Close program export modal"
-            className="w-9 h-9 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[#0B0B0B] flex items-center justify-center shrink-0"
+            className="w-10 h-10 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[#0B0B0B] flex items-center justify-center shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto bg-[#F5F5F7] p-4 sm:p-6 space-y-4">
+        <div className="flex-1 overflow-y-auto bg-[#F5F5F7] p-3 sm:p-6 space-y-4">
           {canEditLogo && onUpdateLogo && (
             <div className="rounded-2xl bg-white border border-[#E5E5EA] px-4 py-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
@@ -308,7 +316,7 @@ export const ProgramOutlineExportModal: React.FC<ProgramOutlineExportModalProps>
             </div>
 
             {/* Outline Body */}
-            <div className="p-6 space-y-4">
+            <div className="p-4 sm:p-6 space-y-4">
               <div className="pb-3 border-b border-[#E5E2DC]">
                 <h4 className="text-base font-bold text-[#0B0B0B]">
                   {sheetData.outline?.title || 'Program Outline & Run of Show'}
@@ -339,28 +347,45 @@ export const ProgramOutlineExportModal: React.FC<ProgramOutlineExportModalProps>
               )}
 
               {sheetData.sessions.length > 0 ? (
-                <div className="divide-y divide-[#EAE7E0]">
-                  {sheetData.sessions.map((session) => (
-                    <div
-                      key={session.id}
-                      className="py-3 first:pt-1 last:pb-1 flex items-start gap-4"
-                    >
-                      <div className="w-24 sm:w-28 shrink-0">
-                        <p className="font-mono text-xs font-bold text-[#0B0B0B] tabular-nums">
-                          {session.time}
-                        </p>
-                        <p className="text-[11px] text-[#71717A] mt-0.5">
-                          {session.day ? `${session.day} · ` : ''}
-                          {session.duration}
-                        </p>
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs sm:text-sm font-semibold text-[#0B0B0B]">
-                          {session.title}
-                        </p>
-                        <p className="text-[11px] text-[#52525B] mt-0.5">
-                          {session.stage} · Led by {session.lead}
-                        </p>
+                <div className="space-y-4">
+                  {sheetGroups.map((group, groupIdx) => (
+                    <div key={group.section || `group-${groupIdx}`}>
+                      {showSheetSections && (
+                        <div
+                          className="mb-2 px-3 py-1.5 rounded-lg bg-[#EFECE6] text-[11px] font-bold uppercase tracking-[0.1em] text-[#0B0B0B] flex items-center justify-between gap-2"
+                          style={{ borderLeft: `3px solid ${sheetData.brandColor}` }}
+                        >
+                          <span className="truncate">{group.section}</span>
+                          <span className="text-[10px] font-medium text-[#52525B] tabular-nums shrink-0">
+                            {group.blocks.length}
+                          </span>
+                        </div>
+                      )}
+                      <div className="divide-y divide-[#EAE7E0]">
+                        {group.blocks.map((session) => (
+                          <div
+                            key={session.id}
+                            className="py-3 first:pt-1 last:pb-1 flex flex-col sm:flex-row sm:items-start gap-1.5 sm:gap-4"
+                          >
+                            <div className="flex items-center gap-2 sm:block sm:w-28 shrink-0">
+                              <p className="font-mono text-xs font-bold text-[#0B0B0B] tabular-nums">
+                                {session.time}
+                              </p>
+                              <p className="text-[11px] text-[#71717A] sm:mt-0.5 tabular-nums">
+                                {session.day ? `${session.day} · ` : ''}
+                                {session.duration}
+                              </p>
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs sm:text-sm font-semibold text-[#0B0B0B] break-words">
+                                {session.title}
+                              </p>
+                              <p className="text-[11px] text-[#52525B] mt-0.5 break-words">
+                                {session.stage} · Led by {session.lead}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   ))}
@@ -413,11 +438,11 @@ export const ProgramOutlineExportModal: React.FC<ProgramOutlineExportModalProps>
           )}
         </div>
 
-        <div className="px-5 py-3.5 border-t border-[#E5E5EA] bg-white flex flex-wrap items-center justify-between gap-2 shrink-0">
+        <div className="px-4 sm:px-5 py-3 border-t border-[#E5E5EA] bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0">
           <button
             type="button"
             onClick={() => void handleCopyLink()}
-            className="h-9 px-4 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5"
+            className="min-h-[40px] px-4 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[#0B0B0B] text-xs font-semibold inline-flex items-center justify-center gap-1.5"
           >
             {copiedLink ? (
               <>
@@ -432,32 +457,32 @@ export const ProgramOutlineExportModal: React.FC<ProgramOutlineExportModalProps>
             )}
           </button>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-2 sm:flex items-center gap-2">
             <button
               type="button"
               disabled={printing || exportingPng}
               onClick={() => void handlePrintSheet()}
-              className="h-9 px-4 rounded-full border border-[#E5E5EA] hover:border-[#0B0B0B] bg-white text-[#0B0B0B] text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-50"
+              className="min-h-[40px] px-3 sm:px-4 rounded-full border border-[#E5E5EA] hover:border-[#0B0B0B] bg-white text-[#0B0B0B] text-xs font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-50 whitespace-nowrap"
             >
               {printing ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <Printer className="w-3.5 h-3.5" />
               )}
-              <span>Print / Save PDF</span>
+              <span>Print / PDF</span>
             </button>
             <button
               type="button"
               disabled={exportingPng || printing}
               onClick={() => void handleDownloadPng()}
-              className="h-9 px-4 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-50"
+              className="min-h-[40px] px-3 sm:px-4 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-50 whitespace-nowrap"
             >
               {exportingPng ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <Download className="w-3.5 h-3.5" />
               )}
-              <span>Download PNG Sheet</span>
+              <span>Download PNG</span>
             </button>
           </div>
         </div>

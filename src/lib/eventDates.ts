@@ -296,6 +296,59 @@ export function formatScheduleBlockDateBadge(
   return formatIsoDateShort(resolved, true) || block.day;
 }
 
+export function sanitizeScheduleSection(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const normalized = raw.replace(/\s+/g, ' ').trim().slice(0, 80);
+  return normalized || undefined;
+}
+
+export function getScheduleSections(
+  blocks: ReadonlyArray<Pick<ScheduleBlock, 'section'>>
+): string[] {
+  const seen = new Set<string>();
+  const sections: string[] = [];
+  for (const blk of blocks) {
+    const clean = sanitizeScheduleSection(blk.section);
+    if (clean && !seen.has(clean)) {
+      seen.add(clean);
+      sections.push(clean);
+    }
+  }
+  return sections;
+}
+
+export interface ScheduleSectionGroup<T extends Pick<ScheduleBlock, 'section'>> {
+  section: string;
+  isGeneral: boolean;
+  blocks: T[];
+}
+
+export function groupScheduleBlocksBySection<T extends Pick<ScheduleBlock, 'section'>>(
+  blocks: ReadonlyArray<T>,
+  generalLabel = 'General Program'
+): ScheduleSectionGroup<T>[] {
+  const hasAnySection = blocks.some((b) => Boolean(sanitizeScheduleSection(b.section)));
+  if (!hasAnySection) {
+    return blocks.length > 0 ? [{ section: '', isGeneral: true, blocks: [...blocks] }] : [];
+  }
+  const map = new Map<string, { section: string; isGeneral: boolean; blocks: T[] }>();
+  for (const blk of blocks) {
+    const clean = sanitizeScheduleSection(blk.section);
+    const key = clean ? `sec:${clean}` : '__general__';
+    const existing = map.get(key);
+    if (existing) {
+      existing.blocks.push(blk);
+    } else {
+      map.set(key, {
+        section: clean ?? generalLabel,
+        isGeneral: !clean,
+        blocks: [blk],
+      });
+    }
+  }
+  return Array.from(map.values());
+}
+
 export function compareScheduleBlocksChronological(
   a: Pick<ScheduleBlock, 'day' | 'date' | 'time'>,
   b: Pick<ScheduleBlock, 'day' | 'date' | 'time'>,

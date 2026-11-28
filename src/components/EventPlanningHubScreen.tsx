@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CalendarPlus, CheckCircle2, ClipboardCheck } from 'lucide-react';
+import { formatEventDateSpan } from '../lib/eventDates';
 import { computeEventReadiness } from '../lib/planningTemplates';
 import type {
   EventItem,
@@ -158,7 +159,7 @@ export const EventPlanningHubScreen: React.FC<EventPlanningHubScreenProps> = ({
                         isSelected ? 'text-zinc-300' : 'text-[#71717A]'
                       }`}
                     >
-                      {evt.category} · {evt.date}
+                      {evt.category} · {formatEventDateSpan(evt.isoDate, evt.endIsoDate, evt.date)}
                     </span>
                     <span
                       className={`font-mono tabular-nums text-xs font-bold shrink-0 inline-flex items-center gap-1 ${

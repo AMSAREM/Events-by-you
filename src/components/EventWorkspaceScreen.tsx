@@ -15,6 +15,7 @@ import {
   Gift,
   GripVertical,
   ImagePlus,
+  Layers,
   LayoutGrid,
   Link2,
   Lock,
@@ -64,12 +65,15 @@ import {
   getEventDateSlots,
   getEventDayOptions,
   getScheduleBlockDayFromIso,
+  getScheduleSections,
   getTodayIsoDate,
+  groupScheduleBlocksBySection,
   isAttendeeCheckedInForDate,
   isMultiDayEvent,
   resolveIsoDateForScheduleDay,
   resolveScheduleBlockDate,
   sanitizeIsoDate,
+  sanitizeScheduleSection,
 } from '../lib/eventDates';
 import {
   appendPoweredByLine,
@@ -99,6 +103,7 @@ import { EventPollsManager } from './EventPollsManager';
 import { EventPlanningPanel } from './EventPlanningPanel';
 import { computeEventReadiness } from '../lib/planningTemplates';
 import { MonochromePoster, SplineChart } from './MonochromeArtwork';
+import { ProgramOutlineExportModal } from './ProgramOutlineExportModal';
 import { ProgramOutlineUploadCard } from './ProgramOutlineUploadCard';
 import { ThemeColorPicker } from './ThemeColorPicker';
 import { TopUtilityBar } from './TopUtilityBar';
@@ -275,6 +280,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   // Add Program Block & Multi-Day Dates inline state
   const [programDayFilter, setProgramDayFilter] = useState<'all' | ScheduleBlock['day']>('all');
   const [programDateFilter, setProgramDateFilter] = useState<'all' | string>('all');
+  const [programSectionFilter, setProgramSectionFilter] = useState<'all' | string>('all');
   const [addingBlock, setAddingBlock] = useState(false);
   const [newBlockDay, setNewBlockDay] = useState<ScheduleBlock['day']>(() =>
     isMultiDayEvent(event) ? 'Day 1' : 'Sat'
@@ -290,9 +296,13 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   );
   const [newBlockTime, setNewBlockTime] = useState('04:00 - 05:00');
   const [newBlockTitle, setNewBlockTitle] = useState('');
+  const [newBlockSection, setNewBlockSection] = useState('');
   const [newBlockLead, setNewBlockLead] = useState('');
   const [newBlockStage, setNewBlockStage] = useState('Main Auditorium');
   const [savingOutline, setSavingOutline] = useState(false);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [editingProgramSectionId, setEditingProgramSectionId] = useState<string | null>(null);
+  const [editingProgramSectionDraft, setEditingProgramSectionDraft] = useState('');
 
   const [editingDatesPolicy, setEditingDatesPolicy] = useState(false);
   const [savingDatesPolicy, setSavingDatesPolicy] = useState(false);
@@ -341,6 +351,8 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     setCircleFilter('all');
     setProgramDayFilter('all');
     setProgramDateFilter('all');
+    setProgramSectionFilter('all');
+    setEditingProgramSectionId(null);
     const defaultDay = isMultiDayEvent(event) ? 'Day 1' : 'Sat';
     setNewBlockDay(defaultDay);
     const nextStart = sanitizeIsoDate(event.isoDate) ?? getTodayIsoDate();
@@ -542,16 +554,39 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     return list;
   }, [eventBlocks, eventDayOptions, event]);
 
+  const activeProgramSections = useMemo(
+    () => getScheduleSections(eventBlocks),
+    [eventBlocks]
+  );
+
+  useEffect(() => {
+    if (programSectionFilter !== 'all' && !activeProgramSections.includes(programSectionFilter)) {
+      setProgramSectionFilter('all');
+    }
+  }, [activeProgramSections, programSectionFilter]);
+
   const visibleProgramBlocks = useMemo(
     () =>
       eventBlocks.filter((b) => {
         const matchesDay = programDayFilter === 'all' || b.day === programDayFilter;
         const resolved = resolveScheduleBlockDate(b, event);
         const matchesDate = programDateFilter === 'all' || resolved === programDateFilter;
-        return matchesDay && matchesDate;
+        const sec = sanitizeScheduleSection(b.section);
+        const matchesSection =
+          programSectionFilter === 'all' || sec === programSectionFilter;
+        return matchesDay && matchesDate && matchesSection;
       }),
-    [eventBlocks, programDayFilter, programDateFilter, event]
+    [eventBlocks, programDayFilter, programDateFilter, programSectionFilter, event]
   );
+
+  const groupedProgramBlocks = useMemo(
+    () => groupScheduleBlocksBySection(visibleProgramBlocks, 'General Program'),
+    [visibleProgramBlocks]
+  );
+
+  const hasProgramSections =
+    groupedProgramBlocks.length > 1 ||
+    (groupedProgramBlocks.length === 1 && !groupedProgramBlocks[0].isGeneral);
 
   const eventAttendees = useMemo(
     () => attendees.filter((a) => a.eventId === event.id),
@@ -779,6 +814,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
     const chosenDay = chosenDate
       ? getScheduleBlockDayFromIso(chosenDate, event, newBlockDay)
       : newBlockDay;
+    const cleanSection = sanitizeScheduleSection(newBlockSection);
     try {
       await Promise.resolve(
         onAddScheduleBlock({
@@ -792,6 +828,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
           completed: false,
           day: chosenDay,
           ...(chosenDate ? { date: chosenDate } : {}),
+          ...(cleanSection ? { section: cleanSection } : {}),
         })
       );
       setNewBlockTitle('');
@@ -1535,29 +1572,44 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
 
           {/* Program Builder Panel (Shown on Program, Overview) */}
           {(activeTab === 'program' || activeTab === 'overview') && (
-            <section className="bg-[#F5F5F7] rounded-[28px] p-6 sm:p-8 flex flex-col gap-4 shadow-sm">
+            <section className="bg-[#F5F5F7] rounded-[24px] sm:rounded-[28px] p-4 sm:p-8 flex flex-col gap-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 min-w-0">
                   <div className="w-10 h-10 rounded-full bg-[#0B0B0B] text-white flex items-center justify-center shrink-0">
                     <Calendar className="w-5 h-5" />
                   </div>
-                  <div>
-                    <h2 className="font-display text-[22px] leading-7 font-bold text-[#0B0B0B] tracking-[-0.02em]">
+                  <div className="min-w-0">
+                    <h2 className="font-display text-lg sm:text-[22px] leading-7 font-bold text-[#0B0B0B] tracking-[-0.02em]">
                       Program Schedule
                     </h2>
                     <p className="text-[13px] text-[#71717A] tabular-nums">
                       {eventBlocks.length} scheduled run-of-show {eventBlocks.length === 1 ? 'block' : 'blocks'}
+                      {activeProgramSections.length > 0
+                        ? ` · ${activeProgramSections.length} ${activeProgramSections.length === 1 ? 'section' : 'sections'}`
+                        : ''}
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setAddingBlock((p) => !p)}
-                  className="px-4 py-2 rounded-full bg-[#0B0B0B] text-white hover:opacity-90 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm whitespace-nowrap shrink-0"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>{addingBlock ? 'Close' : 'Add Item'}</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {eventBlocks.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setExportModalOpen(true)}
+                      className="min-h-[40px] px-3.5 py-2 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>Export Sheet</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setAddingBlock((p) => !p)}
+                    className="min-h-[40px] px-4 py-2 rounded-full bg-[#0B0B0B] text-white hover:opacity-90 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm whitespace-nowrap shrink-0"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>{addingBlock ? 'Close' : 'Add Item'}</span>
+                  </button>
+                </div>
               </div>
 
               {onUpdateEvent && (
@@ -1565,7 +1617,30 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   outline={event.extraDataConfig?.programOutline}
                   eventTitle={event.title}
                   eventContext={event}
+                  logoUrl={event.extraDataConfig?.logoUrl || profile.avatarUrl}
+                  hasScheduleBlocks={eventBlocks.length > 0}
                   busy={savingOutline}
+                  onOpenExportDesign={() => setExportModalOpen(true)}
+                  onLogoChange={async (nextLogoUrl) => {
+                    setSavingOutline(true);
+                    try {
+                      const baseExtra = event.extraDataConfig ?? {
+                        enableGiftTable: false,
+                        customFields: [],
+                      };
+                      await Promise.resolve(
+                        onUpdateEvent({
+                          ...event,
+                          extraDataConfig: {
+                            ...baseExtra,
+                            logoUrl: (nextLogoUrl ?? null) as unknown as string,
+                          },
+                        })
+                      );
+                    } finally {
+                      setSavingOutline(false);
+                    }
+                  }}
                   onSaveOutline={async (nextOutline) => {
                     setSavingOutline(true);
                     try {
@@ -1608,6 +1683,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                           completed: false,
                           day: pb.day,
                           ...(pb.date ? { date: pb.date } : {}),
+                          ...(pb.section ? { section: pb.section } : {}),
                         })
                       );
                     }
@@ -1617,6 +1693,40 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   }}
                 />
               )}
+
+              <ProgramOutlineExportModal
+                open={exportModalOpen}
+                event={event}
+                scheduleBlocks={eventBlocks}
+                fallbackLogoUrl={profile.avatarUrl}
+                canEditLogo={Boolean(onUpdateEvent)}
+                onUpdateLogo={
+                  onUpdateEvent
+                    ? async (nextLogoUrl) => {
+                        const baseExtra = event.extraDataConfig ?? {
+                          enableGiftTable: false,
+                          customFields: [],
+                        };
+                        await Promise.resolve(
+                          onUpdateEvent({
+                            ...event,
+                            extraDataConfig: {
+                              ...baseExtra,
+                              logoUrl: (nextLogoUrl ?? null) as unknown as string,
+                            },
+                          })
+                        );
+                      }
+                    : undefined
+                }
+                onClose={() => setExportModalOpen(false)}
+              />
+
+              <datalist id="workspace-program-sections">
+                {activeProgramSections.map((sec) => (
+                  <option key={sec} value={sec} />
+                ))}
+              </datalist>
 
               {addingBlock && (
                 <form
@@ -1629,6 +1739,14 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                     value={newBlockTitle}
                     onChange={(e) => setNewBlockTitle(e.target.value)}
                     placeholder="Session title (e.g. Closing Fireside Chat)"
+                    className="sm:col-span-2 h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] placeholder:text-[#71717A] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
+                  />
+                  <input
+                    type="text"
+                    list="workspace-program-sections"
+                    value={newBlockSection}
+                    onChange={(e) => setNewBlockSection(e.target.value)}
+                    placeholder="Section / Segment (Optional, e.g. Part 1 · Morning)"
                     className="sm:col-span-2 h-10 px-4 rounded-full bg-[#F5F5F7] text-xs text-[#0B0B0B] placeholder:text-[#71717A] focus:outline-none focus:ring-1 focus:ring-[#0B0B0B]"
                   />
                   <div className="grid grid-cols-2 gap-2">
@@ -1694,7 +1812,9 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 </form>
               )}
 
-              {(activeProgramDateSlots.length > 1 || activeProgramDays.length > 1) && (
+              {(activeProgramDateSlots.length > 1 ||
+                activeProgramDays.length > 1 ||
+                activeProgramSections.length > 0) && (
                 <div className="space-y-1.5">
                   {activeProgramDateSlots.length > 1 && (
                     <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
@@ -1704,7 +1824,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                           setProgramDateFilter('all');
                           setProgramDayFilter('all');
                         }}
-                        className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                        className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors shrink-0 ${
                           programDateFilter === 'all' && programDayFilter === 'all'
                             ? 'bg-[#0B0B0B] text-white'
                             : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
@@ -1724,7 +1844,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                               setProgramDateFilter(slot.isoDate);
                               setProgramDayFilter('all');
                             }}
-                            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                            className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors shrink-0 ${
                               programDateFilter === slot.isoDate
                                 ? 'bg-[#0B0B0B] text-white'
                                 : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
@@ -1741,7 +1861,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => setProgramDayFilter('all')}
-                        className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                        className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors shrink-0 ${
                           programDayFilter === 'all'
                             ? 'bg-[#0B0B0B] text-white'
                             : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
@@ -1756,7 +1876,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                             key={day}
                             type="button"
                             onClick={() => setProgramDayFilter(day)}
-                            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                            className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors shrink-0 ${
                               programDayFilter === day
                                 ? 'bg-[#0B0B0B] text-white'
                                 : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
@@ -1768,111 +1888,233 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                       })}
                     </div>
                   )}
+                  {activeProgramSections.length > 0 && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#71717A] pr-1 shrink-0">
+                        <Layers className="w-3.5 h-3.5" />
+                        Sections:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setProgramSectionFilter('all')}
+                        className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors shrink-0 ${
+                          programSectionFilter === 'all'
+                            ? 'bg-[#0B0B0B] text-white'
+                            : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
+                        }`}
+                      >
+                        All Sections
+                      </button>
+                      {activeProgramSections.map((sec) => {
+                        const cnt = eventBlocks.filter(
+                          (b) => sanitizeScheduleSection(b.section) === sec
+                        ).length;
+                        return (
+                          <button
+                            key={sec}
+                            type="button"
+                            onClick={() => setProgramSectionFilter(sec)}
+                            className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors shrink-0 ${
+                              programSectionFilter === sec
+                                ? 'bg-[#0B0B0B] text-white'
+                                : 'bg-white text-[#71717A] hover:text-[#0B0B0B]'
+                            }`}
+                          >
+                            {sec} ({cnt})
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Schedule Items Flow */}
-              <div className="flex flex-col gap-2.5 mt-1">
+              {/* Schedule Items Flow Grouped by Section */}
+              <div className="flex flex-col gap-3 mt-1">
                 {visibleProgramBlocks.length === 0 ? (
                   <div className="p-6 rounded-2xl bg-white text-center text-xs text-[#71717A]">
-                    No sessions scheduled for this date filter yet. Click &ldquo;Add Item&rdquo; to
+                    No sessions scheduled for this filter yet. Click &ldquo;Add Item&rdquo; to
                     create a program block.
                   </div>
                 ) : (
-                  visibleProgramBlocks.map((block) => {
-                    const resolvedBlockIso = resolveScheduleBlockDate(block, event) || '';
-                    const dateBadge = formatScheduleBlockDateBadge(block, event);
-                    return (
-                      <div
-                        key={block.id}
-                        className="group flex flex-col md:flex-row md:items-center justify-between p-4 rounded-2xl bg-white hover:shadow-md transition-all gap-3"
-                      >
-                        <div className="flex items-start md:items-center gap-3 min-w-0">
-                          <GripVertical className="w-4.5 h-4.5 text-[#71717A] shrink-0 mt-1 md:mt-0" />
-                          <span className="px-2.5 py-1 rounded-full bg-[#0B0B0B] text-white text-[10px] font-semibold shrink-0 whitespace-nowrap">
-                            {dateBadge}
+                  groupedProgramBlocks.map((group) => (
+                    <div key={group.section || '__general__'} className="space-y-1.5">
+                      {hasProgramSections && (
+                        <div className="flex items-center justify-between gap-2 px-1">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <Layers className="w-3.5 h-3.5 text-[#71717A] shrink-0" />
+                            <h3 className="font-display text-xs sm:text-sm font-bold text-[#0B0B0B] uppercase tracking-wide truncate">
+                              {group.section}
+                            </h3>
+                          </div>
+                          <span className="text-[11px] font-semibold text-[#71717A] tabular-nums shrink-0">
+                            {group.blocks.length} {group.blocks.length === 1 ? 'session' : 'sessions'}
                           </span>
-                          <div className="px-3 py-1 rounded-full bg-[#F5F5F7] text-xs font-semibold text-[#0B0B0B] shrink-0 tabular-nums font-mono">
-                            {block.time}
-                          </div>
-                          <div className="flex flex-col min-w-0">
-                            <span className="text-sm sm:text-base font-semibold text-[#0B0B0B]">
-                              {block.title}
-                            </span>
-                            <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                              <span className="text-[11px] text-[#0B0B0B] font-semibold">
-                                {block.lead}
-                              </span>
-                              <span className="text-[#71717A] text-[10px]">•</span>
-                              <span className="text-[11px] text-[#71717A]">{block.stage}</span>
-                            </div>
-                          </div>
                         </div>
+                      )}
 
-                        <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
-                          {onUpdateScheduleBlock && (
-                            <input
-                              type="date"
-                              value={resolvedBlockIso}
-                              aria-label={`Assign date for ${block.title}`}
-                              onChange={(e) => {
-                                const clean = sanitizeIsoDate(e.target.value);
-                                if (!clean) return;
-                                void Promise.resolve(
-                                  onUpdateScheduleBlock(block.id, {
-                                    date: clean,
-                                    day: getScheduleBlockDayFromIso(clean, event, block.day),
-                                  })
-                                ).catch((err) =>
-                                  triggerToast(
-                                    err instanceof Error
-                                      ? err.message
-                                      : 'Unable to update session date.'
-                                  )
-                                );
-                              }}
-                              className="h-8 px-2.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[11px] font-mono text-[#0B0B0B] focus:bg-white focus:border-[#0B0B0B] focus:outline-none"
-                            />
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void Promise.resolve(onToggleScheduleBlock(block.id)).catch((err) =>
-                                triggerToast(
-                                  err instanceof Error ? err.message : 'Unable to update schedule block.'
-                                )
-                              );
-                            }}
-                            title={block.completed ? 'Mark upcoming' : 'Mark complete'}
-                            className={`px-3 py-1.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 transition-colors ${
-                              block.completed
-                                ? 'bg-[#0B0B0B] text-white'
-                                : 'bg-[#F5F5F7] text-[#0B0B0B] hover:bg-[#E8E8EA]'
-                            }`}
-                          >
-                            <Check className="w-3 h-3" />
-                            <span>{block.completed ? 'Ready' : 'Confirm'}</span>
-                          </button>
-                          {onDeleteScheduleBlock && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void Promise.resolve(onDeleteScheduleBlock(block.id)).catch((err) =>
-                                  triggerToast(
-                                    err instanceof Error ? err.message : 'Unable to delete block.'
-                                  )
-                                );
-                              }}
-                              aria-label="Delete session"
-                              className="w-8 h-8 rounded-full bg-[#F5F5F7] flex items-center justify-center hover:bg-[#EF4444]/10 hover:text-[#EF4444] text-[#71717A] transition-colors"
+                      <div className="rounded-2xl bg-white border border-[#E5E5EA] divide-y divide-[#E5E5EA] overflow-hidden">
+                        {group.blocks.map((block) => {
+                          const resolvedBlockIso = resolveScheduleBlockDate(block, event) || '';
+                          const dateBadge = formatScheduleBlockDateBadge(block, event);
+                          const blockSection = sanitizeScheduleSection(block.section);
+                          const isEditingSec = editingProgramSectionId === block.id;
+                          return (
+                            <div
+                              key={block.id}
+                              className="group flex flex-col lg:flex-row lg:items-center justify-between p-3.5 sm:p-4 hover:bg-[#FAFAFC] transition-colors gap-3"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
+                              <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                                <GripVertical className="w-4 h-4 text-[#71717A] shrink-0 mt-1 hidden sm:block" />
+                                <div className="flex flex-col min-w-0 flex-1 gap-1">
+                                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#71717A] tabular-nums">
+                                    <span className="font-mono text-xs sm:text-[13px] font-semibold text-[#0B0B0B]">
+                                      {block.time}
+                                    </span>
+                                    <span>· {dateBadge}</span>
+                                    {block.duration && <span>· {block.duration}</span>}
+                                    {blockSection && !hasProgramSections && (
+                                      <span className="text-[#0B0B0B] font-semibold">
+                                        · {blockSection}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-sm sm:text-base font-semibold text-[#0B0B0B] break-words leading-snug">
+                                    {block.title}
+                                  </span>
+                                  <p className="text-xs text-[#71717A] break-words">
+                                    <span className="text-[#0B0B0B] font-medium">{block.lead}</span> ·{' '}
+                                    {block.stage}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap items-center justify-start lg:justify-end gap-2 shrink-0">
+                                {onUpdateScheduleBlock && isEditingSec ? (
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <input
+                                      type="text"
+                                      list="workspace-program-sections"
+                                      value={editingProgramSectionDraft}
+                                      onChange={(e) => setEditingProgramSectionDraft(e.target.value)}
+                                      placeholder="Section name"
+                                      aria-label={`Section for ${block.title}`}
+                                      className="h-9 w-40 px-3 rounded-full bg-[#F5F5F7] border border-[#0B0B0B] text-[11px] text-[#0B0B0B] focus:outline-none"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const clean = sanitizeScheduleSection(
+                                          editingProgramSectionDraft
+                                        );
+                                        setEditingProgramSectionId(null);
+                                        void Promise.resolve(
+                                          onUpdateScheduleBlock(block.id, { section: clean ?? '' })
+                                        )
+                                          .then(() => triggerToast('Program section updated'))
+                                          .catch((err) =>
+                                            triggerToast(
+                                              err instanceof Error
+                                                ? err.message
+                                                : 'Unable to update section.'
+                                            )
+                                          );
+                                      }}
+                                      className="min-h-[36px] px-3 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold"
+                                    >
+                                      Save
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingProgramSectionId(null)}
+                                      className="min-h-[36px] px-2.5 rounded-full bg-[#F5F5F7] text-[#71717A] text-[11px] font-semibold"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                ) : (
+                                  onUpdateScheduleBlock && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingProgramSectionId(block.id);
+                                        setEditingProgramSectionDraft(blockSection ?? '');
+                                      }}
+                                      className="min-h-[36px] px-3 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1 whitespace-nowrap"
+                                    >
+                                      <Layers className="w-3 h-3 text-[#71717A]" />
+                                      <span>{blockSection ? blockSection : 'Add Section'}</span>
+                                    </button>
+                                  )
+                                )}
+                                {onUpdateScheduleBlock && (
+                                  <input
+                                    type="date"
+                                    value={resolvedBlockIso}
+                                    aria-label={`Assign date for ${block.title}`}
+                                    onChange={(e) => {
+                                      const clean = sanitizeIsoDate(e.target.value);
+                                      if (!clean) return;
+                                      void Promise.resolve(
+                                        onUpdateScheduleBlock(block.id, {
+                                          date: clean,
+                                          day: getScheduleBlockDayFromIso(clean, event, block.day),
+                                        })
+                                      ).catch((err) =>
+                                        triggerToast(
+                                          err instanceof Error
+                                            ? err.message
+                                            : 'Unable to update session date.'
+                                        )
+                                      );
+                                    }}
+                                    className="h-9 px-2.5 rounded-full bg-[#F5F5F7] border border-[#E5E5EA] text-[11px] font-mono text-[#0B0B0B] focus:bg-white focus:border-[#0B0B0B] focus:outline-none"
+                                  />
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    void Promise.resolve(onToggleScheduleBlock(block.id)).catch((err) =>
+                                      triggerToast(
+                                        err instanceof Error
+                                          ? err.message
+                                          : 'Unable to update schedule block.'
+                                      )
+                                    );
+                                  }}
+                                  title={block.completed ? 'Mark upcoming' : 'Mark complete'}
+                                  className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 transition-colors whitespace-nowrap ${
+                                    block.completed
+                                      ? 'bg-[#0B0B0B] text-white'
+                                      : 'bg-[#F5F5F7] text-[#0B0B0B] hover:bg-[#E8E8EA]'
+                                  }`}
+                                >
+                                  <Check className="w-3 h-3" />
+                                  <span>{block.completed ? 'Ready' : 'Confirm'}</span>
+                                </button>
+                                {onDeleteScheduleBlock && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      void Promise.resolve(onDeleteScheduleBlock(block.id)).catch((err) =>
+                                        triggerToast(
+                                          err instanceof Error ? err.message : 'Unable to delete block.'
+                                        )
+                                      );
+                                    }}
+                                    aria-label="Delete session"
+                                    className="w-9 h-9 rounded-full bg-[#F5F5F7] flex items-center justify-center hover:bg-[#EF4444]/10 hover:text-[#EF4444] text-[#71717A] transition-colors"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    );
-                  })
+                    </div>
+                  ))
                 )}
               </div>
             </section>
@@ -2982,7 +3224,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-semibold text-[#0B0B0B]">24h Event Reminder</span>
                   <span className="text-[11px] text-[#71717A] tabular-nums">
-                    {event.date} · 09:00 AM
+                    {formattedEventDate} · 09:00 AM
                   </span>
                 </div>
                 <p className="text-[11px] text-[#71717A] mb-1 tabular-nums">

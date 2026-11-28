@@ -34,6 +34,7 @@ import {
   OrganizerProfile,
   SystemAlert,
 } from '../types/events';
+import { formatEventDateSpan } from '../lib/eventDates';
 import { MAX_SHOTS_PER_USER } from '../lib/eventMessages';
 import { createZipBlob, type ZipFileEntry } from '../lib/zip';
 import { TopUtilityBar } from './TopUtilityBar';
@@ -780,9 +781,14 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
         });
       }
 
+      const formattedEventDate = formatEventDateSpan(
+        selectedEvent.isoDate,
+        selectedEvent.endIsoDate,
+        selectedEvent.date
+      );
       const infoLines = [
         `${selectedEvent.title} — Personal 35mm Film Roll (High-Resolution Print Archive)`,
-        `Date: ${selectedEvent.date} · Venue: ${selectedEvent.venue}, ${selectedEvent.city}`,
+        `Date: ${formattedEventDate} · Venue: ${selectedEvent.venue}, ${selectedEvent.city}`,
         `Photographer: ${guestName.trim() || 'Guest Photographer'}${activePassCode ? ` · Pass: ${activePassCode}` : ''}`,
         `Frames Exported: ${ownShots.length} of ${MAX_SHOTS_PER_USER} max per user (2400px Hi-Res JPEG)`,
         '',
@@ -839,7 +845,7 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     ctx.fillStyle = '#A1A1AA';
     ctx.font = '16px "JetBrains Mono", monospace';
     ctx.fillText(
-      `${selectedEvent.date} · ${selectedEvent.venue} · ${developedShots.length} EXPOSURES`,
+      `${formatEventDateSpan(selectedEvent.isoDate, selectedEvent.endIsoDate, selectedEvent.date)} · ${selectedEvent.venue} · ${developedShots.length} EXPOSURES`,
       pad,
       84
     );
@@ -1036,8 +1042,11 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
       );
       ctx.fillStyle = isDark ? '#A1A1AA' : '#71717A';
       ctx.font = '20px "JetBrains Mono", monospace';
+      const collageFormattedDate = selectedEvent
+        ? formatEventDateSpan(selectedEvent.isoDate, selectedEvent.endIsoDate, selectedEvent.date)
+        : '';
       ctx.fillText(
-        `${selectedEvent?.date || ''} · ${selectedEvent?.city || ''} · ${collageShots.length} FRAMES · EVENTS BY YOU 35MM`.toUpperCase(),
+        `${collageFormattedDate} · ${selectedEvent?.city || ''} · ${collageShots.length} FRAMES · EVENTS BY YOU 35MM`.toUpperCase(),
         areaX,
         footY + 56
       );
@@ -1060,6 +1069,8 @@ export const DisposableCameraScreen: React.FC<DisposableCameraScreenProps> = ({
     collageTitle,
     selectedEvent?.title,
     selectedEvent?.date,
+    selectedEvent?.isoDate,
+    selectedEvent?.endIsoDate,
     selectedEvent?.city,
   ]);
 

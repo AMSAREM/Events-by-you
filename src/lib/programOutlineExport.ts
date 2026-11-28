@@ -1,6 +1,11 @@
 import type { EventItem, EventProgramOutline, ScheduleBlock } from '../types/events.ts';
 import { getCategoryPreset } from '../data/initialData.ts';
-import { compareScheduleBlocksChronological, formatEventDateSpan } from './eventDates.ts';
+import {
+  compareScheduleBlocksChronological,
+  formatEventDateSpan,
+  groupScheduleBlocksBySection,
+  sanitizeScheduleSection,
+} from './eventDates.ts';
 import {
   decodeProgramOutlineText,
   isTextProgramOutline,
@@ -19,6 +24,7 @@ export interface ResolvedProgramSheetSession {
   stage: string;
   lead: string;
   day?: string;
+  section?: string;
 }
 
 export interface ResolvedProgramSheetData {
@@ -69,27 +75,35 @@ export function resolveProgramExportData(
     .slice()
     .sort((a, b) => compareScheduleBlocksChronological(a, b, event));
 
-  let sessions: ResolvedProgramSheetSession[] = eventBlocks.map((b) => ({
-    id: b.id,
-    time: b.time,
-    duration: b.duration,
-    title: b.title,
-    stage: b.stage,
-    lead: b.lead,
-    day: b.day,
-  }));
-
-  if (sessions.length === 0 && outline && isTextProgramOutline(outline)) {
-    const parsed = parseProgramOutlineTextToBlocks(decodeProgramOutlineText(outline), event);
-    sessions = parsed.map((b, idx) => ({
-      id: `parsed-${idx}`,
+  let sessions: ResolvedProgramSheetSession[] = eventBlocks.map((b) => {
+    const cleanSection = sanitizeScheduleSection(b.section);
+    return {
+      id: b.id,
       time: b.time,
       duration: b.duration,
       title: b.title,
       stage: b.stage,
       lead: b.lead,
       day: b.day,
-    }));
+      ...(cleanSection ? { section: cleanSection } : {}),
+    };
+  });
+
+  if (sessions.length === 0 && outline && isTextProgramOutline(outline)) {
+    const parsed = parseProgramOutlineTextToBlocks(decodeProgramOutlineText(outline), event);
+    sessions = parsed.map((b, idx) => {
+      const cleanSection = sanitizeScheduleSection(b.section);
+      return {
+        id: `parsed-${idx}`,
+        time: b.time,
+        duration: b.duration,
+        title: b.title,
+        stage: b.stage,
+        lead: b.lead,
+        day: b.day,
+        ...(cleanSection ? { section: cleanSection } : {}),
+      };
+    });
   }
 
   return {
@@ -264,10 +278,15 @@ export async function exportDesignedProgramOutlinePng(
     : 0;
 
   const sessionRowH = 92;
+  const sectionHeaderH = 44;
   const sessionsToRender = data.sessions.slice(0, 28);
+  const exportGroups = groupScheduleBlocksBySection(sessionsToRender);
+  const hasExportSections =
+    exportGroups.length > 1 || (exportGroups.length === 1 && !exportGroups[0].isGeneral);
+  const sectionHeadersCount = hasExportSections ? exportGroups.length : 0;
   const sessionsListH =
     sessionsToRender.length > 0
-      ? sessionsToRender.length * sessionRowH + 80
+      ? sessionsToRender.length * sessionRowH + sectionHeadersCount * sectionHeaderH + 80
       : outlineImg
         ? 0
         : 160;
@@ -441,53 +460,70 @@ export async function exportDesignedProgramOutlinePng(
     cursorY += outlineImageBoxH + 20;
   }
 
-  // 3. Program Timeline Rows
+  // 3. Program Timeline Rows (with optional Section headers)
   if (sessionsToRender.length > 0) {
     cursorY += 30;
-    for (let i = 0; i < sessionsToRender.length; i += 1) {
-      const item = sessionsToRender[i];
-      if (cursorY + sessionRowH > totalHeight - footerH - 24) break;
-
-      if (i > 0) {
-        ctx.strokeStyle = '#EAE7E0';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(padX, cursorY);
-        ctx.lineTo(width - padX, cursorY);
-        ctx.stroke();
+    for (let g = 0; g < exportGroups.length; g += 1) {
+      const grp = exportGroups[g];
+      if (hasExportSections) {
+        if (cursorY + sectionHeaderH + sessionRowH > totalHeight - footerH - 24) break;
+        if (g > 0) cursorY += 8;
+        ctx.fillStyle = '#EAE7E0';
+        drawRoundedRectPath(ctx, padX, cursorY, contentW, 34, 8);
+        ctx.fill();
+        ctx.fillStyle = data.brandColor;
+        ctx.fillRect(padX, cursorY + 6, 4, 22);
+        ctx.fillStyle = '#0B0B0B';
+        ctx.font = '700 14px "Plus Jakarta Sans", system-ui, sans-serif';
+        ctx.fillText(grp.section.toUpperCase().slice(0, 64), padX + 16, cursorY + 22);
+        cursorY += sectionHeaderH;
       }
 
-      // Time column
-      ctx.fillStyle = '#0B0B0B';
-      ctx.font = '700 20px "JetBrains Mono", monospace';
-      ctx.fillText(item.time || '--:--', padX, cursorY + 38);
+      for (let i = 0; i < grp.blocks.length; i += 1) {
+        const item = grp.blocks[i];
+        if (cursorY + sessionRowH > totalHeight - footerH - 24) break;
 
-      ctx.fillStyle = '#71717A';
-      ctx.font = '500 14px "Plus Jakarta Sans", system-ui, sans-serif';
-      ctx.fillText(
-        `${item.day ? `${item.day} · ` : ''}${item.duration || '45m'}`,
-        padX,
-        cursorY + 62
-      );
+        if (i > 0) {
+          ctx.strokeStyle = '#EAE7E0';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(padX, cursorY);
+          ctx.lineTo(width - padX, cursorY);
+          ctx.stroke();
+        }
 
-      // Vertical accent dot
-      ctx.fillStyle = data.brandColor;
-      ctx.beginPath();
-      ctx.arc(padX + 184, cursorY + 32, 5, 0, Math.PI * 2);
-      ctx.fill();
+        // Time column
+        ctx.fillStyle = '#0B0B0B';
+        ctx.font = '700 20px "JetBrains Mono", monospace';
+        ctx.fillText(item.time || '--:--', padX, cursorY + 38);
 
-      // Session Title & Stage/Lead
-      const titleColX = padX + 212;
-      ctx.fillStyle = '#0B0B0B';
-      ctx.font = '600 20px "Plus Jakarta Sans", system-ui, sans-serif';
-      const itemTitle = item.title.length > 58 ? `${item.title.slice(0, 55)}...` : item.title;
-      ctx.fillText(itemTitle, titleColX, cursorY + 38);
+        ctx.fillStyle = '#71717A';
+        ctx.font = '500 14px "Plus Jakarta Sans", system-ui, sans-serif';
+        ctx.fillText(
+          `${item.day ? `${item.day} · ` : ''}${item.duration || '45m'}`,
+          padX,
+          cursorY + 62
+        );
 
-      ctx.fillStyle = '#52525B';
-      ctx.font = '500 15px "Plus Jakarta Sans", system-ui, sans-serif';
-      ctx.fillText(`${item.stage}  ·  Led by ${item.lead}`.slice(0, 74), titleColX, cursorY + 64);
+        // Vertical accent dot
+        ctx.fillStyle = data.brandColor;
+        ctx.beginPath();
+        ctx.arc(padX + 184, cursorY + 32, 5, 0, Math.PI * 2);
+        ctx.fill();
 
-      cursorY += sessionRowH;
+        // Session Title & Stage/Lead
+        const titleColX = padX + 212;
+        ctx.fillStyle = '#0B0B0B';
+        ctx.font = '600 20px "Plus Jakarta Sans", system-ui, sans-serif';
+        const itemTitle = item.title.length > 58 ? `${item.title.slice(0, 55)}...` : item.title;
+        ctx.fillText(itemTitle, titleColX, cursorY + 38);
+
+        ctx.fillStyle = '#52525B';
+        ctx.font = '500 15px "Plus Jakarta Sans", system-ui, sans-serif';
+        ctx.fillText(`${item.stage}  ·  Led by ${item.lead}`.slice(0, 74), titleColX, cursorY + 64);
+
+        cursorY += sessionRowH;
+      }
     }
   } else if (!outlineImg) {
     cursorY += 48;
@@ -616,11 +652,11 @@ export async function printDesignedProgramOutlineSheet(
   const qrSvg = buildQrSvgString(data.programUrl, 108, '#0B0B0B', '#FFFFFF');
   const outlineIsImage = Boolean(data.outline?.mimeType.startsWith('image/'));
 
-  const sessionsHtml =
-    data.sessions.length > 0
-      ? data.sessions
-          .map(
-            (s) => `
+  const printGroups = groupScheduleBlocksBySection(data.sessions);
+  const showPrintSections =
+    printGroups.length > 1 || (printGroups.length === 1 && !printGroups[0].isGeneral);
+
+  const renderPrintRow = (s: ResolvedProgramSheetSession) => `
           <div class="session-row">
             <div class="session-time">
               <div class="time-val">${escapeHtml(s.time)}</div>
@@ -630,9 +666,19 @@ export async function printDesignedProgramOutlineSheet(
               <div class="session-title">${escapeHtml(s.title)}</div>
               <div class="session-sub">${escapeHtml(s.stage)} &middot; Led by ${escapeHtml(s.lead)}</div>
             </div>
-          </div>`
-          )
-          .join('')
+          </div>`;
+
+  const sessionsHtml =
+    data.sessions.length > 0
+      ? showPrintSections
+        ? printGroups
+            .map(
+              (grp) => `
+          <div class="section-band">${escapeHtml(grp.section)}</div>
+          ${grp.blocks.map(renderPrintRow).join('')}`
+            )
+            .join('')
+        : data.sessions.map(renderPrintRow).join('')
       : !outlineIsImage
         ? `<p class="empty-msg">${
             data.outline
@@ -785,6 +831,20 @@ export async function printDesignedProgramOutlineSheet(
     max-height: 320px;
     object-fit: contain;
   }
+  .section-band {
+    margin-top: 16px;
+    padding: 7px 12px;
+    border-left: 3px solid ${escapeHtml(data.brandColor)};
+    background: #EFECE6;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #0B0B0B;
+    border-radius: 6px;
+    page-break-after: avoid;
+  }
+  .section-band:first-child { margin-top: 8px; }
   .session-row {
     display: flex;
     gap: 18px;

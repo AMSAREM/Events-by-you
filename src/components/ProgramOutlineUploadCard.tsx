@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
+  ChevronDown,
   Download,
   Eye,
   FileSpreadsheet,
@@ -14,7 +15,9 @@ import {
 } from 'lucide-react';
 import type { EventItem, EventProgramOutline } from '../types/events';
 import {
+  buildProgramOutlineTextTemplate,
   decodeProgramOutlineText,
+  downloadProgramOutlineTemplate,
   formatFileSizeCompact,
   isTextProgramOutline,
   parseProgramOutlineTextToBlocks,
@@ -22,6 +25,7 @@ import {
   processProgramOutlineFile,
   sanitizeProgramOutline,
   type ParsedProgramOutlineBlock,
+  type ProgramOutlineTemplateFormat,
 } from '../lib/programOutline';
 import { getProgramOutlineKindLabel, ProgramOutlinePreviewModal } from './ProgramOutlineViewer';
 
@@ -63,6 +67,7 @@ export const ProgramOutlineUploadCard: React.FC<ProgramOutlineUploadCardProps> =
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
+  const templateMenuRef = useRef<HTMLDivElement>(null);
   const [processing, setProcessing] = useState(false);
   const [savingLogo, setSavingLogo] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -70,6 +75,7 @@ export const ProgramOutlineUploadCard: React.FC<ProgramOutlineUploadCardProps> =
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
 
   const [titleInput, setTitleInput] = useState(outline?.title || '');
   const [notesInput, setNotesInput] = useState(outline?.notes || '');
@@ -80,6 +86,29 @@ export const ProgramOutlineUploadCard: React.FC<ProgramOutlineUploadCardProps> =
     setTitleInput(outline?.title || '');
     setNotesInput(outline?.notes || '');
   }, [outline?.fileName, outline?.title, outline?.notes]);
+
+  useEffect(() => {
+    if (!templateMenuOpen) return;
+    const handleOutside = (event: MouseEvent) => {
+      if (
+        templateMenuRef.current &&
+        !templateMenuRef.current.contains(event.target as Node)
+      ) {
+        setTemplateMenuOpen(false);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setTemplateMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [templateMenuOpen]);
 
   const parsedFileBlocks = useMemo(() => {
     if (!outline || !isTextProgramOutline(outline)) return [];
@@ -115,8 +144,11 @@ export const ProgramOutlineUploadCard: React.FC<ProgramOutlineUploadCardProps> =
           eventContext
         );
         if (parsed.length > 0) {
+          const secCount = new Set(parsed.map((p) => p.section).filter(Boolean)).size;
           setStatusMessage(
-            `Uploaded ${processed.fileName}. Detected ${parsed.length} session${parsed.length === 1 ? '' : 's'} ready to import.`
+            `Uploaded ${processed.fileName}. Detected ${parsed.length} session${parsed.length === 1 ? '' : 's'}${
+              secCount > 0 ? ` across ${secCount} section${secCount === 1 ? '' : 's'}` : ''
+            } ready to import.`
           );
           return;
         }
@@ -240,6 +272,21 @@ export const ProgramOutlineUploadCard: React.FC<ProgramOutlineUploadCardProps> =
     }
   };
 
+  const handleDownloadTemplate = (format: ProgramOutlineTemplateFormat) => {
+    setError(null);
+    const { fileName } = downloadProgramOutlineTemplate(format, eventContext, eventTitle);
+    setTemplateMenuOpen(false);
+    setStatusMessage(
+      `Downloaded ${fileName}. Fill in your sessions and upload or drop it here to import.`
+    );
+  };
+
+  const handleLoadSampleInPasteBox = () => {
+    setError(null);
+    setPastedText(buildProgramOutlineTextTemplate(eventContext, eventTitle));
+    setStatusMessage('Loaded sample outline format — edit lines below and import.');
+  };
+
   const isDisabled = busy || processing || importing || savingLogo;
 
   return (
@@ -281,23 +328,93 @@ export const ProgramOutlineUploadCard: React.FC<ProgramOutlineUploadCardProps> =
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 shrink-0 max-w-full">
           {onOpenExportDesign && (outline || hasScheduleBlocks) && (
             <button
               type="button"
               disabled={isDisabled}
               onClick={onOpenExportDesign}
-              className="px-3 py-1.5 rounded-full border border-[#0B0B0B] bg-white hover:bg-[#F5F5F7] text-[#0B0B0B] text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+              className="min-h-[38px] px-3 py-1.5 rounded-full border border-[#0B0B0B] bg-white hover:bg-[#F5F5F7] text-[#0B0B0B] text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
             >
               <Printer className="w-3.5 h-3.5" />
               <span>Export Flyer + Logo Sheet</span>
             </button>
           )}
+          <div ref={templateMenuRef} className="relative">
+            <button
+              type="button"
+              disabled={isDisabled}
+              aria-expanded={templateMenuOpen}
+              aria-haspopup="menu"
+              onClick={() => setTemplateMenuOpen((prev) => !prev)}
+              className="min-h-[38px] px-3 py-1.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[#0B0B0B] text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Download Template</span>
+              <ChevronDown className="w-3 h-3 text-[#71717A]" />
+            </button>
+
+            {templateMenuOpen && (
+              <div
+                role="menu"
+                className="absolute left-0 sm:left-auto sm:right-0 mt-1.5 w-[min(16rem,calc(100vw-2.5rem))] rounded-2xl bg-white border border-[#E5E5EA] shadow-xl p-1.5 z-30 space-y-1"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => handleDownloadTemplate('csv')}
+                  className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-[#F5F5F7] transition-colors flex items-start gap-2.5"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-[#0B0B0B] shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs font-semibold text-[#0B0B0B]">
+                      Spreadsheet Template (.csv)
+                    </p>
+                    <p className="text-[10px] text-[#71717A]">
+                      Excel &amp; Google Sheets with Sections column
+                    </p>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => handleDownloadTemplate('txt')}
+                  className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-[#F5F5F7] transition-colors flex items-start gap-2.5"
+                >
+                  <FileText className="w-4 h-4 text-[#0B0B0B] shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs font-semibold text-[#0B0B0B]">
+                      Text Outline Template (.txt)
+                    </p>
+                    <p className="text-[10px] text-[#71717A]">
+                      Section headings &amp; pipe-delimited cues
+                    </p>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => handleDownloadTemplate('md')}
+                  className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-[#F5F5F7] transition-colors flex items-start gap-2.5"
+                >
+                  <FileText className="w-4 h-4 text-[#0B0B0B] shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs font-semibold text-[#0B0B0B]">
+                      Markdown Template (.md)
+                    </p>
+                    <p className="text-[10px] text-[#71717A]">
+                      Multi-day &amp; section headers (###)
+                    </p>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
           <button
             type="button"
             disabled={isDisabled}
             onClick={() => setShowPasteBox((v) => !v)}
-            className="px-3 py-1.5 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[#0B0B0B] text-[11px] font-semibold transition-colors disabled:opacity-50"
+            className="min-h-[38px] px-3 py-1.5 rounded-full bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[#0B0B0B] text-[11px] font-semibold transition-colors disabled:opacity-50"
           >
             {showPasteBox ? 'Hide Paste Box' : 'Paste Text'}
           </button>
@@ -305,7 +422,7 @@ export const ProgramOutlineUploadCard: React.FC<ProgramOutlineUploadCardProps> =
             type="button"
             disabled={isDisabled}
             onClick={() => fileInputRef.current?.click()}
-            className="px-3.5 py-1.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            className="min-h-[38px] px-3.5 py-1.5 rounded-full bg-[#0B0B0B] hover:bg-zinc-800 text-white text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
           >
             {processing ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -401,6 +518,29 @@ export const ProgramOutlineUploadCard: React.FC<ProgramOutlineUploadCardProps> =
           <p className="text-[11px] text-[#71717A] mt-0.5">
             Supports PDF, JPG, PNG, WebP, CSV, TXT, and Markdown
           </p>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="mt-2.5 flex flex-wrap items-center justify-center gap-2"
+          >
+            <button
+              type="button"
+              disabled={isDisabled}
+              onClick={() => handleDownloadTemplate('csv')}
+              className="px-2.5 py-1 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1 transition-colors disabled:opacity-50"
+            >
+              <Download className="w-3 h-3" />
+              <span>CSV Import Template</span>
+            </button>
+            <button
+              type="button"
+              disabled={isDisabled}
+              onClick={() => handleDownloadTemplate('txt')}
+              className="px-2.5 py-1 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[11px] font-semibold text-[#0B0B0B] inline-flex items-center gap-1 transition-colors disabled:opacity-50"
+            >
+              <Download className="w-3 h-3" />
+              <span>Text Outline Template</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -514,13 +654,14 @@ export const ProgramOutlineUploadCard: React.FC<ProgramOutlineUploadCardProps> =
                 </p>
                 <p className="text-[11px] text-[#71717A] truncate mt-0.5">
                   First: {parsedFileBlocks[0].time} · {parsedFileBlocks[0].title}
+                  {parsedFileBlocks[0].section ? ` (${parsedFileBlocks[0].section})` : ''}
                 </p>
               </div>
               <button
                 type="button"
                 disabled={isDisabled}
                 onClick={() => void handleImportBlocks(parsedFileBlocks, false)}
-                className="px-3.5 py-2 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
+                className="min-h-[40px] px-3.5 py-2 rounded-full bg-[#0B0B0B] text-white text-[11px] font-semibold hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
               >
                 {importing
                   ? 'Importing...'
@@ -533,19 +674,29 @@ export const ProgramOutlineUploadCard: React.FC<ProgramOutlineUploadCardProps> =
 
       {showPasteBox && (
         <div className="p-3.5 rounded-2xl bg-[#F5F5F7] space-y-2.5">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <label className="text-xs font-semibold text-[#0B0B0B]">
               Paste Program Outline Lines
             </label>
-            <span className="text-[10px] font-mono text-[#71717A]">
-              e.g. 09:00 - 09:45 | Opening Keynote | Main Hall
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={isDisabled}
+                onClick={handleLoadSampleInPasteBox}
+                className="min-h-[34px] px-2.5 py-1 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-[10px] font-semibold text-[#0B0B0B] transition-colors disabled:opacity-50"
+              >
+                Insert Sample Template
+              </button>
+              <span className="text-[10px] font-mono text-[#71717A]">
+                ### Section Name · 09:00 - 09:45 | Title | Stage
+              </span>
+            </div>
           </div>
           <textarea
             rows={5}
             value={pastedText}
             onChange={(e) => setPastedText(e.target.value)}
-            placeholder={`## Day 1\n09:00 - 09:30 | Guest Arrival & Accreditation | Atrium\n09:30 - 10:30 | Opening Remarks | Main Hall | Organiser\n11:00 - 12:15 | Keynote Address | Main Hall`}
+            placeholder={`## Day 1\n### Part 1 · Opening\n09:00 - 09:30 | Guest Arrival & Accreditation | Atrium\n09:30 - 10:30 | Opening Remarks | Main Hall | Organiser\n### Part 2 · Main Session\n11:00 - 12:15 | Keynote Address | Main Hall`}
             className="w-full p-3 rounded-2xl bg-white border border-[#E5E5EA] text-xs font-mono text-[#0B0B0B] focus:outline-none focus:border-[#0B0B0B]"
           />
           <div className="flex flex-wrap items-center justify-between gap-2">

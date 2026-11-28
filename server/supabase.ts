@@ -17,10 +17,12 @@ import { isSyntheticPhoneEmail } from './phoneAuth.ts';
 import { normalizeHexColor } from '../src/lib/themeColors.ts';
 import { sanitizeEventPlanningConfig } from '../src/lib/planningTemplates.ts';
 import {
+  formatEventDateSpan,
   normalizeScheduleDay,
   sanitizeCheckedInDates,
   sanitizeCheckInPolicy,
   sanitizeIsoDate,
+  sanitizeScheduleSection,
 } from '../src/lib/eventDates.ts';
 import {
   resolvePlanAttendeeCapacityValue,
@@ -292,11 +294,11 @@ export function extractEventShotShootersMap(rawExtraConfig: unknown): Record<str
 
 export function extractEventScheduleDatesMap(
   rawExtraConfig: unknown
-): Record<string, { date?: string; day?: string }> {
+): Record<string, { date?: string; day?: string; section?: string }> {
   if (!rawExtraConfig || typeof rawExtraConfig !== 'object') return {};
   const map = (rawExtraConfig as Record<string, unknown>).__scheduleDates;
   if (!map || typeof map !== 'object') return {};
-  const result: Record<string, { date?: string; day?: string }> = {};
+  const result: Record<string, { date?: string; day?: string; section?: string }> = {};
   for (const [blockId, val] of Object.entries(map as Record<string, unknown>)) {
     if (typeof val === 'string') {
       const iso = sanitizeIsoDate(val);
@@ -305,8 +307,13 @@ export function extractEventScheduleDatesMap(
       const rec = val as Record<string, unknown>;
       const iso = sanitizeIsoDate(typeof rec.date === 'string' ? rec.date : undefined);
       const day = typeof rec.day === 'string' && rec.day.trim() ? rec.day.trim() : undefined;
-      if (iso || day) {
-        result[blockId] = { ...(iso ? { date: iso } : {}), ...(day ? { day } : {}) };
+      const section = sanitizeScheduleSection(rec.section);
+      if (iso || day || section) {
+        result[blockId] = {
+          ...(iso ? { date: iso } : {}),
+          ...(day ? { day } : {}),
+          ...(section ? { section } : {}),
+        };
       }
     }
   }
@@ -414,6 +421,11 @@ export function mapEventRow(
     row.brand_color != null ? String(row.brand_color) : mergedExtra?.brandColor
   );
 
+  const cleanStartIso = sanitizeIsoDate(startIso);
+  const resolvedDisplayDate = cleanStartIso
+    ? formatEventDateSpan(cleanStartIso, resolvedEndIso, String(row.date))
+    : String(row.date);
+
   return {
     id: String(row.id),
     slug: String(row.slug),
@@ -421,8 +433,8 @@ export function mapEventRow(
     subtitle: String(row.subtitle ?? ''),
     category: String(row.category ?? 'Events'),
     status: (row.status as EventItem['status']) || 'upcoming',
-    date: String(row.date),
-    isoDate: startIso,
+    date: resolvedDisplayDate,
+    isoDate: cleanStartIso ?? startIso,
     ...(resolvedEndIso ? { endIsoDate: resolvedEndIso } : {}),
     ...(resolvedCheckInPolicy ? { checkInPolicy: resolvedCheckInPolicy } : {}),
     time: String(row.time),
@@ -490,11 +502,12 @@ export function mapAttendeeRow(row: Record<string, unknown>): Attendee {
 
 export function mapScheduleRow(
   row: Record<string, unknown>,
-  fallbackMeta?: { date?: string; day?: string }
+  fallbackMeta?: { date?: string; day?: string; section?: string }
 ): ScheduleBlock {
   const date = sanitizeIsoDate(
     typeof row.date === 'string' ? row.date : fallbackMeta?.date
   );
+  const section = sanitizeScheduleSection(fallbackMeta?.section ?? row.section);
   return {
     id: String(row.id),
     eventId: String(row.event_id),
@@ -506,6 +519,7 @@ export function mapScheduleRow(
     completed: Boolean(row.completed),
     day: normalizeScheduleDay(fallbackMeta?.day ?? row.day, 'Sat'),
     ...(date ? { date } : {}),
+    ...(section ? { section } : {}),
   };
 }
 

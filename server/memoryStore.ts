@@ -21,6 +21,7 @@ import {
   sanitizeCheckedInDates,
   sanitizeCheckInPolicy,
   sanitizeIsoDate,
+  sanitizeScheduleSection,
 } from '../src/lib/eventDates.ts';
 import {
   buildValidatedPollOptions,
@@ -1947,9 +1948,7 @@ export const memoryStore = {
       isoDate: cleanStartIso,
       ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
       ...(cleanPolicy ? { checkInPolicy: cleanPolicy } : {}),
-      date: cleanEndIso
-        ? formatEventDateSpan(cleanStartIso, cleanEndIso, event.date)
-        : event.date,
+      date: formatEventDateSpan(cleanStartIso, cleanEndIso, event.date),
       capacity: enforcedCapacity,
       extraDataConfig: {
         ...initialExtraDataConfig,
@@ -1974,12 +1973,14 @@ export const memoryStore = {
       const resolvedDay = resolvedDate
         ? getScheduleBlockDayFromIso(resolvedDate, dateContext, normalizeScheduleDay(b.day, 'Sat'))
         : normalizeScheduleDay(b.day, 'Sat');
+      const cleanSection = sanitizeScheduleSection(b.section);
       const block: ScheduleBlock = {
         ...b,
         id,
         eventId: uniqueEventId,
         day: resolvedDay,
         ...(resolvedDate ? { date: resolvedDate } : {}),
+        ...(cleanSection ? { section: cleanSection } : {}),
       };
       db.scheduleBlocks.set(id, block);
       return block;
@@ -2160,6 +2161,7 @@ export const memoryStore = {
       organizerId: userId,
       isoDate: nextStartIso,
       endIsoDate: nextEndIso,
+      date: formatEventDateSpan(nextStartIso, nextEndIso, updated.date || existing.date),
       checkInPolicy: nextPolicy,
       capacity: nextCapacity,
       extraDataConfig: finalExtra,
@@ -2834,11 +2836,14 @@ export const memoryStore = {
     const resolvedDay = resolvedDate
       ? getScheduleBlockDayFromIso(resolvedDate, evt, normalizeScheduleDay(block.day, 'Sat'))
       : normalizeScheduleDay(block.day, 'Sat');
+    const cleanSection = sanitizeScheduleSection(block.section);
     const normalized: ScheduleBlock = {
       ...block,
       day: resolvedDay,
       ...(resolvedDate ? { date: resolvedDate } : {}),
+      ...(cleanSection ? { section: cleanSection } : {}),
     };
+    if (!cleanSection) delete normalized.section;
     db.scheduleBlocks.set(normalized.id, normalized);
     return normalized;
   },
@@ -2879,6 +2884,11 @@ export const memoryStore = {
       ...(typeof patch.completed === 'boolean' ? { completed: patch.completed } : {}),
       day: nextDay,
     };
+    if ('section' in patch) {
+      const cleanSec = sanitizeScheduleSection(patch.section);
+      if (cleanSec) updated.section = cleanSec;
+      else delete updated.section;
+    }
     if (nextDate) {
       updated.date = nextDate;
     } else {
