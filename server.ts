@@ -99,6 +99,7 @@ import {
   resolveEventMessage,
   resolveGiftThankYouMessage,
 } from './src/lib/eventMessages.ts';
+import { sanitizeEventLogoUrl, sanitizeProgramOutline } from './src/lib/programOutline.ts';
 import {
   compareScheduleBlocksChronological,
   formatEventDateSpan,
@@ -305,6 +306,41 @@ function withEmbeddedMessageConfig(
     }
     if ((extraDataConfig as EventItem['extraDataConfig'])?.checkInPolicy === undefined && existingObj.checkInPolicy !== undefined) {
       base.checkInPolicy = existingObj.checkInPolicy;
+    }
+    const rawExtraRecord = extraDataConfig as unknown as Record<string, unknown>;
+    if ('programOutline' in rawExtraRecord) {
+      if (rawExtraRecord.programOutline == null) {
+        delete base.programOutline;
+      } else {
+        const cleanOutline = sanitizeProgramOutline(rawExtraRecord.programOutline);
+        if (cleanOutline) {
+          base.programOutline = cleanOutline;
+        } else {
+          delete base.programOutline;
+        }
+      }
+    } else if (existingObj.programOutline !== undefined) {
+      const cleanExistingOutline = sanitizeProgramOutline(existingObj.programOutline);
+      if (cleanExistingOutline) {
+        base.programOutline = cleanExistingOutline;
+      }
+    }
+    if ('logoUrl' in rawExtraRecord) {
+      if (rawExtraRecord.logoUrl == null || rawExtraRecord.logoUrl === '') {
+        delete base.logoUrl;
+      } else {
+        const cleanLogo = sanitizeEventLogoUrl(rawExtraRecord.logoUrl);
+        if (cleanLogo) {
+          base.logoUrl = cleanLogo;
+        } else {
+          delete base.logoUrl;
+        }
+      }
+    } else if (existingObj.logoUrl !== undefined) {
+      const cleanExistingLogo = sanitizeEventLogoUrl(existingObj.logoUrl);
+      if (cleanExistingLogo) {
+        base.logoUrl = cleanExistingLogo;
+      }
     }
   }
   if (messageConfig && typeof messageConfig === 'object') {
@@ -3471,6 +3507,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                 customMessage: resolvedMsg.text,
                 cameraUrl: resolvedMsg.cameraUrl,
                 eventUrl: resolvedMsg.eventUrl,
+                programUrl: resolvedMsg.programUrl,
+                programOutlineTitle:
+                  event.extraDataConfig?.programOutline?.title ||
+                  event.extraDataConfig?.programOutline?.fileName,
+                programOutlineFileName: event.extraDataConfig?.programOutline?.fileName,
                 scheduleBlocks: publicScheduleItems,
               })
             : Promise.resolve({ ok: false, skipped: true }),
@@ -5389,6 +5430,28 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       const cleanPolicy = sanitizeCheckInPolicy(
         event.checkInPolicy ?? event.extraDataConfig?.checkInPolicy
       );
+      const rawIncomingOutline = (
+        event.extraDataConfig as unknown as Record<string, unknown> | undefined
+      )?.programOutline;
+      if (rawIncomingOutline !== undefined && rawIncomingOutline !== null) {
+        const cleanOutline = sanitizeProgramOutline(rawIncomingOutline);
+        if (!cleanOutline) {
+          return res.status(400).json({
+            error:
+              'Unsupported or oversized program outline file. Allowed formats: PDF, JPG/PNG/WebP, TXT, CSV, or Markdown (.md) up to 2.5 MB.',
+          });
+        }
+      }
+      const rawIncomingLogo = (
+        event.extraDataConfig as unknown as Record<string, unknown> | undefined
+      )?.logoUrl;
+      if (rawIncomingLogo !== undefined && rawIncomingLogo !== null && rawIncomingLogo !== '') {
+        if (!sanitizeEventLogoUrl(rawIncomingLogo)) {
+          return res.status(400).json({
+            error: 'Event logo must be a valid HTTPS URL or JPG/PNG/WebP image under 1.5 MB.',
+          });
+        }
+      }
       const dateContext = { isoDate: cleanStartIso, endIsoDate: cleanEndIso };
       const formattedDate = cleanEndIso
         ? formatEventDateSpan(cleanStartIso, cleanEndIso, event.date)
@@ -5596,6 +5659,29 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
       const cleanPolicy = hasExplicitPolicy
         ? sanitizeCheckInPolicy(updated.checkInPolicy ?? updated.extraDataConfig?.checkInPolicy)
         : sanitizeCheckInPolicy(existingExtraObj.checkInPolicy);
+
+      const rawUpdatedOutline = (
+        updated.extraDataConfig as unknown as Record<string, unknown> | undefined
+      )?.programOutline;
+      if (rawUpdatedOutline !== undefined && rawUpdatedOutline !== null) {
+        const cleanOutline = sanitizeProgramOutline(rawUpdatedOutline);
+        if (!cleanOutline) {
+          return res.status(400).json({
+            error:
+              'Unsupported or oversized program outline file. Allowed formats: PDF, JPG/PNG/WebP, TXT, CSV, or Markdown (.md) up to 2.5 MB.',
+          });
+        }
+      }
+      const rawUpdatedLogo = (
+        updated.extraDataConfig as unknown as Record<string, unknown> | undefined
+      )?.logoUrl;
+      if (rawUpdatedLogo !== undefined && rawUpdatedLogo !== null && rawUpdatedLogo !== '') {
+        if (!sanitizeEventLogoUrl(rawUpdatedLogo)) {
+          return res.status(400).json({
+            error: 'Event logo must be a valid HTTPS URL or JPG/PNG/WebP image under 1.5 MB.',
+          });
+        }
+      }
 
       const embeddedExtra =
         withEmbeddedMessageConfig(
@@ -6504,6 +6590,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                 welcomeMessage: studioResolvedMsg.text,
                 cameraUrl: studioResolvedMsg.cameraUrl,
                 eventUrl: studioResolvedMsg.eventUrl,
+                programUrl: studioResolvedMsg.programUrl,
+                programOutlineTitle:
+                  evtMapped.extraDataConfig?.programOutline?.title ||
+                  evtMapped.extraDataConfig?.programOutline?.fileName,
+                programOutlineFileName: evtMapped.extraDataConfig?.programOutline?.fileName,
                 scheduleBlocks: studioScheduleItems,
                 replyTo,
               })
@@ -6522,6 +6613,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                 customMessage: studioResolvedMsg.text,
                 cameraUrl: studioResolvedMsg.cameraUrl,
                 eventUrl: studioResolvedMsg.eventUrl,
+                programUrl: studioResolvedMsg.programUrl,
+                programOutlineTitle:
+                  evtMapped.extraDataConfig?.programOutline?.title ||
+                  evtMapped.extraDataConfig?.programOutline?.fileName,
+                programOutlineFileName: evtMapped.extraDataConfig?.programOutline?.fileName,
                 scheduleBlocks: studioScheduleItems,
               })
           : Promise.resolve({ ok: false, skipped: true }),
@@ -6844,6 +6940,11 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                   welcomeMessage: resolved.text,
                   cameraUrl: resolved.cameraUrl,
                   eventUrl: resolved.eventUrl,
+                  programUrl: resolved.programUrl,
+                  programOutlineTitle:
+                    evtMapped.extraDataConfig?.programOutline?.title ||
+                    evtMapped.extraDataConfig?.programOutline?.fileName,
+                  programOutlineFileName: evtMapped.extraDataConfig?.programOutline?.fileName,
                   scheduleBlocks: checkInScheduleItems,
                   replyTo,
                 })
@@ -7056,17 +7157,23 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
             ? profRec.sender_id.trim()
             : undefined;
 
+        const baseUrl = resolveBaseUrl(req);
         const prepared = ownedAttendees.map((att) => {
           const rawEvt = eventById.get(att.eventId)!;
           const evtMapped = mapEventRow(rawEvt);
+          const cleanSlug = encodeURIComponent(evtMapped.slug || evtMapped.id);
+          const eventUrl = `${baseUrl}/e/${cleanSlug}`;
+          const programUrl = `${baseUrl}/e/${cleanSlug}/program`;
           const personalizedRaw = cleanMessage
             .replace(/\{name\}/gi, att.name)
             .replace(/\{event\}/gi, evtMapped.title)
-            .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode);
+            .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode)
+            .replace(/\{programLink\}|\{program_link\}|\{outlineLink\}/gi, programUrl)
+            .replace(/\{eventLink\}|\{event_link\}/gi, eventUrl);
           const personalizedText = appendPoweredByLine(personalizedRaw);
           const smsCost = att.phone ? calculateSmsCredits(personalizedText) : 0;
-          const cameraUrl = `${resolveBaseUrl(req)}/e/${encodeURIComponent(evtMapped.slug || evtMapped.id)}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
-          return { att, evtMapped, personalizedText, smsCost, cameraUrl };
+          const cameraUrl = `${baseUrl}/e/${cleanSlug}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
+          return { att, evtMapped, personalizedText, smsCost, cameraUrl, eventUrl, programUrl };
         });
 
         const requiredSmsCredits = prepared.reduce((acc, item) => acc + item.smsCost, 0);
@@ -7086,7 +7193,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         let failedSmsRefund = 0;
 
         await Promise.all(
-          prepared.map(async ({ att, evtMapped, personalizedText, smsCost, cameraUrl }) => {
+          prepared.map(async ({ att, evtMapped, personalizedText, smsCost, cameraUrl, eventUrl, programUrl }) => {
             const [smsRes, emailRes] = await Promise.all([
               att.phone && smsCost > 0
                 ? dispatchOptionalArkeselSms(
@@ -7109,6 +7216,12 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
                     organizerName: evtMapped.organizer,
                     welcomeMessage: personalizedText,
                     cameraUrl,
+                    eventUrl,
+                    programUrl,
+                    programOutlineTitle:
+                      evtMapped.extraDataConfig?.programOutline?.title ||
+                      evtMapped.extraDataConfig?.programOutline?.fileName,
+                    programOutlineFileName: evtMapped.extraDataConfig?.programOutline?.fileName,
                     replyTo,
                   })
                 : Promise.resolve({ ok: false, skipped: true }),
@@ -8123,6 +8236,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
   const resolvePublicEventSubPath = (pathname: string): PublicEventSubPath => {
     if (/\/(?:checkin|walk-?in)\/?$/i.test(pathname)) return 'checkin';
     if (/\/(?:gifts|gift-desk)\/?$/i.test(pathname)) return 'gifts';
+    if (/\/polls?\/?$/i.test(pathname)) return 'polls';
+    if (/\/(?:program|schedule)\/?$/i.test(pathname)) return 'program';
     if (/\/camera\/?$/i.test(pathname) || pathname.toLowerCase() === '/camera') return 'camera';
     return 'top';
   };
@@ -8187,6 +8302,8 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
         '/e/:slug/gifts',
         '/e/:slug/gift-desk',
         '/e/:slug/polls',
+        '/e/:slug/program',
+        '/e/:slug/schedule',
         '/e/:slug/camera',
         '/camera',
         '/',
@@ -8257,7 +8374,7 @@ export async function createExpressApp(options?: { serverless?: boolean; httpSer
     }
     app.get('*', async (req, res) => {
       const slugMatch = req.path.match(
-        /^\/e\/([^/]+)(?:\/(?:checkin|walk-?in|gifts|gift-desk|polls|camera))?\/?$/i
+        /^\/e\/([^/]+)(?:\/(?:checkin|walk-?in|gifts|gift-desk|polls|program|schedule|camera))?\/?$/i
       );
       const isDirectEventRoute = req.path.startsWith('/e/');
       const slugOrId =

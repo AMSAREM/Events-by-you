@@ -26,6 +26,7 @@ import {
   resolvePlanAttendeeCapacityValue,
   toDbPlanAttendeeCapacity,
 } from '../src/lib/subscriptionPlans.ts';
+import { sanitizeEventLogoUrl, sanitizeProgramOutline } from '../src/lib/programOutline.ts';
 
 function cleanEnvValue(raw: string | undefined): string {
   if (!raw) return '';
@@ -383,6 +384,23 @@ export function mapEventRow(
         : rawExtraObj?.planningConfig && typeof rawExtraObj.planningConfig === 'object'
           ? sanitizeEventPlanningConfig(rawExtraObj.planningConfig, String(row.category ?? 'Events'), dateContext)
           : undefined;
+
+  if (rawExtraObj && 'programOutline' in rawExtraObj) {
+    const cleanOutline = sanitizeProgramOutline(rawExtraObj.programOutline);
+    if (cleanOutline) {
+      rawExtraObj.programOutline = cleanOutline;
+    } else {
+      delete rawExtraObj.programOutline;
+    }
+  }
+  if (rawExtraObj && 'logoUrl' in rawExtraObj) {
+    const cleanLogo = sanitizeEventLogoUrl(rawExtraObj.logoUrl);
+    if (cleanLogo) {
+      rawExtraObj.logoUrl = cleanLogo;
+    } else {
+      delete rawExtraObj.logoUrl;
+    }
+  }
 
   const mergedExtra =
     rawExtraObj || resolvedPlanning

@@ -32,6 +32,7 @@ import {
   createStarterPlanningConfig,
   sanitizeEventPlanningConfig,
 } from '../src/lib/planningTemplates.ts';
+import { sanitizeEventLogoUrl, sanitizeProgramOutline } from '../src/lib/programOutline.ts';
 import {
   PLAN_MRR_USD,
   DEFAULT_SHARED_SENDER_ID,
@@ -1885,16 +1886,59 @@ export const memoryStore = {
       dateContext
     );
 
+    const rawIncomingOutline = (
+      event.extraDataConfig as unknown as Record<string, unknown> | undefined
+    )?.programOutline;
+    const cleanProgramOutline =
+      rawIncomingOutline !== undefined && rawIncomingOutline !== null
+        ? sanitizeProgramOutline(rawIncomingOutline)
+        : undefined;
+    if (rawIncomingOutline !== undefined && rawIncomingOutline !== null && !cleanProgramOutline) {
+      throw Object.assign(
+        new Error(
+          'Unsupported or oversized program outline file. Allowed formats: PDF, JPG/PNG/WebP, TXT, CSV, or Markdown (.md) up to 2.5 MB.'
+        ),
+        { status: 400 }
+      );
+    }
+
+    const rawIncomingLogo = (
+      event.extraDataConfig as unknown as Record<string, unknown> | undefined
+    )?.logoUrl;
+    const cleanIncomingLogo =
+      rawIncomingLogo !== undefined && rawIncomingLogo !== null && rawIncomingLogo !== ''
+        ? sanitizeEventLogoUrl(rawIncomingLogo)
+        : undefined;
+    if (
+      rawIncomingLogo !== undefined &&
+      rawIncomingLogo !== null &&
+      rawIncomingLogo !== '' &&
+      !cleanIncomingLogo
+    ) {
+      throw Object.assign(
+        new Error('Event logo must be a valid JPG, PNG, or WebP image (under 1 MB) or HTTPS URL.'),
+        { status: 400 }
+      );
+    }
+
     const initialExtraDataConfig = event.extraDataConfig
       ? {
           ...event.extraDataConfig,
           planningConfig: sanitizedPlanning,
+          ...(cleanProgramOutline ? { programOutline: cleanProgramOutline } : {}),
+          ...(cleanIncomingLogo ? { logoUrl: cleanIncomingLogo } : {}),
         }
       : {
           enableGiftTable: false,
           customFields: [],
           planningConfig: sanitizedPlanning,
         };
+    if (rawIncomingOutline === null && 'programOutline' in initialExtraDataConfig) {
+      delete (initialExtraDataConfig as unknown as Record<string, unknown>).programOutline;
+    }
+    if ((rawIncomingLogo === null || rawIncomingLogo === '') && 'logoUrl' in initialExtraDataConfig) {
+      delete (initialExtraDataConfig as unknown as Record<string, unknown>).logoUrl;
+    }
 
     const created: EventItem = {
       ...event,
@@ -2014,6 +2058,41 @@ export const memoryStore = {
         : Math.max(1, Number(updated.capacity ?? existing.capacity) || 100);
     const existingExtra = existing.extraDataConfig;
     const incomingExtra = updated.extraDataConfig;
+    const incomingExtraRec = incomingExtra as unknown as Record<string, unknown> | undefined;
+    const hasExplicitOutline = Boolean(incomingExtraRec && 'programOutline' in incomingExtraRec);
+    const rawUpdatedOutline = incomingExtraRec?.programOutline;
+    const cleanUpdatedOutline =
+      hasExplicitOutline && rawUpdatedOutline !== undefined && rawUpdatedOutline !== null
+        ? sanitizeProgramOutline(rawUpdatedOutline)
+        : undefined;
+    if (hasExplicitOutline && rawUpdatedOutline !== undefined && rawUpdatedOutline !== null && !cleanUpdatedOutline) {
+      throw Object.assign(
+        new Error(
+          'Unsupported or oversized program outline file. Allowed formats: PDF, JPG/PNG/WebP, TXT, CSV, or Markdown (.md) up to 2.5 MB.'
+        ),
+        { status: 400 }
+      );
+    }
+
+    const hasExplicitLogo = Boolean(incomingExtraRec && 'logoUrl' in incomingExtraRec);
+    const rawUpdatedLogo = incomingExtraRec?.logoUrl;
+    const cleanUpdatedLogo =
+      hasExplicitLogo && rawUpdatedLogo !== undefined && rawUpdatedLogo !== null && rawUpdatedLogo !== ''
+        ? sanitizeEventLogoUrl(rawUpdatedLogo)
+        : undefined;
+    if (
+      hasExplicitLogo &&
+      rawUpdatedLogo !== undefined &&
+      rawUpdatedLogo !== null &&
+      rawUpdatedLogo !== '' &&
+      !cleanUpdatedLogo
+    ) {
+      throw Object.assign(
+        new Error('Event logo must be a valid JPG, PNG, or WebP image (under 1 MB) or HTTPS URL.'),
+        { status: 400 }
+      );
+    }
+
     const mergedExtra =
       incomingExtra === undefined
         ? existingExtra
@@ -2051,6 +2130,20 @@ export const memoryStore = {
       else delete finalExtra.endIsoDate;
       if (nextPolicy) finalExtra.checkInPolicy = nextPolicy;
       else delete finalExtra.checkInPolicy;
+      if (hasExplicitOutline) {
+        if (cleanUpdatedOutline) finalExtra.programOutline = cleanUpdatedOutline;
+        else delete finalExtra.programOutline;
+      } else if (existingExtra?.programOutline) {
+        const preservedOutline = sanitizeProgramOutline(existingExtra.programOutline);
+        if (preservedOutline) finalExtra.programOutline = preservedOutline;
+      }
+      if (hasExplicitLogo) {
+        if (cleanUpdatedLogo) finalExtra.logoUrl = cleanUpdatedLogo;
+        else delete finalExtra.logoUrl;
+      } else if (existingExtra?.logoUrl) {
+        const preservedLogo = sanitizeEventLogoUrl(existingExtra.logoUrl);
+        if (preservedLogo) finalExtra.logoUrl = preservedLogo;
+      }
       if (finalExtra.planningConfig) {
         finalExtra.planningConfig = sanitizeEventPlanningConfig(
           finalExtra.planningConfig,

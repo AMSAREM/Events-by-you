@@ -39,6 +39,7 @@ import {
   EventPlanningConfig,
   EventPoll,
   EventPollStatus,
+  EventProgramOutline,
   EventValidationConfig,
   GiftTableAttendantLink,
   GiftTableEntry,
@@ -98,8 +99,10 @@ import { EventPollsManager } from './EventPollsManager';
 import { EventPlanningPanel } from './EventPlanningPanel';
 import { computeEventReadiness } from '../lib/planningTemplates';
 import { MonochromePoster, SplineChart } from './MonochromeArtwork';
+import { ProgramOutlineUploadCard } from './ProgramOutlineUploadCard';
 import { ThemeColorPicker } from './ThemeColorPicker';
 import { TopUtilityBar } from './TopUtilityBar';
+import type { ParsedProgramOutlineBlock } from '../lib/programOutline';
 
 type WorkspaceTab =
   | 'overview'
@@ -289,6 +292,7 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
   const [newBlockTitle, setNewBlockTitle] = useState('');
   const [newBlockLead, setNewBlockLead] = useState('');
   const [newBlockStage, setNewBlockStage] = useState('Main Auditorium');
+  const [savingOutline, setSavingOutline] = useState(false);
 
   const [editingDatesPolicy, setEditingDatesPolicy] = useState(false);
   const [savingDatesPolicy, setSavingDatesPolicy] = useState(false);
@@ -1555,6 +1559,64 @@ export const EventWorkspaceScreen: React.FC<EventWorkspaceScreenProps> = ({
                   <span>{addingBlock ? 'Close' : 'Add Item'}</span>
                 </button>
               </div>
+
+              {onUpdateEvent && (
+                <ProgramOutlineUploadCard
+                  outline={event.extraDataConfig?.programOutline}
+                  eventTitle={event.title}
+                  eventContext={event}
+                  busy={savingOutline}
+                  onSaveOutline={async (nextOutline) => {
+                    setSavingOutline(true);
+                    try {
+                      const baseExtra = event.extraDataConfig ?? {
+                        enableGiftTable: false,
+                        customFields: [],
+                      };
+                      await Promise.resolve(
+                        onUpdateEvent({
+                          ...event,
+                          extraDataConfig: {
+                            ...baseExtra,
+                            programOutline:
+                              nextOutline ?? (null as unknown as EventProgramOutline),
+                          },
+                        })
+                      );
+                      triggerToast(
+                        nextOutline
+                          ? `Saved program outline (${nextOutline.fileName}).`
+                          : 'Removed program outline.'
+                      );
+                    } finally {
+                      setSavingOutline(false);
+                    }
+                  }}
+                  onImportParsedBlocks={async (parsedBlocks: ParsedProgramOutlineBlock[]) => {
+                    const seed = Date.now();
+                    for (let i = 0; i < parsedBlocks.length; i += 1) {
+                      const pb = parsedBlocks[i];
+                      await Promise.resolve(
+                        onAddScheduleBlock({
+                          id: `sch-${seed}-${i}`,
+                          eventId: event.id,
+                          time: pb.time,
+                          duration: pb.duration,
+                          title: pb.title,
+                          stage: pb.stage,
+                          lead: pb.lead || profile.name,
+                          completed: false,
+                          day: pb.day,
+                          ...(pb.date ? { date: pb.date } : {}),
+                        })
+                      );
+                    }
+                    triggerToast(
+                      `Imported ${parsedBlocks.length} session${parsedBlocks.length === 1 ? '' : 's'} into schedule.`
+                    );
+                  }}
+                />
+              )}
 
               {addingBlock && (
                 <form

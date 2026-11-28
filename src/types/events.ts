@@ -252,6 +252,16 @@ export interface EventPlanningConfig {
 
 export type EventCheckInPolicy = 'single-entry' | 'daily-reentry';
 
+export interface EventProgramOutline {
+  fileName: string;
+  mimeType: string;
+  dataUrl: string;
+  sizeBytes?: number;
+  uploadedAt: string;
+  title?: string;
+  notes?: string;
+}
+
 export interface EventExtraDataConfig {
   enableGiftTable: boolean;
   giftTitle?: string;
@@ -264,6 +274,8 @@ export interface EventExtraDataConfig {
   pollsTitle?: string;
   polls?: EventPoll[];
   planningConfig?: EventPlanningConfig;
+  programOutline?: EventProgramOutline;
+  logoUrl?: string;
   brandColor?: string;
   endIsoDate?: string;
   checkInPolicy?: EventCheckInPolicy;

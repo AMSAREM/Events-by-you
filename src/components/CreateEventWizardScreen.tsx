@@ -27,6 +27,7 @@ import {
   DesignTheme,
   EventCheckInPolicy,
   EventItem,
+  EventProgramOutline,
   EventValidationConfig,
   OrganizerProfile,
   ScheduleBlock,
@@ -57,12 +58,14 @@ import {
   isActiveEventStatus,
   STARTER_MAX_ATTENDEES_PER_EVENT,
 } from '../lib/subscriptionPlans';
-import { buildEventInvitationUrl, buildEventOgImageUrl } from '../lib/qr';
+import { buildEventInvitationUrl, buildEventOgImageUrl, buildEventProgramUrl } from '../lib/qr';
 import { createStarterPlanningConfig } from '../lib/planningTemplates';
 import { EventFlyerCard } from './EventFlyerCard';
 import { GuestCircleValidationEditor } from './GuestCircleValidationEditor';
 import { MonochromePoster } from './MonochromeArtwork';
+import { ProgramOutlineUploadCard } from './ProgramOutlineUploadCard';
 import { ThemeColorPicker } from './ThemeColorPicker';
+import { sanitizeEventLogoUrl, type ParsedProgramOutlineBlock } from '../lib/programOutline';
 
 interface CreateEventWizardScreenProps {
   profile: OrganizerProfile;
@@ -164,6 +167,10 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
   const [newBlockTitle, setNewBlockTitle] = useState('');
   const [newBlockLead, setNewBlockLead] = useState('');
   const [newBlockStage, setNewBlockStage] = useState('Workshop Lab');
+  const [programOutline, setProgramOutline] = useState<EventProgramOutline | undefined>(undefined);
+  const [logoUrl, setLogoUrl] = useState<string | undefined>(() =>
+    sanitizeEventLogoUrl(profile.avatarUrl)
+  );
 
   useEffect(() => {
     const cleanStart = sanitizeIsoDate(startIsoDate) ?? '2026-12-18';
@@ -294,6 +301,28 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
     setNewBlockLead('');
   };
 
+  const handleImportWizardOutlineBlocks = (parsedBlocks: ParsedProgramOutlineBlock[]) => {
+    const cleanStart = sanitizeIsoDate(startIsoDate) ?? '2026-12-18';
+    const cleanEnd =
+      isMultiDay && sanitizeIsoDate(endIsoDate) && endIsoDate > cleanStart
+        ? endIsoDate
+        : undefined;
+    const dateCtx = { isoDate: cleanStart, endIsoDate: cleanEnd };
+    const nowSeed = Date.now();
+    const mapped = parsedBlocks.map((pb, idx) => ({
+      id: `wiz-blk-${nowSeed}-${idx}`,
+      day: pb.day,
+      ...(pb.date ? { date: pb.date } : {}),
+      time: pb.time,
+      title: pb.title,
+      lead: pb.lead || profile.name,
+      stage: pb.stage || venue.trim() || 'Main Hall',
+    }));
+    setDraftBlocks((prev) =>
+      [...prev, ...mapped].sort((a, b) => compareScheduleBlocksChronological(a, b, dateCtx))
+    );
+  };
+
   const applyCategoryPreset = (nextCat: string) => {
     setCategory(nextCat);
     const catPreset = getCategoryPreset(nextCat);
@@ -405,6 +434,8 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
             { isoDate: cleanStartIso, endIsoDate: cleanEndIso }
           ),
           ...(cleanEndIso ? { endIsoDate: cleanEndIso } : {}),
+          ...(programOutline ? { programOutline } : {}),
+          ...(logoUrl ? { logoUrl } : {}),
           checkInPolicy,
           brandColor,
           customFields,
@@ -1293,6 +1324,21 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                 </span>
               </div>
 
+              <ProgramOutlineUploadCard
+                outline={programOutline}
+                eventTitle={title.trim() || 'New Production'}
+                eventContext={{
+                  isoDate: effectiveStartIso,
+                  endIsoDate: effectiveEndIso,
+                  organizer: profile.studio || profile.name,
+                  venue: venueFormat === 'virtual' ? 'Livestream Stage' : venue.trim() || 'Main Auditorium',
+                }}
+                logoUrl={logoUrl}
+                onLogoChange={(nextLogo) => setLogoUrl(nextLogo ?? undefined)}
+                onSaveOutline={(next) => setProgramOutline(next ?? undefined)}
+                onImportParsedBlocks={handleImportWizardOutlineBlocks}
+              />
+
               <form onSubmit={handleAddDraftBlock} className="p-4 rounded-2xl bg-white grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <input
                   type="text"
@@ -1641,7 +1687,7 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                     Check-In Welcome SMS Template (Sent at Gate Check-In)
                   </label>
                   <div className="flex flex-wrap gap-1">
-                    {['{name}', '{event}', '{code}', '{cameraLink}'].map((tag) => (
+                    {['{name}', '{event}', '{code}', '{cameraLink}', '{programLink}'].map((tag) => (
                       <button
                         key={tag}
                         type="button"
@@ -1654,6 +1700,10 @@ export const CreateEventWizardScreen: React.FC<CreateEventWizardScreenProps> = (
                     ))}
                   </div>
                 </div>
+                <p className="text-[11px] text-[#71717A] mb-1.5">
+                  Confirmation &amp; check-in messages automatically include{' '}
+                  <span className="font-mono text-[#0B0B0B]">{buildEventProgramUrl(slug || 'event')}</span>
+                </p>
                 <textarea
                   rows={3}
                   readOnly={!entitlements.allowCustomMessages}

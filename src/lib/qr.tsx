@@ -54,7 +54,7 @@ export function downloadQrSvg(value: string, filename = 'event-gate-pass-qr.svg'
 
 export function buildEventInvitationUrl(
   slugOrId: string,
-  tab?: 'checkin' | 'walkin' | 'register' | 'gifts' | 'polls'
+  tab?: 'checkin' | 'walkin' | 'register' | 'gifts' | 'polls' | 'program'
 ): string {
   const clean = encodeURIComponent(slugOrId.trim());
   const origin =
@@ -66,7 +66,21 @@ export function buildEventInvitationUrl(
   if (tab === 'walkin') return `${base}/walkin`;
   if (tab === 'gifts') return `${base}/gifts`;
   if (tab === 'polls') return `${base}/polls`;
+  if (tab === 'program') return `${base}/program`;
   return tab ? `${base}?tab=${tab}` : base;
+}
+
+export function buildEventProgramUrl(
+  slugOrId: string,
+  originOverride?: string
+): string {
+  const clean = encodeURIComponent(slugOrId.trim());
+  const origin =
+    originOverride?.replace(/\/+$/, '') ||
+    (typeof window !== 'undefined' && window.location.origin
+      ? window.location.origin
+      : 'https://eventsbyyou.xyz');
+  return `${origin}/e/${clean}/program`;
 }
 
 export function buildWalkInRegistrationUrl(slugOrId: string): string {

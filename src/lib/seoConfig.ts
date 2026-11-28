@@ -469,7 +469,7 @@ export function resolveEventFlyerImageUrl(event: EventItem, baseUrl: string): st
 export function buildEventSeoPayload(
   event: EventItem & { unlisted?: boolean; visibility?: string },
   baseUrl: string,
-  subPath: 'top' | 'checkin' | 'gifts' | 'camera' = 'top'
+  subPath: 'top' | 'checkin' | 'gifts' | 'polls' | 'program' | 'camera' = 'top'
 ): SeoConfigEntry {
   const cleanOrigin = baseUrl.replace(/\/+$/, '');
   const cleanSlug = encodeURIComponent(event.slug || event.id);
@@ -478,9 +478,13 @@ export function buildEventSeoPayload(
       ? `/e/${cleanSlug}/checkin`
       : subPath === 'gifts'
         ? `/e/${cleanSlug}/gifts`
-        : subPath === 'camera'
-          ? `/e/${cleanSlug}/camera`
-          : `/e/${cleanSlug}`;
+        : subPath === 'polls'
+          ? `/e/${cleanSlug}/polls`
+          : subPath === 'program'
+            ? `/e/${cleanSlug}/program`
+            : subPath === 'camera'
+              ? `/e/${cleanSlug}/camera`
+              : `/e/${cleanSlug}`;
   const canonicalUrl = `${cleanOrigin}${pathSuffix}`;
   const priceGhs = formatPriceGhsLabel(event.ticketPrice);
   const suffixLabel =
@@ -488,7 +492,11 @@ export function buildEventSeoPayload(
       ? 'Check-In'
       : subPath === 'gifts'
         ? 'Gift Table'
-        : 'Events By You';
+        : subPath === 'polls'
+          ? 'Live Polls'
+          : subPath === 'program'
+            ? 'Program Outline'
+            : 'Events By You';
 
   const displayDate = formatEventDateSpan(event.isoDate, event.endIsoDate, event.date);
   const rawTitle = `${event.title} (${event.city}) | ${suffixLabel}`;

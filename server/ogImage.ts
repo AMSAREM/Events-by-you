@@ -234,7 +234,7 @@ export function buildEventOgSvg(event: EventItem, baseUrl: string): string {
 </svg>`;
 }
 
-export type PublicEventSubPath = 'top' | 'checkin' | 'gifts' | 'camera';
+export type PublicEventSubPath = 'top' | 'checkin' | 'gifts' | 'polls' | 'program' | 'camera';
 
 function replaceRootContainer(html: string, innerHtml: string): string {
   const openMatch = /<div\b[^>]*\bid=["']root["'][^>]*>/i.exec(html);
@@ -347,9 +347,13 @@ export function injectEventMetaTags(
       ? 'Gate Check-In & Pass Lookup'
       : subPath === 'gifts'
         ? 'Event Gift Table & Registry Portal'
-        : subPath === 'camera'
-          ? '35mm Event Disposable Camera'
-          : 'Official Event Invitation & Registration';
+        : subPath === 'polls'
+          ? 'Live Audience & Session Polls'
+          : subPath === 'program'
+            ? 'Official Program Outline & Run of Show'
+            : subPath === 'camera'
+              ? '35mm Event Disposable Camera'
+              : 'Official Event Invitation & Registration';
 
   const rootInnerHtml = [
     `<main data-ssr-event="true" style="max-width:760px;margin:48px auto;padding:24px;font-family:system-ui,-apple-system,sans-serif;color:#0B0B0B;">`,
@@ -366,6 +370,7 @@ export function injectEventMetaTags(
     `</dl>`,
     `<nav aria-label="Event links" style="display:flex;flex-wrap:wrap;gap:12px;font-size:14px;">`,
     `<a href="/e/${cleanSlug}">Event Overview &amp; Registration</a>`,
+    `<a href="/e/${cleanSlug}/program">Program Outline</a>`,
     `<a href="/e/${cleanSlug}/checkin">Check-In</a>`,
     event.extraDataConfig?.enableGiftTable !== false
       ? `<a href="/e/${cleanSlug}/gifts">Gift Table</a>`

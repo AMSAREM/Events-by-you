@@ -5,6 +5,7 @@ import type {
   EventPollOption,
   EventPollStatus,
 } from '../types/events.ts';
+import { sanitizeEventLogoUrl, sanitizeProgramOutline } from './programOutline.ts';
 
 export interface CorporatePollTemplate {
   id: string;
@@ -113,15 +114,29 @@ export function sanitizePublicExtraDataConfig(
   extra?: EventExtraDataConfig
 ): EventExtraDataConfig | undefined {
   if (!extra) return extra;
-  const { attendantLinks: _attLinks, planningConfig: _planCfg, polls, ...rest } = extra;
+  const {
+    attendantLinks: _attLinks,
+    planningConfig: _planCfg,
+    programOutline: rawOutline,
+    logoUrl: rawLogoUrl,
+    polls,
+    ...rest
+  } = extra;
+  const cleanOutline = sanitizeProgramOutline(rawOutline);
+  const cleanLogoUrl = sanitizeEventLogoUrl(rawLogoUrl);
+  const base: EventExtraDataConfig = {
+    ...rest,
+    ...(cleanOutline ? { programOutline: cleanOutline } : {}),
+    ...(cleanLogoUrl ? { logoUrl: cleanLogoUrl } : {}),
+  };
   if (!Array.isArray(polls)) {
-    return rest;
+    return base;
   }
   const publicPolls = polls
     .filter((p) => p && p.status !== 'draft')
     .map(sanitizePollForPublic);
   return {
-    ...rest,
+    ...base,
     polls: publicPolls,
   };
 }

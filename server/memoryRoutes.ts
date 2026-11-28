@@ -747,6 +747,9 @@ export function createMemoryRouter() {
               customMessage: resolvedMsg?.text,
               cameraUrl: resolvedMsg?.cameraUrl,
               eventUrl: resolvedMsg?.eventUrl,
+              programUrl: resolvedMsg?.programUrl,
+              programOutlineTitle: targetEvent.extraDataConfig?.programOutline?.title,
+              programOutlineFileName: targetEvent.extraDataConfig?.programOutline?.fileName,
               scheduleBlocks: memoryStore.getEventScheduleBlocks(targetEvent.id),
             })
           : Promise.resolve({ ok: false, skipped: true }),
@@ -1838,6 +1841,9 @@ export function createMemoryRouter() {
                 welcomeMessage: resolvedMsg.text,
                 cameraUrl: resolvedMsg.cameraUrl,
                 eventUrl: resolvedMsg.eventUrl,
+                programUrl: resolvedMsg.programUrl,
+                programOutlineTitle: result.event.extraDataConfig?.programOutline?.title,
+                programOutlineFileName: result.event.extraDataConfig?.programOutline?.fileName,
                 scheduleBlocks: memoryStore.getEventScheduleBlocks(result.event.id),
                 replyTo: req.memoryUser?.profile.replyToEmail,
               })
@@ -1856,6 +1862,9 @@ export function createMemoryRouter() {
                 customMessage: resolvedMsg.text,
                 cameraUrl: resolvedMsg.cameraUrl,
                 eventUrl: resolvedMsg.eventUrl,
+                programUrl: resolvedMsg.programUrl,
+                programOutlineTitle: result.event.extraDataConfig?.programOutline?.title,
+                programOutlineFileName: result.event.extraDataConfig?.programOutline?.fileName,
                 scheduleBlocks: memoryStore.getEventScheduleBlocks(result.event.id),
               })
           : Promise.resolve({ ok: false, skipped: true }),
@@ -2002,6 +2011,9 @@ export function createMemoryRouter() {
                   welcomeMessage: resolved.text,
                   cameraUrl: resolved.cameraUrl,
                   eventUrl: resolved.eventUrl,
+                  programUrl: resolved.programUrl,
+                  programOutlineTitle: evt.extraDataConfig?.programOutline?.title,
+                  programOutlineFileName: evt.extraDataConfig?.programOutline?.fileName,
                   scheduleBlocks: memoryStore.getEventScheduleBlocks(evt.id),
                   replyTo: orgDefaults.replyToEmail || req.memoryUser?.profile.replyToEmail,
                 })
@@ -2092,14 +2104,19 @@ export function createMemoryRouter() {
       const requestOrigin = (process.env.APP_URL || '').trim().replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
       const prepared = ownedAttendees.map((att) => {
         const evtMapped = eventById.get(att.eventId)!;
+        const cleanSlug = encodeURIComponent(evtMapped.slug || evtMapped.id);
+        const programUrl = `${requestOrigin}/e/${cleanSlug}/program`;
+        const eventUrl = `${requestOrigin}/e/${cleanSlug}`;
         const personalizedRaw = cleanMessage
           .replace(/\{name\}/gi, att.name)
           .replace(/\{event\}/gi, evtMapped.title)
-          .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode);
+          .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode)
+          .replace(/\{program_?link\}|\{outline_?link\}/gi, programUrl)
+          .replace(/\{event_?link\}|\{schedule_?link\}/gi, eventUrl);
         const personalizedText = appendPoweredByLine(personalizedRaw);
         const smsCost = sendSms && att.phone ? calculateSmsCredits(personalizedText) : 0;
-        const cameraUrl = `${requestOrigin}/e/${encodeURIComponent(evtMapped.slug || evtMapped.id)}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
-        return { att, evtMapped, personalizedText, smsCost, cameraUrl };
+        const cameraUrl = `${requestOrigin}/e/${cleanSlug}/camera?pass=${encodeURIComponent(att.ticketCode)}&guest=${encodeURIComponent(att.name)}`;
+        return { att, evtMapped, personalizedText, smsCost, cameraUrl, programUrl, eventUrl };
       });
       const requiredSmsCredits = prepared.reduce((acc, item) => acc + item.smsCost, 0);
       const currentCredits = memoryStore.getSmsCredits(req.user!.id);
@@ -2114,7 +2131,7 @@ export function createMemoryRouter() {
       let totalCreditsUsed = 0;
 
       await Promise.all(
-        prepared.map(async ({ att, evtMapped, personalizedText, smsCost, cameraUrl }) => {
+        prepared.map(async ({ att, evtMapped, personalizedText, smsCost, cameraUrl, programUrl, eventUrl }) => {
           const effectiveSenderId = ownerEnt.allowCustomSenderId
             ? evtMapped.senderId || req.memoryUser?.profile.senderId
             : DEFAULT_SHARED_SENDER_ID;
@@ -2140,6 +2157,11 @@ export function createMemoryRouter() {
                   organizerName: evtMapped.organizer,
                   welcomeMessage: personalizedText,
                   cameraUrl,
+                  eventUrl,
+                  programUrl,
+                  programOutlineTitle: evtMapped.extraDataConfig?.programOutline?.title,
+                  programOutlineFileName: evtMapped.extraDataConfig?.programOutline?.fileName,
+                  scheduleBlocks: memoryStore.getEventScheduleBlocks(evtMapped.id),
                   replyTo: req.memoryUser?.profile.replyToEmail,
                 })
               : Promise.resolve({ ok: false, skipped: true }),

@@ -30,6 +30,8 @@ import {
   sanitizeIsoDate,
 } from './eventDates';
 import { resolveAuthoritativeSmsBundle, validateReceiptReference } from './smsBundles';
+import { sanitizeEventLogoUrl, sanitizeProgramOutline } from './programOutline';
+import { buildProgramLinkForOrigin } from './eventMessages';
 import {
   DEFAULT_SHARED_SENDER_ID,
   MAX_CUSTOM_ATTENDEE_CAPACITY,
@@ -1880,10 +1882,44 @@ export async function localFallbackRequest<T>(
     const cleanPolicy = sanitizeCheckInPolicy(
       event.checkInPolicy ?? event.extraDataConfig?.checkInPolicy
     );
+    const rawIncomingOutline = (
+      event.extraDataConfig as unknown as Record<string, unknown> | undefined
+    )?.programOutline;
+    const cleanProgramOutline =
+      rawIncomingOutline !== undefined && rawIncomingOutline !== null
+        ? sanitizeProgramOutline(rawIncomingOutline)
+        : undefined;
+    if (rawIncomingOutline !== undefined && rawIncomingOutline !== null && !cleanProgramOutline) {
+      throw new LocalApiError(
+        'Unsupported or oversized program outline file. Allowed formats: PDF, JPG/PNG/WebP, TXT, CSV, or Markdown (.md) up to 2.5 MB.',
+        400
+      );
+    }
+    const rawIncomingLogo = (
+      event.extraDataConfig as unknown as Record<string, unknown> | undefined
+    )?.logoUrl;
+    const cleanIncomingLogo =
+      rawIncomingLogo !== undefined && rawIncomingLogo !== null && rawIncomingLogo !== ''
+        ? sanitizeEventLogoUrl(rawIncomingLogo)
+        : undefined;
+    if (
+      rawIncomingLogo !== undefined &&
+      rawIncomingLogo !== null &&
+      rawIncomingLogo !== '' &&
+      !cleanIncomingLogo
+    ) {
+      throw new LocalApiError(
+        'Event logo must be a valid JPG, PNG, or WebP image (under 1 MB) or HTTPS URL.',
+        400
+      );
+    }
+
     const dateContext = { isoDate: cleanStartIso, endIsoDate: cleanEndIso };
     const initialExtraDataConfig = event.extraDataConfig
       ? {
           ...event.extraDataConfig,
+          ...(cleanProgramOutline ? { programOutline: cleanProgramOutline } : {}),
+          ...(cleanIncomingLogo ? { logoUrl: cleanIncomingLogo } : {}),
           planningConfig: event.extraDataConfig.planningConfig
             ? sanitizeEventPlanningConfig(
                 event.extraDataConfig.planningConfig,
@@ -1907,6 +1943,12 @@ export async function localFallbackRequest<T>(
             dateContext
           ),
         };
+    if (rawIncomingOutline === null && 'programOutline' in initialExtraDataConfig) {
+      delete (initialExtraDataConfig as unknown as Record<string, unknown>).programOutline;
+    }
+    if ((rawIncomingLogo === null || rawIncomingLogo === '') && 'logoUrl' in initialExtraDataConfig) {
+      delete (initialExtraDataConfig as unknown as Record<string, unknown>).logoUrl;
+    }
     const created: EventItem = {
       ...event,
       id: uniqueEventId,
@@ -2311,6 +2353,38 @@ export async function localFallbackRequest<T>(
           403
         );
       }
+      const patchExtraRec = patch.extraDataConfig as unknown as Record<string, unknown> | undefined;
+      const hasExplicitOutline = Boolean(patchExtraRec && 'programOutline' in patchExtraRec);
+      const rawPatchOutline = patchExtraRec?.programOutline;
+      const cleanPatchOutline =
+        hasExplicitOutline && rawPatchOutline !== undefined && rawPatchOutline !== null
+          ? sanitizeProgramOutline(rawPatchOutline)
+          : undefined;
+      if (hasExplicitOutline && rawPatchOutline !== undefined && rawPatchOutline !== null && !cleanPatchOutline) {
+        throw new LocalApiError(
+          'Unsupported or oversized program outline file. Allowed formats: PDF, JPG/PNG/WebP, TXT, CSV, or Markdown (.md) up to 2.5 MB.',
+          400
+        );
+      }
+      const hasExplicitLogo = Boolean(patchExtraRec && 'logoUrl' in patchExtraRec);
+      const rawPatchLogo = patchExtraRec?.logoUrl;
+      const cleanPatchLogo =
+        hasExplicitLogo && rawPatchLogo !== undefined && rawPatchLogo !== null && rawPatchLogo !== ''
+          ? sanitizeEventLogoUrl(rawPatchLogo)
+          : undefined;
+      if (
+        hasExplicitLogo &&
+        rawPatchLogo !== undefined &&
+        rawPatchLogo !== null &&
+        rawPatchLogo !== '' &&
+        !cleanPatchLogo
+      ) {
+        throw new LocalApiError(
+          'Event logo must be a valid JPG, PNG, or WebP image (under 1 MB) or HTTPS URL.',
+          400
+        );
+      }
+
       const mergedExtra = patch.extraDataConfig
         ? {
             ...(existing.extraDataConfig ?? { enableGiftTable: false, customFields: [] }),
@@ -2338,6 +2412,20 @@ export async function localFallbackRequest<T>(
         else delete mergedExtra.endIsoDate;
         if (nextPolicy) mergedExtra.checkInPolicy = nextPolicy;
         else delete mergedExtra.checkInPolicy;
+        if (hasExplicitOutline) {
+          if (cleanPatchOutline) mergedExtra.programOutline = cleanPatchOutline;
+          else delete mergedExtra.programOutline;
+        } else if (existing.extraDataConfig?.programOutline) {
+          const preservedOutline = sanitizeProgramOutline(existing.extraDataConfig.programOutline);
+          if (preservedOutline) mergedExtra.programOutline = preservedOutline;
+        }
+        if (hasExplicitLogo) {
+          if (cleanPatchLogo) mergedExtra.logoUrl = cleanPatchLogo;
+          else delete mergedExtra.logoUrl;
+        } else if (existing.extraDataConfig?.logoUrl) {
+          const preservedLogo = sanitizeEventLogoUrl(existing.extraDataConfig.logoUrl);
+          if (preservedLogo) mergedExtra.logoUrl = preservedLogo;
+        }
       }
       const updated = {
         ...existing,
@@ -2559,10 +2647,12 @@ export async function localFallbackRequest<T>(
     }
     const prepared = recipients.map((att) => {
       const evt = db.events.find((e) => e.id === att.eventId)!;
+      const programUrl = buildProgramLinkForOrigin(evt.slug || evt.id);
       const personalizedRaw = message
         .replace(/\{name\}/gi, att.name)
         .replace(/\{event\}/gi, evt.title)
-        .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode);
+        .replace(/\{ticket_code\}|\{code\}/gi, att.ticketCode)
+        .replace(/\{program_?link\}|\{outline_?link\}/gi, programUrl);
       const personalized = appendPoweredByLine(personalizedRaw);
       const smsCost = sendSms && att.phone?.trim() ? calculateSmsCredits(personalized) : 0;
       return { att, evt, smsCost };

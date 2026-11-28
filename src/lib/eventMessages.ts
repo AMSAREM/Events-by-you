@@ -73,6 +73,19 @@ export function buildEventLinkForOrigin(
   return `${origin}/e/${clean}`;
 }
 
+export function buildProgramLinkForOrigin(
+  slugOrId: string,
+  originOverride?: string
+): string {
+  const clean = encodeURIComponent(slugOrId.trim() || 'event');
+  const origin =
+    originOverride?.replace(/\/+$/, '') ||
+    (typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'https://eventsbyyou.xyz');
+  return `${origin}/e/${clean}/program`;
+}
+
 export function buildCameraLinkForOrigin(
   slugOrId: string,
   originOverride?: string,
@@ -103,7 +116,7 @@ export function resolveEventMessage(params: {
   ticketCode?: string;
   originOverride?: string;
   includeGuestInCameraUrl?: boolean;
-}): { text: string; cameraUrl: string; eventUrl: string } {
+}): { text: string; cameraUrl: string; eventUrl: string; programUrl: string } {
   const defaults = getDefaultMessageConfig(params.event);
   const incomingTemplate = params.template?.trim();
   const rawTemplate =
@@ -124,6 +137,10 @@ export function resolveEventMessage(params: {
     params.event.slug || params.event.id,
     params.originOverride
   );
+  const programUrl = buildProgramLinkForOrigin(
+    params.event.slug || params.event.id,
+    params.originOverride
+  );
   const cameraUrl = buildCameraLinkForOrigin(
     params.event.slug || params.event.id,
     params.originOverride,
@@ -135,6 +152,7 @@ export function resolveEventMessage(params: {
   const ticketCode = params.ticketCode?.trim() || '#EVT-PASS';
 
   const hasCameraPlaceholder = /\{camera_?link\}|\{camera\}/i.test(rawTemplate);
+  const hasProgramPlaceholder = /\{program_?link\}|\{outline_?link\}/i.test(rawTemplate);
 
   let rendered = rawTemplate
     .replace(/\{name\}/gi, attendeeName)
@@ -144,6 +162,7 @@ export function resolveEventMessage(params: {
     .replace(/\{venue\}/gi, params.event.venue)
     .replace(/\{city\}/gi, params.event.city)
     .replace(/\{ticket_?code\}|\{code\}/gi, ticketCode)
+    .replace(/\{program_?link\}|\{outline_?link\}/gi, programUrl)
     .replace(/\{event_?link\}|\{schedule_?link\}/gi, eventUrl)
     .replace(/\{camera_?link\}|\{camera\}/gi, cameraUrl);
 
@@ -152,7 +171,15 @@ export function resolveEventMessage(params: {
     rendered = `${rendered.trim()} Disposable Camera (5 shots & collage): ${cameraUrl}`;
   }
 
-  return { text: appendPoweredByLine(rendered), cameraUrl, eventUrl };
+  if (
+    (params.type === 'confirmation' || params.type === 'reminder' || params.type === 'checkin') &&
+    !hasProgramPlaceholder &&
+    !rendered.includes(programUrl)
+  ) {
+    rendered = `${rendered.trim()} Program Outline: ${programUrl}`;
+  }
+
+  return { text: appendPoweredByLine(rendered), cameraUrl, eventUrl, programUrl };
 }
 
 export const DEFAULT_GIFT_THANK_YOU_MESSAGE =

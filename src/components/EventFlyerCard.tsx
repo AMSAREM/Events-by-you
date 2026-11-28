@@ -3,6 +3,7 @@ import { Calendar, Check, Copy, ExternalLink, MapPin, QrCode, ShieldCheck, Gift 
 import type { DesignTheme, EventItem } from '../types/events';
 import { getCategoryPreset } from '../data/initialData';
 import { formatEventDateSpan, formatEventDurationBadge } from '../lib/eventDates';
+import { sanitizeEventLogoUrl } from '../lib/programOutline';
 import { buildEventInvitationUrl } from '../lib/qr';
 import { getContrastTextColor, hexWithAlpha, normalizeHexColor } from '../lib/themeColors';
 import { MonochromePoster } from './MonochromeArtwork';
@@ -81,6 +82,7 @@ export const EventFlyerCard: React.FC<EventFlyerCardProps> = ({
   const customBrand = normalizeHexColor(event.brandColor ?? event.extraDataConfig?.brandColor);
   const customBrandText = customBrand ? getContrastTextColor(customBrand) : undefined;
   const inviteUrl = buildEventInvitationUrl(event.slug || event.id);
+  const logoSrc = sanitizeEventLogoUrl(event.extraDataConfig?.logoUrl);
   const formattedEventDate = formatEventDateSpan(event.isoDate, event.endIsoDate, event.date);
   const durationBadge = formatEventDurationBadge(event);
 
@@ -183,9 +185,20 @@ export const EventFlyerCard: React.FC<EventFlyerCardProps> = ({
             className={`pt-3 border-t ${customBrand ? '' : styles.accentLineClass}`}
             style={customBrand ? { borderTopColor: hexWithAlpha(customBrand, 0.55) } : undefined}
           >
-            <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-white/75 truncate">
-              {event.organizer} Presents
-            </p>
+            <div className="flex items-center gap-2">
+              {logoSrc && (
+                <div className="w-7 h-7 rounded-lg bg-white p-0.5 border border-white/40 overflow-hidden shrink-0">
+                  <img
+                    src={logoSrc}
+                    alt={`${event.organizer} logo`}
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+              )}
+              <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-white/75 truncate">
+                {event.organizer} Presents
+              </p>
+            </div>
             <h3 className="mt-1 font-display text-lg sm:text-xl font-bold tracking-[-0.02em] leading-snug text-white line-clamp-2 text-balance">
               {event.title}
             </h3>

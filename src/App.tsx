@@ -3072,6 +3072,7 @@ export default function App() {
                   onAddBlock={handleAddScheduleBlock}
                   onUpdateBlock={handleUpdateScheduleBlock}
                   onDeleteBlock={handleDeleteScheduleBlock}
+                  onUpdateEvent={handleUpdateEvent}
                   onManageEvent={handleOpenWorkspace}
                   onNavigateSettings={() => setActiveScreen('settings')}
                   onResolveAlert={handleResolveAlert}

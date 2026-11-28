@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Calendar, Check, Clock, Plus, Trash2 } from 'lucide-react';
-import { EventItem, OrganizerProfile, ScheduleBlock, SystemAlert } from '../types/events';
+import { Calendar, Check, Clock, FileText, Plus, Printer, Trash2 } from 'lucide-react';
+import { EventItem, EventProgramOutline, OrganizerProfile, ScheduleBlock, SystemAlert } from '../types/events';
 import {
   ALL_SCHEDULE_DAYS,
   SCHEDULE_EVENT_DAYS,
@@ -16,6 +16,9 @@ import {
   resolveScheduleBlockDate,
   sanitizeIsoDate,
 } from '../lib/eventDates';
+import type { ParsedProgramOutlineBlock } from '../lib/programOutline';
+import { ProgramOutlineExportModal } from './ProgramOutlineExportModal';
+import { ProgramOutlineUploadCard } from './ProgramOutlineUploadCard';
 import { TopUtilityBar } from './TopUtilityBar';
 
 interface ScheduleScreenProps {
@@ -24,9 +27,10 @@ interface ScheduleScreenProps {
   alerts: SystemAlert[];
   profile: OrganizerProfile;
   onToggleBlock: (id: string) => void;
-  onAddBlock: (block: ScheduleBlock) => void;
+  onAddBlock: (block: ScheduleBlock) => Promise<void> | void;
   onUpdateBlock?: (id: string, patch: Partial<ScheduleBlock>) => Promise<void> | void;
   onDeleteBlock?: (id: string) => void;
+  onUpdateEvent?: (updated: EventItem) => Promise<void> | void;
   onManageEvent: (event: EventItem) => void;
   onNavigateSettings: () => void;
   onResolveAlert: (id: string) => void;
@@ -41,6 +45,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   onAddBlock,
   onUpdateBlock,
   onDeleteBlock,
+  onUpdateEvent,
   onManageEvent,
   onNavigateSettings,
   onResolveAlert,
@@ -50,6 +55,9 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   const [selectedDate, setSelectedDate] = useState<'all' | string>('all');
   const [selectedEventId, setSelectedEventId] = useState<string>('all');
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showOutlinePanel, setShowOutlinePanel] = useState(false);
+  const [savingOutline, setSavingOutline] = useState(false);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   const [newTitle, setNewTitle] = useState('');
   const [newTime, setNewTime] = useState('14:00');
@@ -145,6 +153,9 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   }, [blocks, selectedEventId, eventMap]);
 
   const targetCreateEvent = eventMap.get(newEventId);
+  const outlineTargetEvent =
+    (selectedEventId !== 'all' ? eventMap.get(selectedEventId) : targetCreateEvent) ??
+    events[0];
   const targetCreateDateSlots = useMemo(
     () => getEventDateSlots(targetCreateEvent),
     [targetCreateEvent]
@@ -292,14 +303,46 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
             </select>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setShowAddForm((prev) => !prev)}
-            className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
-          >
-            <Plus className="w-4 h-4" />
-            Add Cue
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {outlineTargetEvent && (
+              <button
+                type="button"
+                onClick={() => setExportModalOpen(true)}
+                className="px-4 py-2.5 rounded-full bg-white border border-[#E5E5EA] hover:border-[#0B0B0B] text-xs font-semibold text-[#0B0B0B] transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Export Program Sheet</span>
+              </button>
+            )}
+            {onUpdateEvent && events.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowOutlinePanel((prev) => !prev)}
+                className={`px-4 py-2.5 rounded-full text-xs font-semibold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                  showOutlinePanel || outlineTargetEvent?.extraDataConfig?.programOutline
+                    ? 'bg-white border border-[#0B0B0B] text-[#0B0B0B]'
+                    : 'bg-[#F5F5F7] hover:bg-[#E5E5EA] text-[#0B0B0B]'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>
+                  {showOutlinePanel
+                    ? 'Hide Outline Upload'
+                    : outlineTargetEvent?.extraDataConfig?.programOutline
+                      ? 'Program Outline Attached'
+                      : 'Upload Program Outline'}
+                </span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowAddForm((prev) => !prev)}
+              className="px-5 py-2.5 rounded-full bg-[#0B0B0B] text-white text-xs font-semibold hover:bg-zinc-800 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              Add Cue
+            </button>
+          </div>
         </div>
 
         {filterDateSlots.length > 0 && (
@@ -339,6 +382,130 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
           </div>
         )}
       </div>
+
+      {/* Collapsible Program Outline Uploader & Importer */}
+      {showOutlinePanel && onUpdateEvent && outlineTargetEvent && (
+        <div className="p-4 sm:p-5 rounded-3xl bg-[#F5F5F7] space-y-3">
+          {selectedEventId === 'all' && events.length > 1 && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-[#0B0B0B]">
+                Target Production for Program Outline
+              </span>
+              <select
+                value={outlineTargetEvent.id}
+                onChange={(e) => setNewEventId(e.target.value)}
+                aria-label="Target production for program outline"
+                className="h-9 px-3.5 rounded-full bg-white border border-[#E5E5EA] text-xs font-semibold text-[#0B0B0B]"
+              >
+                {events.map((evt) => (
+                  <option key={evt.id} value={evt.id}>
+                    {evt.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <ProgramOutlineUploadCard
+            compact
+            outline={outlineTargetEvent.extraDataConfig?.programOutline}
+            eventTitle={outlineTargetEvent.title}
+            eventContext={outlineTargetEvent}
+            logoUrl={outlineTargetEvent.extraDataConfig?.logoUrl || profile.avatarUrl}
+            hasScheduleBlocks={blocks.some((b) => b.eventId === outlineTargetEvent.id)}
+            busy={savingOutline}
+            onOpenExportDesign={() => setExportModalOpen(true)}
+            onLogoChange={async (nextLogoUrl) => {
+              setSavingOutline(true);
+              try {
+                const baseExtra = outlineTargetEvent.extraDataConfig ?? {
+                  enableGiftTable: false,
+                  customFields: [],
+                };
+                await Promise.resolve(
+                  onUpdateEvent({
+                    ...outlineTargetEvent,
+                    extraDataConfig: {
+                      ...baseExtra,
+                      logoUrl: (nextLogoUrl ?? null) as unknown as string,
+                    },
+                  })
+                );
+              } finally {
+                setSavingOutline(false);
+              }
+            }}
+            onSaveOutline={async (nextOutline) => {
+              setSavingOutline(true);
+              try {
+                const baseExtra = outlineTargetEvent.extraDataConfig ?? {
+                  enableGiftTable: false,
+                  customFields: [],
+                };
+                await Promise.resolve(
+                  onUpdateEvent({
+                    ...outlineTargetEvent,
+                    extraDataConfig: {
+                      ...baseExtra,
+                      programOutline:
+                        nextOutline ?? (null as unknown as EventProgramOutline),
+                    },
+                  })
+                );
+              } finally {
+                setSavingOutline(false);
+              }
+            }}
+            onImportParsedBlocks={async (parsedBlocks: ParsedProgramOutlineBlock[]) => {
+              const seed = Date.now();
+              for (let i = 0; i < parsedBlocks.length; i += 1) {
+                const pb = parsedBlocks[i];
+                await Promise.resolve(
+                  onAddBlock({
+                    id: `sch-${seed}-${i}`,
+                    eventId: outlineTargetEvent.id,
+                    time: pb.time,
+                    duration: pb.duration,
+                    title: pb.title,
+                    stage: pb.stage,
+                    lead: pb.lead || profile.name,
+                    completed: false,
+                    day: pb.day,
+                    ...(pb.date ? { date: pb.date } : {}),
+                  })
+                );
+              }
+            }}
+          />
+
+          <ProgramOutlineExportModal
+            open={exportModalOpen}
+            event={outlineTargetEvent}
+            scheduleBlocks={blocks}
+            fallbackLogoUrl={profile.avatarUrl}
+            canEditLogo={Boolean(onUpdateEvent)}
+            onUpdateLogo={
+              onUpdateEvent
+                ? async (nextLogoUrl) => {
+                    const baseExtra = outlineTargetEvent.extraDataConfig ?? {
+                      enableGiftTable: false,
+                      customFields: [],
+                    };
+                    await Promise.resolve(
+                      onUpdateEvent({
+                        ...outlineTargetEvent,
+                        extraDataConfig: {
+                          ...baseExtra,
+                          logoUrl: (nextLogoUrl ?? null) as unknown as string,
+                        },
+                      })
+                    );
+                  }
+                : undefined
+            }
+            onClose={() => setExportModalOpen(false)}
+          />
+        </div>
+      )}
 
       {/* Inline Add Cue Form */}
       {showAddForm && (

@@ -60,6 +60,8 @@ import {
 } from '../lib/eventDates';
 import { useDocumentFullscreen } from '../lib/fullscreen';
 import { isPollsEnabledForEvent } from '../lib/polls';
+import { sanitizeProgramOutline } from '../lib/programOutline';
+import { PublicProgramOutlineCard } from './ProgramOutlineViewer';
 import {
   buildEventInvitationUrl,
   buildEventOgImageUrl,
@@ -293,6 +295,10 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
   );
   const validationConfig = selectedEvent?.validationConfig ?? categoryPreset.validationConfig;
   const extraDataConfig = selectedEvent?.extraDataConfig ?? categoryPreset.extraDataConfig;
+  const programOutline = useMemo(
+    () => sanitizeProgramOutline(selectedEvent?.extraDataConfig?.programOutline),
+    [selectedEvent?.extraDataConfig?.programOutline]
+  );
   const giftTableAvailable = Boolean(
     extraDataConfig.enableGiftTable ||
       selectedEvent?.category === 'Wedding' ||
@@ -2961,19 +2967,28 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 </section>
               )}
 
-              {/* Program Schedule Blocks (only rendered when organizer has added real schedule items) */}
-              {eventScheduleBlocks.length > 0 && (
+              {/* Program Schedule Blocks & Uploaded Outline */}
+              {(eventScheduleBlocks.length > 0 || Boolean(programOutline)) && (
                 <section className="space-y-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-2 px-1">
                     <h3 className="text-base font-semibold text-[#0B0B0B]">
                       Event Schedule &amp; Run of Show
                     </h3>
                     <span className="text-[11px] font-medium text-[#71717A]">
-                      {filteredScheduleBlocks.length} Sessions
+                      {eventScheduleBlocks.length > 0
+                        ? `${filteredScheduleBlocks.length} Sessions`
+                        : 'Official Program Outline'}
                     </span>
                   </div>
 
-                  {scheduleDateTabs.length > 1 ? (
+                  {programOutline && (
+                    <PublicProgramOutlineCard
+                      outline={programOutline}
+                      eventTitle={selectedEvent.title}
+                    />
+                  )}
+
+                  {eventScheduleBlocks.length > 0 && (scheduleDateTabs.length > 1 ? (
                     <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
                       <button
                         type="button"
@@ -3037,7 +3052,7 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                         ))}
                       </div>
                     )
-                  )}
+                  ))}
 
                   {scheduleDateFilter !== 'all' &&
                     extraDataConfig.planningConfig?.dayScheduleNotes?.[scheduleDateFilter] && (
@@ -3433,41 +3448,50 @@ export const PublicEventScreen: React.FC<PublicEventScreenProps> = ({
                 </div>
               </div>
 
-              {/* Event Program Preview (only rendered when organizer configured real schedule blocks) */}
-              {eventScheduleBlocks.length > 0 && (
-                <div className="bg-white rounded-[28px] p-5 mb-6 shadow-sm">
-                  <div className="flex items-center justify-between mb-4">
+              {/* Event Program Preview & Uploaded Outline */}
+              {(eventScheduleBlocks.length > 0 || Boolean(programOutline)) && (
+                <div className="bg-white rounded-[28px] p-5 mb-6 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between">
                     <h3 className="text-base font-semibold text-[#0B0B0B]">
-                      {selectedEvent.category} Schedule Preview
+                      {selectedEvent.category} Program &amp; Schedule
                     </h3>
                     <span className="text-[11px] text-[#71717A]">Local Event Time</span>
                   </div>
-                  <div className="space-y-2.5">
-                    {eventScheduleBlocks.map((item, idx) => (
-                      <div
-                        key={item.id}
-                        className="flex items-start gap-3 p-3 bg-[#F5F5F7] rounded-2xl"
-                      >
+                  {programOutline && (
+                    <PublicProgramOutlineCard
+                      compact
+                      outline={programOutline}
+                      eventTitle={selectedEvent.title}
+                    />
+                  )}
+                  {eventScheduleBlocks.length > 0 && (
+                    <div className="space-y-2.5">
+                      {eventScheduleBlocks.map((item, idx) => (
                         <div
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium shrink-0 tabular-nums ${
-                            idx === 0
-                              ? 'bg-[#0B0B0B] text-white'
-                              : 'bg-[#E8E8EA] text-[#0B0B0B]'
-                          }`}
+                          key={item.id}
+                          className="flex items-start gap-3 p-3 bg-[#F5F5F7] rounded-2xl"
                         >
-                          {item.time}
+                          <div
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium shrink-0 tabular-nums ${
+                              idx === 0
+                                ? 'bg-[#0B0B0B] text-white'
+                                : 'bg-[#E8E8EA] text-[#0B0B0B]'
+                            }`}
+                          >
+                            {item.time}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[13px] font-semibold text-[#0B0B0B] truncate">
+                              {item.title}
+                            </p>
+                            <p className="text-[11px] text-[#71717A]">
+                              {item.stage} · {item.lead}
+                            </p>
+                          </div>
                         </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[13px] font-semibold text-[#0B0B0B] truncate">
-                            {item.title}
-                          </p>
-                          <p className="text-[11px] text-[#71717A]">
-                            {item.stage} · {item.lead}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
